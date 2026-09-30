@@ -61,15 +61,32 @@ describe("chunk cells", () => {
 });
 
 describe("sample positions", () => {
-  it("puts samples at interval centres, half a sample in from the edge", () => {
-    // A sample exactly on a chunk's boundary belongs to two chunks at once, and
-    // neither has a neighbour to agree with about it.
+  it("starts a chunk's samples on its low edge, so chunks tile", () => {
+    // Thirty-two samples at interval *centres* would span 310 units of a 320-unit chunk
+    // and leave a gap at every boundary. Starting each sample on its interval instead
+    // makes a chunk's cells cover its extent exactly, with the next chunk's first cell
+    // beginning where this one's last ended.
     const cell: CellCoord = { x: 0, y: 0, z: 0 };
     const first = sampleWorld(cell, 0);
     const last = sampleWorld(cell, CHUNK_VOXELS - 1);
-    expect(first).toBeCloseTo(-BLOCK_WORLD / 2 + VOXEL_SIZE / 2, 9);
-    expect(last).toBeCloseTo(BLOCK_WORLD / 2 - VOXEL_SIZE / 2, 9);
+    expect(first).toBeCloseTo(-BLOCK_WORLD / 2, 9);
+    expect(last).toBeCloseTo(BLOCK_WORLD / 2 - VOXEL_SIZE, 9);
     expect(last - first).toBeCloseTo((CHUNK_VOXELS - 1) * VOXEL_SIZE, 9);
+
+    // And the sample that ends a chunk's last interval is the next chunk's first, which
+    // is what lets the two share a boundary.
+    expect(sampleWorld({ x: 1, y: 0, z: 0 }, 0) - VOXEL_SIZE).toBeCloseTo(
+      last,
+      9,
+    );
+  });
+
+  it("starts a chunk's own samples one voxel apart with no gaps between chunks", () => {
+    for (const along of [0, 1, CHUNK_VOXELS - 2, CHUNK_VOXELS - 1]) {
+      const here = sampleWorld({ x: 2, y: 0, z: 0 }, along);
+      const next = sampleWorld({ x: 3, y: 0, z: 0 }, along);
+      expect(next - here).toBeCloseTo(BLOCK_WORLD, 9);
+    }
   });
 
   it("spaces samples one voxel apart", () => {
@@ -89,6 +106,16 @@ describe("sample positions", () => {
       const world = sampleWorld(cell, along);
       expect(sampleIndexIn(world, centre.x), `sample ${along}`).toBe(along);
     }
+  });
+
+  it("clamps a point in the last interval to the chunk's own last sample", () => {
+    // The boundary sample it is nearer to belongs to the next chunk, so an unclamped
+    // answer would be an index the caller has to bounds-check — or paint into.
+    const centre = 0;
+    expect(sampleIndexIn(BLOCK_WORLD / 2 - VOXEL_SIZE / 2, centre)).toBe(
+      CHUNK_VOXELS - 1,
+    );
+    expect(sampleIndexIn(-BLOCK_WORLD / 2 - VOXEL_SIZE, centre)).toBe(0);
   });
 
   it("rounds a point between two samples the same way every time", () => {

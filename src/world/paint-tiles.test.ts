@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { BLOCK_WORLD, CHUNK_VOXELS, VOXEL_SIZE } from "../constants";
-import { cellCentre, chunkCellOf, type CellCoord } from "./level-data";
+import {
+  cellCentre,
+  chunkCellOf,
+  sampleWorld,
+  type CellCoord,
+} from "./level-data";
 import {
   makeTile,
   PaintTiles,
@@ -14,10 +19,15 @@ const RED = { r: 255, g: 0, b: 0 };
 const GREEN = { r: 0, g: 255, b: 0 };
 
 /** The world position of a sample along one axis, given that axis's cell coordinate. */
+/**
+ * The world position of a sample, read through the one definition rather than a copy.
+ *
+ * This file previously repeated the formula, and when the convention was corrected to
+ * start samples on a chunk's low edge the copy silently kept the old one — so the tests
+ * went on agreeing with each other about a chunk that had a gap in it.
+ */
 const axisWorld = (cellAlongAxis: number, along: number): number =>
-  cellAlongAxis * BLOCK_WORLD +
-  (along - CHUNK_VOXELS / 2) * VOXEL_SIZE +
-  VOXEL_SIZE / 2;
+  sampleWorld({ x: cellAlongAxis, y: 0, z: 0 }, along);
 
 describe("tile addressing", () => {
   it("is a bijection over a chunk's samples", () => {
@@ -214,6 +224,20 @@ describe("addressing by world position", () => {
         axisWorld(cell.z, 0),
       ),
     ).toEqual(RED);
+  });
+
+  it("paints every part of a chunk, including its last interval", () => {
+    // The last interval's midpoint is nearer the boundary sample than any sample this
+    // chunk owns, so an unclamped nearest-sample lookup would refuse to paint there and
+    // the last ten units of every chunk would be unpaintable.
+    const tiles = new PaintTiles();
+    const cell: CellCoord = { x: 0, y: 0, z: 0 };
+    const centre = cellCentre(cell);
+    const late = BLOCK_WORLD / 2 - VOXEL_SIZE / 2;
+    expect(chunkCellOf({ x: late, y: late, z: late })).toEqual(cell);
+    expect(tiles.paintWorld({ x: late, y: late, z: late }, RED)).toBe(true);
+    expect(tiles.at(late, late, late)).toEqual(RED);
+    expect(centre.x).toBeLessThan(late);
   });
 
   it("cannot be confused between neighbouring chunks", () => {

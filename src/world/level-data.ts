@@ -132,28 +132,54 @@ export const cellCentre = (cell: CellCoord): Vec3 => ({
 /**
  * The world position of one sample within a chunk.
  *
- * A chunk is `CHUNK_VOXELS` samples wide and spans `BLOCK_WORLD` units, so the
- * samples are at the *centres* of their intervals: the first is half a sample in
- * from the chunk's edge, and the last half a sample in from the other edge. Sampling
- * at the edges would put the outermost sample on the boundary between two chunks,
- * where both would sample the same point and neither would have a neighbour to agree
- * with.
+ * A chunk spans `BLOCK_WORLD` units and is divided into `CHUNK_VOXELS` **intervals**,
+ * so a sample sits at the *start* of each interval: the first at the chunk's low edge,
+ * the last one interval short of its high edge.
+ *
+ * Putting samples at interval *centres* instead is the intuitive choice and it does not
+ * work. Thirty-two samples at interval centres span thirty-one intervals — 310 units
+ * where the chunk is 320 — so the chunk leaves a ten-unit gap at its high edge, and the
+ * next chunk begins with another. Samples on the boundary are shared by two chunks,
+ * which sounds alarming and is exactly what is wanted: each chunk uses its neighbour's
+ * boundary sample as the one cell of padding the mesher's seam rule needs, and both
+ * arrive at the same value because the field is a function of position (0002).
+ *
+ * Thirty-three samples at interval centres would tile, but then the outermost sample
+ * hangs outside the chunk and "which samples does this chunk own" stops being answerable
+ * from the chunk alone. Ownership measured from the low edge is.
  */
 export const sampleWorld = (cell: CellCoord, along: number): number =>
-  cellCentre(cell).x + (along - CHUNK_VOXELS / 2) * VOXEL_SIZE + VOXEL_SIZE / 2;
+  cellCentre(cell).x + (along - CHUNK_VOXELS / 2) * VOXEL_SIZE;
 
-/** One sample's world position on all three axes, for the cube's own origin. */
-export const sampleOriginOf = (cell: CellCoord): Vec3 => cellCentre(cell);
+/**
+ * The world position of a chunk's own first sample, on all three axes.
+ *
+ * The chunk's low edge, not its centre: the mesher counts ownership from here, and the
+ * distance between this and the centre is half the chunk.
+ */
+export const sampleOriginOf = (cell: CellCoord): Vec3 => {
+  const half = (CHUNK_VOXELS / 2) * VOXEL_SIZE;
+  const centre = cellCentre(cell);
+  return { x: centre.x - half, y: centre.y - half, z: centre.z - half };
+};
 
 /**
  * The sample index nearest a world point within a chunk.
  *
- * Rounded rather than floored, because the sample positions are at interval centres:
- * a point exactly between two samples is equally near both, and the tie has to break
- * the same way every time or the field is not a function of position.
+ * Rounded rather than floored, because a point exactly between two samples is equally
+ * near both, and the tie has to break the same way every time or the field is not a
+ * function of position.
+ *
+ * Clamped to the chunk's own samples. A point in the last interval is nearer the
+ * boundary sample than any of this chunk's, and that sample belongs to the *next* chunk
+ * — which is right for meshing and wrong for asking what colour this chunk holds, so
+ * the clamp answers the question that was actually asked instead of returning an index
+ * the caller would have to bounds-check.
  */
-export const sampleIndexIn = (world: number, centre: number): number =>
-  Math.round((world - centre) / VOXEL_SIZE + CHUNK_VOXELS / 2 - 0.5);
+export const sampleIndexIn = (world: number, centre: number): number => {
+  const index = Math.round((world - centre) / VOXEL_SIZE + CHUNK_VOXELS / 2);
+  return index < 0 ? 0 : index > CHUNK_VOXELS - 1 ? CHUNK_VOXELS - 1 : index;
+};
 
 /**
  * Every chunk cell within `radius` chunks of `centre`, flattened vertically.

@@ -27,3 +27,18 @@ export {
 } from "./chunk-mesh";
 
 export { Growable } from "./growable";
+
+export type {
+  ChunkMesher,
+  ChunkRegion,
+  MeshField,
+  MeshRequest,
+} from "./chunk-mesher";
+export {
+  chunkOriginOn,
+  chunkRegion,
+  chunkSpan,
+  sampleCount,
+  sampleSizeAt,
+  SurfaceNetsChunkMesher,
+} from "./chunk-mesher";
