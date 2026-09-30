@@ -22,12 +22,9 @@
  * them against each other.
  */
 
-/** A three-component vector, as the encoding works in plain numbers. */
-export interface Vec3 {
-  x: number;
-  y: number;
-  z: number;
-}
+import type { Vec3 } from "../constants";
+
+export type { Vec3 };
 
 /** A point in the square [-1, 1]², which is where a unit vector is folded to. */
 export interface Vec2 {

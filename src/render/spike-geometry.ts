@@ -22,8 +22,8 @@
  */
 
 import { BufferAttribute, BufferGeometry } from "@random-mesh/rmsl/scene";
-import type { Vec3 } from "./octahedral";
-import { normalized, writeOctahedralNormal } from "./octahedral";
+import type { Vec3 } from "../math/octahedral";
+import { normalized, writeOctahedralNormal } from "../math/octahedral";
 
 /** What one mesh's vertex data amounts to, before it reaches a geometry. */
 export interface VertexData {

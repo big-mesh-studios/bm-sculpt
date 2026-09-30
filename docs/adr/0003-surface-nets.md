@@ -54,6 +54,27 @@ The mesher is isolated behind a `ChunkMesher` interface so a Rust-to-WebAssembly
 implementation stays a substitution rather than a rewrite, should profiling say a
 TypeScript implementation cannot hold the budget.
 
+**Adjacent chunks do not share vertices, and cannot.** A chunk meshes only its own
+cells, so it has no way to know a neighbour's; the two sides of a boundary hold
+separate vertices at the same world position. That is not a defect to be fixed but a
+consequence of the ownership rule, and it has one visible consequence worth stating:
+an edge can belong to two triangles in the world while sharing no index pair. Anything
+that checks watertightness has to compare _by position_, not by index — an index-wise
+check reports correct chunking as broken. `src/mesh/surface-nets.test.ts` pins the seam
+rule by meshing a region as one chunk and as eight, and requiring the identical set of
+triangles; that catches a duplicated quad, a dropped quad, a flipped winding and a
+misplaced vertex at once, and is the only formulation of the seam that is actually
+checkable.
+
+**Naive Surface Nets is not manifold in general, and that is accepted.** A quad is
+emitted per sign-changing edge, and where a surface is thin or sharply creased the
+cells around a dual edge can yield one quad where two are needed, leaving that edge in
+a single triangle. Measured here: a smooth resolved sphere is exactly manifold, while
+a thin torus at one voxel per minor radius is not. This is the price of the method over
+marching cubes, alongside its vertex and triangle counts, and it is why the mesher is
+isolated behind `ChunkMesher`. It does not affect chunk seams, which are watertight
+regardless.
+
 **The reference implementation's linear scan for affected chunks is not copied.**
 It is O(resident chunks) per edited voxel and would become quadratic. This project
 derives the dirty set from the edited world-space bounding box and looks it up.

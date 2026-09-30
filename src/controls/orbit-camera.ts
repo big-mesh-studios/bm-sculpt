@@ -16,7 +16,7 @@
  */
 
 import type { PerspectiveCamera } from "@random-mesh/rmsl/scene";
-import type { Vec3 } from "../render/octahedral";
+import type { Vec3 } from "../math/octahedral";
 
 export interface OrbitLimits {
   minRadius: number;

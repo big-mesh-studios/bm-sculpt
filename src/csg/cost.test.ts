@@ -8,28 +8,30 @@ import { CHUNK_VOXELS, FIELD_BORDER, VOXEL_SIZE } from "../constants";
 /**
  * What one chunk's worth of sampling costs.
  *
- * This is not a benchmark in the sense of reporting a number for its own sake. It is
- * a ceiling, because the failure it guards against is not "a bit slower" but
- * "ten times slower after a change that looked harmless" — an extra tree traversal
- * per sample, or a sort inside the fold. Either is invisible in review and obvious
- * here.
+ * Not a benchmark in the sense of reporting a number for its own sake, but a ceiling.
+ * The failure it guards against is not "a bit slower" but "ten times slower after a
+ * change that looked harmless" — an extra tree traversal per sample, a sort inside the
+ * fold, a lost candidate cache. Either is invisible in review and obvious here.
  *
- * The bound is deliberately loose. It is set by the *target machine*, not by this
- * one: a 2016 laptop is several times slower than whatever a test happens to run on,
- * and a tight bound would either fail on slow hardware or force the threshold so high
- * that a real regression slips under it. What this catches is an order of magnitude.
- */
-/**
- * Measured: **275 ms** for one chunk on an ARM phone under a debug-ish Node. A 2016
- * laptop is several times quicker, and four workers run four chunks at once.
+ * Measured: **250-275 ms** for one chunk on an ARM phone. A 2016 laptop is several
+ * times quicker, and four workers run four chunks at once.
  *
- * The budget is set at more than double that, because a ceiling has to hold on
- * whatever hardware runs it. Set it near the measurement and it fails on a slow CI
- * machine; set it near the target it fails on the machine doing the measuring. What
- * this has to catch is a *change* — an extra traversal per sample, a sort inside the
- * fold, a lost cache — and those are factors of ten, not tens of percent.
+ * The ceiling is ten times the measurement, which is far too loose to be a claim about
+ * this machine and is deliberate on two counts.
+ *
+ * A ceiling has to hold wherever it runs, and this one runs at 250 ms on its own and
+ * over 800 ms as part of the whole suite: the suite runs its files in parallel, so a
+ * time-based assertion measures the machine's willingness to serve four threads as much
+ * as it measures this code. Set near the measurement it fails on a slow runner; set
+ * near the target it fails on the machine doing the measuring.
+ *
+ * What it is for is catching a *change*, and those are factors of ten, not tens of
+ * percent, so a ten-times ceiling separates them from everything else. A regression a
+ * few percent slower would not be caught here — and does not need to be, because the
+ * second test in this file pins the property such a change would break without
+ * reference to a clock at all.
  */
-const CHUNK_SAMPLE_BUDGET_MS = 800;
+const CHUNK_SAMPLE_BUDGET_MS = 2500;
 
 let seed = 0x9e3779b9;
 const rnd = (): number => {
