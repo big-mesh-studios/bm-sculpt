@@ -29,3 +29,6 @@ export {
   toChunkGeometry,
   totalTriangles,
 } from "./chunk-geometry";
+
+export type { ApplyOutcome, Refusal, StoreHooks } from "./chunk-mesh-store";
+export { ChunkMeshStore, hooksFor } from "./chunk-mesh-store";

@@ -1,0 +1,342 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { Scene, type Material, type Mesh } from "@random-mesh/rmsl/scene";
+
+import type { ChunkMesh } from "../mesh";
+import { ChunkMeshStore, hooksFor } from "./chunk-mesh-store";
+
+const meshOf = (
+  vertices: number,
+  triangles = Math.floor(vertices / 3),
+): ChunkMesh => ({
+  positions: new Float32Array(vertices * 3),
+  normalOct: new Int16Array(vertices * 2),
+  colours: new Uint8Array(vertices * 4),
+  indices: new Uint32Array(triangles * 3),
+  vertexCount: vertices,
+  triangleCount: triangles,
+});
+
+const material = {} as Material;
+
+const newStore = (slots = 4): ChunkMeshStore =>
+  new ChunkMeshStore(new Scene(), material, slots);
+
+/** The store's current mesh for a slot, for identity checks. */
+const meshFor = (store: ChunkMeshStore, slot: number): Mesh | undefined =>
+  (store as unknown as { inScene: (Mesh | undefined)[] }).inScene[slot];
+
+describe("installing a mesh for a slot", () => {
+  it("puts the mesh in the scene and counts its triangles", () => {
+    const store = newStore();
+    const revision = store.revisionOf(0);
+
+    expect(store.apply(0, meshOf(12, 4), revision).accepted).toBe(true);
+    expect(store.draws(0)).toBe(true);
+    expect(store.trianglesAt(0)).toBe(4);
+    expect(store.drawnCount).toBe(1);
+    expect(store.triangleCount).toBe(4);
+  });
+
+  it("records an air chunk as drawing nothing but still filled", () => {
+    // Known-empty is not the same as not-yet-meshed: the first is an answer, the second
+    // is a question, and conflating them makes a chunk flash into view.
+    const store = newStore();
+    store.apply(0, meshOf(0, 0), store.revisionOf(0));
+
+    expect(store.draws(0)).toBe(false);
+    expect(store.trianglesAt(0)).toBe(0);
+    expect(store.revisionOf(0)).toBe(store.revisionOf(0));
+  });
+
+  it("replaces a slot's mesh and frees the old buffers", () => {
+    const store = newStore();
+    const first = store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    expect(first.accepted).toBe(true);
+    const before = meshFor(store, 0);
+    expect(before).toBeDefined();
+    const spy = vi
+      .spyOn(before!.geometry, "dispose")
+      .mockImplementation(() => {});
+
+    store.apply(0, meshOf(24, 8), store.revisionOf(0));
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(store.triangleCount).toBe(8);
+  });
+
+  it("keeps only one mesh per slot in the scene", () => {
+    // Two children for one slot means the old cell's surface is still being drawn.
+    const store = newStore();
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    store.apply(0, meshOf(24, 8), store.revisionOf(0));
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+
+    const scene = (store as unknown as { scene: Scene }).scene;
+    const drawn = scene.children.filter(
+      (child) => (child as { isMesh?: boolean }).isMesh === true,
+    );
+    expect(drawn).toHaveLength(1);
+  });
+
+  it("refuses a slot it does not have", () => {
+    const store = newStore(2);
+    const outcome = store.apply(9, meshOf(12, 4), 0);
+    expect(outcome).toEqual({ accepted: false, refusal: "unknownSlot" });
+    expect(store.drawnCount).toBe(0);
+  });
+});
+
+describe("refusing a mesh that has been overtaken", () => {
+  // ADR 0007's rule. A slot is re-pointed at a new cell, and until the new mesh lands the
+  // slot physically holds the previous cell's geometry; installing a late answer then
+  // draws one chunk's surface at another's coordinates.
+
+  it("refuses a mesh captured before the slot was invalidated", () => {
+    const store = newStore();
+    const revision = store.revisionOf(0);
+    store.markStale(0);
+
+    const outcome = store.apply(0, meshOf(12, 4), revision);
+    expect(outcome).toEqual({ accepted: false, refusal: "staleRevision" });
+    expect(store.staleRefusals).toBe(1);
+    expect(store.draws(0)).toBe(false);
+  });
+
+  it("leaves the slot's correct mesh alone when refusing", () => {
+    // A refusal must not even replace what is already right, or refusing becomes a second
+    // way to lose the surface.
+    const store = newStore();
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    const good = meshFor(store, 0);
+
+    const stale = store.revisionOf(0) - 1;
+    expect(store.apply(0, meshOf(99, 33), stale).accepted).toBe(false);
+    expect(meshFor(store, 0)).toBe(good);
+    expect(store.trianglesAt(0)).toBe(4);
+  });
+
+  it("accepts a mesh captured at the current revision", () => {
+    const store = newStore();
+    store.markStale(0);
+    expect(store.apply(0, meshOf(12, 4), store.revisionOf(0)).accepted).toBe(
+      true,
+    );
+    expect(store.staleRefusals).toBe(0);
+  });
+
+  it("counts refusals, because zero and 'handled' look the same from outside", () => {
+    const store = newStore();
+    const revision = store.revisionOf(0);
+    store.markStale(0);
+    for (let i = 0; i < 3; i++) store.apply(0, meshOf(12, 4), revision);
+    expect(store.staleRefusals).toBe(3);
+  });
+});
+
+describe("invalidating a slot", () => {
+  it("frees its buffers, takes it out of the scene, and moves its revision", () => {
+    const store = newStore();
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    const mesh = meshFor(store, 0);
+    const spy = vi
+      .spyOn(mesh!.geometry, "dispose")
+      .mockImplementation(() => {});
+    const before = store.revisionOf(0);
+
+    store.markStale(0);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(store.draws(0)).toBe(false);
+    expect(store.drawnCount).toBe(0);
+    expect(store.triangleCount).toBe(0);
+    expect(store.revisionOf(0)).toBeGreaterThan(before);
+  });
+
+  it("leaves the slot answerable as unmeshed rather than air", () => {
+    // The surface is very likely still there. Recording it as air would stop it ever
+    // being re-requested and the chunk would stay blank until something unrelated
+    // invalidated it.
+    const store = newStore();
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    store.markStale(0);
+    expect(store.draws(0)).toBe(false);
+    expect(store.isStale(0, store.revisionOf(0))).toBe(false);
+  });
+
+  it("is safe on a slot with no mesh, and on one it does not have", () => {
+    const store = newStore(2);
+    expect(() => store.markStale(0)).not.toThrow();
+    expect(() => store.markStale(9)).not.toThrow();
+  });
+
+  it("is safe twice over", () => {
+    // Eviction, reshape and shutdown overlap in practice, and disposing twice is
+    // harmless in most renderers and a use-after-free in some.
+    const store = newStore();
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    const mesh = meshFor(store, 0);
+    const spy = vi
+      .spyOn(mesh!.geometry, "dispose")
+      .mockImplementation(() => {});
+    store.markStale(0);
+    store.markStale(0);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not touch other slots", () => {
+    const store = newStore();
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    const one = store.revisionOf(1);
+    store.markStale(0);
+    expect(store.revisionOf(1)).toBe(one);
+    expect(store.draws(1)).toBe(false);
+  });
+});
+
+describe("resizing", () => {
+  it("invalidates every slot when it grows", () => {
+    // A reshape moves cells between slots arbitrarily, so nothing survives it. The
+    // previous version moved the revisions without freeing the geometry, which left the
+    // slot drawing the old cell's surface while refusing every new mesh — blank geometry
+    // that never resolves, with nothing to indicate why.
+    const store = newStore(2);
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+
+    store.resize(4);
+    expect(store.size).toBe(4);
+    expect(store.apply(0, meshOf(12, 4), 0).accepted).toBe(false);
+    expect(store.draws(0)).toBe(false);
+    expect(store.drawnCount).toBe(0);
+  });
+
+  it("leaves nothing of the old shape's meshes in the scene", () => {
+    // The bug alongside it: clearing the store's own record of what it had added left the
+    // meshes as scene children forever, unreachable by any later take-out.
+    const store = newStore(2);
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    store.apply(1, meshOf(12, 4), store.revisionOf(1));
+    const scene = (store as unknown as { scene: Scene }).scene;
+    expect(scene.children).toHaveLength(2);
+
+    store.resize(4);
+    expect(scene.children).toHaveLength(0);
+  });
+
+  it("frees the buffers of slots it drops", () => {
+    const store = newStore(4);
+    store.apply(3, meshOf(12, 4), store.revisionOf(3));
+    const mesh = meshFor(store, 3);
+    const spy = vi
+      .spyOn(mesh!.geometry, "dispose")
+      .mockImplementation(() => {});
+
+    store.resize(2);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(store.size).toBe(2);
+  });
+
+  it("does nothing when the count is unchanged", () => {
+    // Told on every reshape; moving every revision when nothing changed would make every
+    // in-flight mesh stale for no reason.
+    const store = newStore(3);
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    const before = store.revisionOf(0);
+    store.resize(3);
+    expect(store.revisionOf(0)).toBe(before);
+    expect(store.draws(0)).toBe(true);
+  });
+
+  it("keeps a slot usable after growing into it", () => {
+    const store = newStore(2);
+    store.resize(4);
+    expect(store.apply(3, meshOf(12, 4), store.revisionOf(3)).accepted).toBe(
+      true,
+    );
+    expect(store.draws(3)).toBe(true);
+  });
+});
+
+describe("disposing", () => {
+  it("frees everything and empties the scene", () => {
+    const store = newStore(3);
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    store.apply(1, meshOf(24, 8), store.revisionOf(1));
+    const scene = (store as unknown as { scene: Scene }).scene;
+
+    store.dispose();
+    expect(store.drawnCount).toBe(0);
+    expect(scene.children).toHaveLength(0);
+  });
+
+  it("is safe twice", () => {
+    const store = newStore(2);
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    store.dispose();
+    expect(() => store.dispose()).not.toThrow();
+  });
+});
+
+describe("the window hooks", () => {
+  it("invalidates a slot that is re-pointed at another cell", () => {
+    // The bug ADR 0007 was written about: between the switch and the rebuild, the slot
+    // holds the previous cell, and its geometry would be drawn at the new cell's
+    // position.
+    const store = newStore();
+    const hooks = hooksFor(store);
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+
+    hooks.onSlotReposition(0, { x: 1, y: 0, z: 0 });
+    expect(store.draws(0)).toBe(false);
+  });
+
+  it("invalidates a slot that leaves the window", () => {
+    const store = newStore();
+    const hooks = hooksFor(store);
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+
+    hooks.onSlotRelease(0);
+    expect(store.draws(0)).toBe(false);
+    expect(store.drawnCount).toBe(0);
+  });
+
+  it("resizes when the window's slot count changes", () => {
+    // Told *before* the reshape rebuilds the pool, because what draws the slots counts
+    // them: a slot still counted among a superchunk's members would keep it waiting for a
+    // slot the window no longer has.
+    const store = newStore(2);
+    const hooks = hooksFor(store);
+    hooks.onSlotCountChanged(8);
+    expect(store.size).toBe(8);
+  });
+
+  it("invalidates on both reposition and release, because the effect is the same", () => {
+    // They differ in *why* — one has gone, one has not — but on the store's own state the
+    // answer is identical: this cell's mesh is no longer this slot's.
+    const store = newStore();
+    const hooks = hooksFor(store);
+    for (const [name, call] of [
+      ["reposition", () => hooks.onSlotReposition(0, { x: 1, y: 0, z: 0 })],
+      ["release", () => hooks.onSlotRelease(0)],
+    ] as const) {
+      const before = store.revisionOf(0);
+      call();
+      expect(store.revisionOf(0), name).toBeGreaterThan(before);
+    }
+  });
+});
+
+describe("what the store will not do", () => {
+  it("does not reach for the window to check a cell", () => {
+    // The window owns cell identity and answerability. The store owning a second opinion
+    // about them is how two answers to "is this slot filled" start to disagree.
+    const source = ChunkMeshStore.toString();
+    expect(source).not.toMatch(/ChunkWindow|slotOf|cellOfSlot/);
+  });
+
+  it("keeps no per-cell state", () => {
+    // Slots are recycled and cells are not; anything keyed by cell here would have to be
+    // invalidated on every scroll (ADR 0005).
+    const source = ChunkMeshStore.toString();
+    expect(source).not.toMatch(/CoordinateMap|new Map/);
+  });
+});

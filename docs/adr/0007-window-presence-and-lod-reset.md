@@ -40,10 +40,24 @@ flag rather than the queue — the queue was right all along, which is why nothi
 failed.
 
 **The invariant to carry forward: there is exactly one way for a slot to become
-unfilled, and every event that invalidates contents goes through it.** When Phase 4
-adds mesh uploads and superchunk membership, a slot must be marked unfilled by
-whichever of those invalidates it, and the class should refuse to answer for a slot
-whose revision does not match what the caller holds.
+unfilled, and every event that invalidates contents goes through it.**
+
+Phase 4 has now built against it, and the rule turned out to be the right one in a way
+this record did not anticipate. `ChunkMeshStore` does not merely mark slots unfilled;
+it owns a **revision per slot**, moved by every invalidation, and refuses a mesh
+captured against a revision the slot has passed. That is stronger than "mark it
+unfilled", and the extra part is what makes the invariant enforceable by the owner of
+the state rather than by every caller remembering to invalidate. The pool's generation
+check already refuses a _late reply_; the revision refuses a _late answer for a slot
+that has since moved on_, which is the case the pool cannot see because it does not
+know what a slot now holds.
+
+Building it also produced the failure this record warns about, twice in one method. A
+resize moved the revisions without freeing the geometry, so a slot went on drawing the
+old cell's surface while refusing every new mesh — blank geometry that never resolves,
+with nothing to indicate why — and then cleared its own record of which meshes were in
+the scene, so nothing could take them out again. Both are invisible from a unit test that
+only checks the revision moved.
 
 ## Alternatives
 
