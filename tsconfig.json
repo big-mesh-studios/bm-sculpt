@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    // Solid's JSX is compiled, not interpreted: `preserve` hands the
+    // transform to `vite-plugin-solid`, which is the only thing that knows how
+    // to turn it into DOM calls. Importing from `@solidjs/web` rather than
+    // `solid-js` is what puts the DOM runtime in scope for the transform.
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web",
+
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+
+    // Allows `import "./thing.ts"` in the Node-run scripts under `tools/` and
+    // `e2e/`, which Node executes with type stripping rather than a bundler.
+    // Imports inside `src/` stay extensionless.
+    "allowImportingTsExtensions": true,
+
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+
+    "strict": true,
+    // Not stylistic: a leftover scratch binding in a mesher loop is a bug that
+    // silently costs a branch or hides a shadowed name.
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    // `exactOptionalPropertyTypes` is off deliberately. It is correct, and it
+    // makes every optional field that is genuinely optional — half of the
+    // worker protocol — a `{ field?: T | undefined }` at every call site.
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+
+    "skipLibCheck": true,
+    "types": ["vite/client"]
+  },
+  "include": ["src", "tools"],
+  "exclude": ["node_modules", "dist"]
+}

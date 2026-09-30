@@ -1,0 +1,47 @@
+# bm-sculpt is a single-package repository today. The catalog exists anyway,
+# because every version below is one more than one place in this repository —
+# and eventually the Solid core, the rendering engine, and a third workspace
+# will all depend on them.
+#
+# Two packages that end up on different versions of the same dependency do not
+# type-check where their classes meet: one class from two copies is two classes,
+# each with its own declarations of the private fields the other one lacks. A
+# catalog is how that is prevented rather than discovered.
+packages: []
+
+# esbuild ships a platform binary that its postinstall resolves; without this
+# the install silently produces a package with no binary in it.
+allowBuilds:
+  esbuild: true
+
+catalog:
+  # Solid 2.0 is a coordinated release. The reactive core (@solidjs/signals),
+  # the DOM runtime (@solidjs/web) and the framework (solid-js) share a version
+  # number and must agree on it; a mismatch does not degrade, it fails to
+  # type-check. All three are at the latest release candidate.
+  "solid-js": "2.0.0-rc.13"
+  "@solidjs/signals": "2.0.0-rc.13"
+  "@solidjs/web": "2.0.0-rc.13"
+
+  # The Vite plugin tracks the same release line. `next` is its 3.x tag, which
+  # is the one built for Solid 2; its `latest` is still 2.11, which is Solid 1.
+  "vite-plugin-solid": "3.0.0-next.27"
+
+  # The renderer. Not a three.js fork: a scene graph plus a node-graph shader
+  # DSL. See docs/adr/0001-rmsl-over-three.md.
+  "@random-mesh/rmsl": "1.14.0"
+
+  # Vite 8, not 7: `vite-plugin-solid` 3.0.0-next.27 depends on
+  # `@solidjs/vite-plugin`, whose current builds declare a peer range of
+  # `^8.0.0 || ^9.0.0`. The dependency is a caret range over `3.0.0-next.*`,
+  # so a plain install floats forward to a build that will not accept Vite 7.
+  vite: "^8.3.1"
+  vitest: "^4.1.3"
+  typescript: "^5.7.2"
+  prettier: "^3.9.6"
+  jsdom: "^30.0.1"
+
+minimumReleaseAgeExclude:
+  - '@solidjs/signals@2.0.0-rc.13'
+  - '@solidjs/web@2.0.0-rc.13'
+  - solid-js@2.0.0-rc.13

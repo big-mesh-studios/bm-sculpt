@@ -1,0 +1,6 @@
+pnpm-lock.yaml
+pnpm-workspace.yaml
+dist
+node_modules
+*.tsbuildinfo
+.DS_Store

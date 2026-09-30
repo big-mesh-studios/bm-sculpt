@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: check types
+        run: pnpm check-types
+
+      - name: test
+        run: pnpm test
+
+      - name: check formatting
+        if: github.event_name == 'push'
+        run: pnpm format
+
+      - name: check formatting
+        if: github.event_name == 'pull_request'
+        run: pnpm format:check
+
+      - name: build
+        run: pnpm build
+
+  # The formatter is the only thing that writes to the repository, and it does
+  # so by committing whatever it changed. Keeping that on a separate job from the
+  # checks means a formatting commit cannot make a red build look green: the
+  # checks run against what was pushed, and only then does the tree move.
+  format:
+    needs: check
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format
+      - name: commit
+        run: |
+          if git diff --quiet; then
+            echo "nothing to format"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "format"
+          git push
