@@ -181,6 +181,23 @@ export class Field {
   couldHoldSurface(_bounds: Bounds): boolean {
     return true;
   }
+
+  /**
+   * Declares a region about to be sampled, so one candidate cache serves all of it, and
+   * returns the function that ends it.
+   *
+   * Delegated to the BVH, which is where the cache lives, because *declaring a region is
+   * a statement about sampling* and the mesher should not have to know that the field
+   * happens to be built over a tree. A mesher reaching through `field.bvh` for this would
+   * be reaching through an implementation detail to get at a property of the field.
+   *
+   * Optional rather than required: a field with no operation list has nothing to cache,
+   * and a caller holding a plain base field should not have to pretend otherwise. The
+   * mesher checks before it calls.
+   */
+  beginRegion(bounds: Bounds): (() => void) | undefined {
+    return this.bvh.beginRegion(bounds);
+  }
 }
 
 export type { Operation };

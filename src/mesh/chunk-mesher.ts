@@ -116,13 +116,14 @@ export interface MeshField {
   gradient(x: number, y: number, z: number, step?: number): Vec3;
   colourAt(x: number, y: number, z: number): Rgb8;
   /**
-   * Declares a region about to be sampled, so one candidate cache serves all of it.
+   * Declares a region about to be sampled, so one candidate cache serves all of it, and
+   * returns the function that ends it.
    *
-   * Returns the function that ends the region. A mesher that skips this still produces
-   * a correct mesh — it just rebuilds its candidate list every `CANDIDATE_CELL` cells
+   * Optional: a field with no operation list has no candidates to cache. A mesher that
+   * skips this still produces a correct mesh — it just gathers candidates per point
    * instead of once per chunk, which is most of the cost.
    */
-  beginRegion(bounds: Bounds): () => void;
+  beginRegion?(bounds: Bounds): (() => void) | undefined;
   /** Whether a box could hold a surface at all. */
   couldHoldSurface(bounds: Bounds): boolean;
 }
@@ -167,7 +168,8 @@ export class SurfaceNetsChunkMesher implements ChunkMesher {
     // The candidate cache is told the whole sample region for the duration. Without this
     // the cache is rebuilt every few cells instead of once per chunk, which on the
     // measured cost of a chunk is the difference between one build and dozens.
-    const endRegion = this.field.beginRegion(region.sampleBounds);
+    const endRegion =
+      this.field.beginRegion?.(region.sampleBounds) ?? (() => {});
 
     try {
       surfaceNets({

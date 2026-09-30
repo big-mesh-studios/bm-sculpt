@@ -71,3 +71,12 @@ export type {
   WorldWorkerPoolOptions,
 } from "./worker-pool";
 export { WorldWorkerPool } from "./worker-pool";
+
+export {
+  mesherFor,
+  paintTilesOf,
+  TilePaint,
+  type WorkerPaint,
+} from "./model-field";
+
+export { runWorker } from "./mesh-worker";

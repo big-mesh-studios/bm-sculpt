@@ -6,19 +6,20 @@ A sculptor whose field is an operation list rather than a stored volume, meshed
 per chunk in web workers, drawn with a node-graph renderer, and built to stay
 responsive on hardware several years old.
 
-This repository is at **phase 0** of a planned rebuild: the toolchain, the
-rendering layer and the three risks that were meant to be settled before any of
-the mesher is written. What is on screen is a spike scene, not the application.
+This repository is at **phase 3** of a planned rebuild. The CSG core, the
+streaming foundation and the mesher exist and are tested; what is on screen is
+still the phase 0 spike scene, not the application. Phases 0 to 5 are the
+sculpting application and are independently shippable.
 
 ## What exists
 
-|              |                                                                                                                                                                                                   |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Renderer** | [`@random-mesh/rmsl`](https://www.npmjs.com/package/@random-mesh/rmsl) 1.14.0 — a scene graph and a node-graph shader DSL. Not a three.js fork; see [ADR 0001](docs/adr/0001-rmsl-over-three.md). |
-| **UI**       | Solid **2.0.0-rc.13**, `solid-js` + `@solidjs/web` + `@solidjs/signals`, coordinated at one version.                                                                                              |
-| **Build**    | Vite 8, `vite-plugin-solid@3.0.0-next.27`, TypeScript in `strict` with `noUnusedLocals` and `noUnusedParameters`.                                                                                 |
-| **Style**    | One Prettier config, no linter. Type safety is `tsc --noEmit`.                                                                                                                                    |
-| **Layout**   | One package. `pnpm-workspace.yaml` exists for the `catalog:` it holds, which every version more than one place needs is written into once.                                                        |
+|              |                                                                                                                                                                                                                                                                            |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Renderer** | [`@random-mesh/rmsl`](https://www.npmjs.com/package/@random-mesh/rmsl) 1.14.0 — a scene graph and a node-graph shader DSL. Not a three.js fork; see [ADR 0001](docs/adr/0001-rmsl-over-three.md).                                                                          |
+| **UI**       | Solid **2.0.0-beta.29**, `solid-js` + `@solidjs/web` + `@solidjs/signals`, coordinated at one version. The JSX transform runs through Babel rather than the native compiler, so the toolchain has no native step and builds anywhere Node does; see `pnpm-workspace.yaml`. |
+| **Build**    | Vite 8, `vite-plugin-solid@3.0.0-next.5`, TypeScript in `strict` with `noUnusedLocals` and `noUnusedParameters`.                                                                                                                                                           |
+| **Style**    | One Prettier config, no linter. Type safety is `tsc --noEmit`.                                                                                                                                                                                                             |
+| **Layout**   | One package. `pnpm-workspace.yaml` exists for the `catalog:` it holds, which every version more than one place needs is written into once.                                                                                                                                 |
 
 ## Phase 0 spikes
 
@@ -96,18 +97,69 @@ all of which are JSX-free, run without a compiler at all.
 The architecture decisions, each with its costs and its rejected alternatives,
 are in [`docs/adr/`](docs/adr/README.md):
 
-|                                                      |                                                    |
-| ---------------------------------------------------- | -------------------------------------------------- |
-| [0001](docs/adr/0001-rmsl-over-three.md)             | Render with rmsl, not three.js                     |
-| [0002](docs/adr/0002-computed-field-never-stored.md) | The field is computed, never stored                |
-| [0003](docs/adr/0003-surface-nets.md)                | Surface Nets per chunk, not marching cubes         |
-| [0004](docs/adr/0004-csg-per-chunk.md)               | Each chunk evaluates the operations at its own LOD |
-| [0005](docs/adr/0005-streaming-shape.md)             | Slot-indexed arrays and a coordinate map           |
+|                                                        |                                                       |
+| ------------------------------------------------------ | ----------------------------------------------------- |
+| [0001](docs/adr/0001-rmsl-over-three.md)               | Render with rmsl, not three.js                        |
+| [0002](docs/adr/0002-computed-field-never-stored.md)   | The field is computed, never stored                   |
+| [0003](docs/adr/0003-surface-nets.md)                  | Surface Nets per chunk, not marching cubes            |
+| [0004](docs/adr/0004-csg-per-chunk.md)                 | Each chunk evaluates the operations at its own LOD    |
+| [0005](docs/adr/0005-streaming-shape.md)               | Slot-indexed arrays and a coordinate map              |
+| [0006](docs/adr/0006-field-saturation.md)              | The field saturates at a fixed distance               |
+| [0007](docs/adr/0007-window-presence-and-lod-reset.md) | Invalidating a slot invalidates what a query may read |
+| [0008](docs/adr/0008-worker-pool-and-generations.md)   | One chunk per worker, and a generation per request    |
 
 Phases 1 to 8, in order, are in the project plan. Phases 0 to 5 are the sculpting
 application and are independently shippable; 6 to 8 are an infinite streaming
 world, and because the field is never stored they add no changes to the CSG or the
 mesher — only a `baseField` binding and a camera.
+
+## Phase 3 — meshing
+
+`src/mesh/` turns the field's sign into triangles, in workers. The mesher proper is
+a pure algorithm over a sampler; everything project-specific is one layer above it.
+
+|                   |                                                                                                                                        |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `surface-nets.ts` | One vertex per cell whose corners disagree, one quad per sign-changing edge. Owns the seam rule, which is the only subtle thing in it. |
+| `chunk-mesher.ts` | `ChunkMesher`, the interface a WebAssembly implementation would come through, and the Surface Nets implementation of it.               |
+| `chunk-mesh.ts`   | The twenty-byte vertex the Phase 0 spike proved reaches the GPU.                                                                       |
+| `growable.ts`     | The only way geometry is accumulated, with the `array`/`exact` split so a transfer never delivers a detached view.                     |
+| `model-field.ts`  | Builds a field from a model message, on the worker's side of the thread boundary.                                                      |
+| `protocol.ts`     | The messages, as data and nothing else.                                                                                                |
+| `worker.ts`       | `handleMeshMessage`, a pure function of state, message and an injected mesher factory.                                                 |
+| `worker-pool.ts`  | Four workers, one chunk each, and the rule for which answer counts.                                                                    |
+
+The seam rule, in one sentence: **a chunk owning cells `[base, base + n)` emits the
+edges in that same range, taking the four cells it needs from one cell of low
+padding.** That is awkward to assert and easy to assert indirectly — mesh a region as
+one chunk, mesh it as several, and require the identical set of triangles. Not the same
+count; the same triangles. A duplicated quad, a dropped quad, a flipped winding and a
+misplaced vertex each fail it, and an eight-chunk tiling exercises all twelve internal
+faces at once.
+
+Writing this phase turned up a bug in phase 2 that no phase 2 test could see.
+`sampleWorld` put a chunk's 32 samples at the centres of its intervals, which spans
+310 units of a 320-unit chunk — so every chunk left a ten-unit gap at its high edge
+and the next chunk began with another, a hole in the field running along every chunk
+boundary in the world. A chunk has `CHUNK_VOXELS` _intervals_ now and a sample at the
+start of each. The paint-tiles tests had their own copy of that formula and the copy
+quietly kept the old one, so they went on agreeing with each other about a chunk with a
+gap in it; it reads through `sampleWorld` now.
+
+Three more things the tests found, recorded in
+[ADR 0003](docs/adr/0003-surface-nets.md) and
+[ADR 0008](docs/adr/0008-worker-pool-and-generations.md):
+
+- **Adjacent chunks cannot share vertices**, because a chunk has no way to know a
+  neighbour's. An edge can therefore belong to two triangles in the world while sharing
+  no index pair, and a watertightness check that compares by index reports correct
+  chunking as broken. It did, until it was fixed.
+- **Naive surface nets is not manifold in general.** A quad per sign-changing edge means
+  a thin or creased surface can leave a dual edge in a single triangle. A resolved
+  sphere is exactly manifold; a thin torus at one voxel per minor radius is not. It is
+  the price of the method, and it does not affect seams.
+- **`pump()` did not skip busy workers**, so every chunk went to worker zero, and a
+  queue per worker meant only one chunk was ever in flight. Both invisible in review.
 
 ## Phase 2 — the streaming foundation
 
