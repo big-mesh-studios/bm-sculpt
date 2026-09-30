@@ -32,8 +32,33 @@ export interface OrbitLimits {
   rotateSpeed: number;
   /** Fraction of the radius a pan moves per pixel dragged. */
   panSpeed: number;
-  /** Multiplicative change in radius per notch of wheel, and per pinch. */
+  /**
+   * Log-radius change per pixel of wheel delta.
+   *
+   * Calibrated against a mouse, where one notch is around a hundred pixels of deltaY, so
+   * this gives roughly a sixth of the radius per notch.
+   */
   zoomSpeed: number;
+  /**
+   * Exponent on the ratio of finger separation, for a two-finger pinch.
+   *
+   * A separate constant because it is a different quantity, and reusing one for both is how
+   * the gesture ended up some eighty times too slow. A wheel reports how far a *pixel*
+   * moved; a pinch reports how far apart two *fingers* are, and only the ratio of that to
+   * the previous frame says what a user meant — ten pixels of pinch means something quite
+   * different at a hundred pixels of separation and at four hundred. One means the camera
+   * tracks the fingers exactly, and behaves the same on any screen.
+   */
+  pinchSpeed: number;
+  /**
+   * Log-radius change per pixel of ctrl+wheel delta, for a trackpad pinch.
+   *
+   * A trackpad reports a pinch as a wheel event with the control key held, and its deltas
+   * are a small fraction of a mouse notch's — a couple of units where a wheel gives a
+   * hundred. Sharing the mouse's speed therefore made a trackpad pinch feel about twenty
+   * times too slow, which is the complaint that produced this constant.
+   */
+  trackpadZoomSpeed: number;
   /** Pixels the pointers must separate by before a pinch counts as a zoom. */
   pinchThreshold: number;
 }
@@ -46,6 +71,8 @@ export const DEFAULT_ORBIT_LIMITS: OrbitLimits = {
   rotateSpeed: 0.006,
   panSpeed: 0.0015,
   zoomSpeed: 0.0015,
+  pinchSpeed: 1,
+  trackpadZoomSpeed: 0.02,
   pinchThreshold: 8,
 };
 
@@ -204,9 +231,11 @@ export class OrbitController {
         // Below the threshold a pinch is two fingers touching by accident, and
         // acting on it would move the model by an amount nobody asked for.
         if (this.pinchDistance > this.limits.pinchThreshold) {
+          // Fingers separating by a factor of `s` moves the camera by `s^-pinchSpeed`, so
+          // spreading them twice as far halves the radius at a speed of one.
           const ratio = this.pinchDistance / Math.max(spread, 1);
           this.state.radius = clampRadius(
-            this.state.radius * Math.pow(ratio, this.limits.zoomSpeed * 8),
+            this.state.radius * Math.pow(ratio, this.limits.pinchSpeed),
             this.limits,
           );
         }
@@ -247,8 +276,14 @@ export class OrbitController {
         // also scrolls the page is a page that scrolls while the user is trying
         // to zoom.
         event.preventDefault();
+        // A trackpad pinch arrives here as a wheel with the control key held. It is the
+        // same gesture as a two-finger pinch and nothing like the same numbers, so it gets
+        // its own speed rather than a share of the mouse's.
+        const speed = event.ctrlKey
+          ? this.limits.trackpadZoomSpeed
+          : this.limits.zoomSpeed;
         this.state.radius = clampRadius(
-          this.state.radius * Math.exp(event.deltaY * this.limits.zoomSpeed),
+          this.state.radius * Math.exp(event.deltaY * speed),
           this.limits,
         );
       },

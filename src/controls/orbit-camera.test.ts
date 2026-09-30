@@ -1,15 +1,72 @@
 import { describe, expect, it } from "vitest";
 
+import { PerspectiveCamera } from "@random-mesh/rmsl/scene";
+
 import {
   clampPhi,
   clampRadius,
   DEFAULT_ORBIT_LIMITS,
   initialOrbitState,
+  OrbitController,
   orbitOffset,
   panBy,
 } from "./orbit-camera";
 
 const limits = DEFAULT_ORBIT_LIMITS;
+
+/**
+ * An element that records its listeners, so a gesture can be performed on it.
+ *
+ * The event wiring had no coverage at all until now, and that is how a pinch could run
+ * eighty times too slow without anything objecting: the pure functions were all tested and
+ * all correct, and the arithmetic that used them was not tested at all.
+ */
+const fakeElement = () => {
+  const listeners = new Map<string, Set<(event: unknown) => void>>();
+  const element = {
+    addEventListener: (type: string, handler: (event: unknown) => void) => {
+      const set = listeners.get(type) ?? new Set();
+      set.add(handler);
+      listeners.set(type, set);
+    },
+    removeEventListener: (type: string, handler: (event: unknown) => void) => {
+      listeners.get(type)?.delete(handler);
+    },
+    setPointerCapture: () => {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+  };
+
+  return {
+    element: element as unknown as HTMLElement,
+    fire(type: string, event: unknown): void {
+      for (const handler of listeners.get(type) ?? []) handler(event);
+    },
+    /** Lifts two fingers apart by a factor, as a real pinch would. */
+    pinch(from: number, to: number): void {
+      const pointer = (id: number, x: number, y: number) => ({
+        pointerId: id,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        shiftKey: false,
+      });
+      this.fire("pointerdown", pointer(1, 0, 0));
+      this.fire("pointerdown", pointer(2, from, 0));
+      this.fire("pointermove", pointer(1, 0, 0));
+      this.fire("pointermove", pointer(2, to, 0));
+    },
+    wheel(deltaY: number, ctrlKey = false): void {
+      this.fire("wheel", { deltaY, ctrlKey, preventDefault: () => {} });
+    },
+  };
+};
+
+const controller = (radius = 900) => {
+  const harness = fakeElement();
+  const orbit = new OrbitController(new PerspectiveCamera(), { radius });
+  orbit.attach(harness.element);
+  return { orbit, harness };
+};
 
 describe("orbiting angles", () => {
   it("holds phi inside the limits however far a flick overshoots", () => {
@@ -102,5 +159,186 @@ describe("panning", () => {
     expect(
       Math.hypot(dragged.x - 3, dragged.y + 7, dragged.z - 11),
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("zooming with a wheel", () => {
+  it("zooms in on a negative delta and out on a positive one", () => {
+    // The DOM's own convention, pinned here because the sign is easy to get backwards and
+    // a wheel that turns the wrong way is the first thing anyone notices: a positive deltaY
+    // is content moving down the page, which reads as pushing the world away.
+    const { orbit, harness } = controller();
+    const start = orbit.state.radius;
+
+    harness.wheel(-100);
+    const closer = orbit.state.radius;
+    expect(closer).toBeLessThan(start);
+
+    harness.wheel(100);
+    expect(orbit.state.radius).toBeGreaterThan(closer);
+  });
+
+  it("moves proportionally to the delta, so a notch is a notch", () => {
+    // Exponential in the delta, which is what makes a wheel feel the same at any speed:
+    // the same total rotation produces the same total zoom however it was delivered.
+    const { orbit, harness } = controller();
+    const start = orbit.state.radius;
+    for (let i = 0; i < 10; i++) harness.wheel(10);
+    for (let i = 0; i < 10; i++) harness.wheel(10);
+    expect(orbit.state.radius / start).toBeCloseTo(
+      Math.exp(200 * DEFAULT_ORBIT_LIMITS.zoomSpeed),
+      9,
+    );
+  });
+
+  it("gives one mouse notch a sensible amount of travel", () => {
+    // Around a sixth of the radius: enough to feel deliberate, small enough that reaching
+    // across a model takes a handful of notches rather than a scroll.
+    const one = Math.exp(100 * DEFAULT_ORBIT_LIMITS.zoomSpeed);
+    expect(one).toBeGreaterThan(1.1);
+    expect(one).toBeLessThan(1.3);
+  });
+
+  it("zooms faster for a trackpad pinch than for a mouse notch", () => {
+    // A trackpad reports a pinch as a wheel with the control key held, and its deltas are
+    // a small fraction of a notch's. Sharing the mouse's speed made a trackpad pinch feel
+    // around twenty times too slow, which is the complaint that produced the constant.
+    const { orbit, harness } = controller();
+    const start = orbit.state.radius;
+    const delta = -2;
+
+    harness.wheel(delta, false);
+    const mouse = start / orbit.state.radius;
+    orbit.state.radius = start;
+
+    harness.wheel(delta, true);
+    const trackpad = start / orbit.state.radius;
+
+    expect(trackpad).toBeGreaterThan(mouse);
+    // The speeds compose additively in log space, not as a ratio: the radius is
+    // multiplied by `exp(delta * speed)`, so a twice-as-large speed is not twice the
+    // movement but twice the exponent. Asserting the ratio was wrong by about a factor of
+    // thirteen for these values, and would have looked like a bug in the code.
+    expect(Math.log(trackpad) - Math.log(mouse)).toBeCloseTo(
+      -delta *
+        (DEFAULT_ORBIT_LIMITS.trackpadZoomSpeed -
+          DEFAULT_ORBIT_LIMITS.zoomSpeed),
+      9,
+    );
+    // And enough over a whole gesture to be worth doing: a trackpad pinch reports a few
+    // units per event across a hundred or so of them.
+    const gesture = Math.exp(150 * DEFAULT_ORBIT_LIMITS.trackpadZoomSpeed);
+    expect(gesture).toBeGreaterThan(5);
+  });
+});
+
+describe("zooming with a pinch", () => {
+  it("moves in the direction the fingers went", () => {
+    const { orbit, harness } = controller();
+    const start = orbit.state.radius;
+
+    harness.pinch(100, 200);
+    expect(orbit.state.radius).toBeLessThan(start);
+
+    orbit.state.radius = start;
+    harness.pinch(200, 100);
+    expect(orbit.state.radius).toBeGreaterThan(start);
+  });
+
+  it("tracks the fingers: spreading them twice as far halves the radius", () => {
+    // A speed of one. Anything much below it — the earlier setting reused the wheel's
+    // per-pixel constant, giving about 0.012 — and a pinch that doubles the fingers moves
+    // the camera by one percent, which reads as a gesture that is not working.
+    const { orbit, harness } = controller();
+    const start = orbit.state.radius;
+    harness.pinch(100, 200);
+    expect(orbit.state.radius / start).toBeCloseTo(0.5, 6);
+  });
+
+  it("depends on the ratio of separation, not its size", () => {
+    // A pinch of ten pixels means something quite different at a hundred pixels of
+    // separation and at four hundred, and only the ratio carries what the user meant.
+    // This is what makes the gesture behave the same on any screen.
+    const small = controller();
+    small.harness.pinch(100, 120);
+    const large = controller();
+    large.harness.pinch(400, 480);
+
+    expect(small.orbit.state.radius / 900).toBeCloseTo(
+      large.orbit.state.radius / 900,
+      9,
+    );
+  });
+
+  it("is unaffected by how many separate moves the gesture arrives in", () => {
+    // Pointer events arrive at whatever rate the device reports, so a speed expressed per
+    // event would make the zoom depend on frame rate — which is the same class of bug as
+    // an assertion that measures a clock.
+    const stepwise = controller();
+    const atOnce = controller();
+
+    const fire = (
+      harness: ReturnType<typeof fakeElement>,
+      from: number,
+      steps: number,
+    ) => {
+      const pointer = {
+        pointerId: 2,
+        clientX: from,
+        clientY: 0,
+        button: 0,
+        shiftKey: false,
+      };
+      harness.fire("pointerdown", {
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+        shiftKey: false,
+      });
+      harness.fire("pointerdown", pointer);
+      harness.fire("pointermove", {
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+        shiftKey: false,
+      });
+      for (let i = 1; i <= steps; i++) {
+        harness.fire("pointermove", {
+          ...pointer,
+          clientX: from + ((200 - from) * i) / steps,
+        });
+      }
+    };
+
+    fire(stepwise.harness, 100, 20);
+    fire(atOnce.harness, 100, 1);
+
+    expect(stepwise.orbit.state.radius / 900).toBeCloseTo(
+      atOnce.orbit.state.radius / 900,
+      9,
+    );
+  });
+
+  it("ignores two fingers barely touching", () => {
+    // Below the threshold a pinch is two fingers landing at once, and acting on it would
+    // move the model by an amount nobody asked for.
+    const { orbit, harness } = controller();
+    const start = orbit.state.radius;
+    harness.pinch(2, 6);
+    expect(orbit.state.radius).toBe(start);
+  });
+
+  it("stays inside the radius limits", () => {
+    const { orbit, harness } = controller();
+    for (let i = 0; i < 40; i++) harness.pinch(100, 400);
+    expect(orbit.state.radius).toBeGreaterThanOrEqual(
+      DEFAULT_ORBIT_LIMITS.minRadius,
+    );
+    for (let i = 0; i < 80; i++) harness.pinch(400, 100);
+    expect(orbit.state.radius).toBeLessThanOrEqual(
+      DEFAULT_ORBIT_LIMITS.maxRadius,
+    );
   });
 });
