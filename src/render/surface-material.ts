@@ -1,6 +1,8 @@
 /**
- * The one material that proves the three things Phase 0 was gated on, in a
- * single shader, so that a single draw settles all of them.
+ * The material the application's chunks are drawn with, and the one Phase 0 used to
+ * settle its three risks. One shader rather than two: the spike is only evidence about
+ * this material if the application draws with the same one, and a second copy would be
+ * one shader too many to keep in step.
  *
  *   1. A `snorm16x2` attribute reaching the vertex stage and unfolding into a
  *      unit normal — an octahedral fold that works is smooth on a sphere and
@@ -52,11 +54,13 @@ export const octahedralNode = (f: Node<"vec2">): Node<"vec3"> => {
   return n.normalize();
 };
 
-export class SpikeMaterial extends NodeMaterial {
+export class SurfaceMaterial extends NodeMaterial {
   /**
-   * The volume to address, or `null` for a material that does not. Assigning a
-   * texture flags the program for a rebuild, which is what makes a volume
-   * swappable at runtime rather than fixed at construction.
+   * The volume to address, or `null` for a material that does not.
+   *
+   * The application sets no volume until Phase 6 gives it a base field to cut against;
+   * the spike sets one. Assigning a texture flags the program for a rebuild, which is
+   * what makes a volume swappable at runtime rather than fixed at construction.
    */
   volume: DataTexture | null = null;
 

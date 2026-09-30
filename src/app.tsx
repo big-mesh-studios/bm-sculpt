@@ -27,7 +27,7 @@ import {
   detectFragmentPrecision,
   type PrecisionProbe,
 } from "./render/precision";
-import { SpikeMaterial } from "./render/spike-material";
+import { SurfaceMaterial } from "./render/surface-material";
 import {
   buildBox,
   buildSphere,
@@ -83,7 +83,7 @@ export default function App() {
     });
     viewport.setBackground(new Color(0.07, 0.07, 0.09));
 
-    const material = new SpikeMaterial();
+    const material = new SurfaceMaterial();
     material.volume = buildSpikeVolume();
 
     const sphere = new Mesh(geometry().sphere, material);

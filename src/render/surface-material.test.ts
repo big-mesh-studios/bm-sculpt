@@ -3,7 +3,7 @@ import { compileGLSL } from "@random-mesh/rmsl";
 import { Scene } from "@random-mesh/rmsl/scene";
 import { describe, expect, it } from "vitest";
 
-import { SpikeMaterial } from "./spike-material";
+import { SurfaceMaterial } from "./surface-material";
 import { buildSpikeVolume } from "./spike-volume";
 
 /**
@@ -21,7 +21,7 @@ import { buildSpikeVolume } from "./spike-volume";
  * the browser is for, and it is why the visual spike scene exists alongside this
  * file rather than instead of it.
  */
-const compile = (material: SpikeMaterial) => {
+const compile = (material: SurfaceMaterial) => {
   const scene = new Scene();
   const program = material.build(scene);
   return {
@@ -35,13 +35,13 @@ const compile = (material: SpikeMaterial) => {
 
 describe("the spike material compiles", () => {
   it("emits a version 300 es vertex stage", () => {
-    const { vertex } = compile(new SpikeMaterial());
+    const { vertex } = compile(new SurfaceMaterial());
     expect(vertex).toContain("#version 300 es");
     expect(vertex).toContain("gl_Position");
   });
 
   it("emits a version 300 es fragment stage with a main", () => {
-    const { fragment } = compile(new SpikeMaterial());
+    const { fragment } = compile(new SurfaceMaterial());
     expect(fragment).toContain("#version 300 es");
     expect(fragment).toMatch(/void\s+main\s*\(/);
   });
@@ -51,7 +51,7 @@ describe("the spike material compiles", () => {
     // emitted source. A `sampler2D` here would compile, would draw, and would
     // sample a flat slice of the volume — so the text is the only place the
     // difference is visible at all.
-    const material = new SpikeMaterial();
+    const material = new SurfaceMaterial();
     material.volume = buildSpikeVolume();
     const { fragment, program } = compile(material);
 
@@ -69,14 +69,14 @@ describe("the spike material compiles", () => {
   it("binds no volume sampler at all when there is no volume", () => {
     // The alternative — binding a 1x1x1 placeholder — would work and mean
     // nothing, which is worse than not having the uniform.
-    const { program } = compile(new SpikeMaterial());
+    const { program } = compile(new SurfaceMaterial());
     expect(program.samplers.map((sampler) => sampler.name)).not.toContain(
       "uVolume",
     );
   });
 
   it("declares both vertex attributes, and the varyings that carry them", () => {
-    const { program } = compile(new SpikeMaterial());
+    const { program } = compile(new SurfaceMaterial());
 
     // On the program rather than on the emitted text. RMSL renames every binding
     // to `_rmsl_aN` in the source and resolves names through the binding list,
@@ -102,7 +102,7 @@ describe("the spike material compiles", () => {
     // The fold surviving compilation is the thing worth checking: a decode that
     // folded away to a constant would still compile and still draw, and the
     // sphere would simply be lit by a fixed direction.
-    const { vertex } = compile(new SpikeMaterial());
+    const { vertex } = compile(new SurfaceMaterial());
     expect(vertex).toContain("normalize");
     expect(vertex).toContain("max(-");
     // One selection per axis: the fold's mirror is applied to x and to y.
@@ -113,7 +113,7 @@ describe("the spike material compiles", () => {
     // A shader that only works at highp renders nothing on the devices the
     // precision probe exists to detect, so each of the three is compiled and the
     // emitted qualifier is checked rather than merely the absence of a throw.
-    const material = new SpikeMaterial();
+    const material = new SurfaceMaterial();
     const program = material.build(new Scene());
     for (const precision of ["lowp", "mediump", "highp"] as const) {
       const vertex = compileGLSL.vertex(program.vertexRoot, { precision });
@@ -136,7 +136,7 @@ describe("the spike material compiles", () => {
     // library's choice rather than a guarantee about the code emitted, so what
     // is asserted is the absence of an `if` — the thing that would actually
     // diverge — rather than a stronger claim the compiler is free to break.
-    const { vertex } = compile(new SpikeMaterial());
+    const { vertex } = compile(new SurfaceMaterial());
     expect(vertex).not.toMatch(/\bif\s*\(/);
   });
 });
@@ -149,7 +149,7 @@ describe("the volume's placement in world space", () => {
     // from the origin, so every sample clamped to an edge texel and the volume did
     // nothing but dim them — a picture indistinguishable from a wrongly-addressed
     // sampler, which is what this spike exists to rule out.
-    const material = new SpikeMaterial();
+    const material = new SurfaceMaterial();
     expect(material.volumeWorldSize).toBeGreaterThan(BLOCK_WORLD);
     expect(1 / material.volumeWorldSize).toBeLessThan(0.01);
   });
