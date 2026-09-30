@@ -422,3 +422,48 @@ describe("marking slots", () => {
     expect(window.filledCount).toBe(1);
   });
 });
+
+describe("finding the slot behind a cell", () => {
+  /** A window centred on the origin, with nothing answered. */
+  const windowAt = (radius = 1): ChunkWindow =>
+    new ChunkWindow({ radius, onSlotsWanted: () => {} });
+
+  it("finds a slot whether or not the cell is filled", () => {
+    // `slotOf` refuses an unfilled chunk because a query about it has no honest answer.
+    // A holder of slots needs the opposite: the chunks that are unfilled are precisely the
+    // ones an edit has to invalidate, because they are the ones with an answer in flight.
+    const window = windowAt();
+    const cell = { x: 0, y: 0, z: 0 };
+
+    expect(window.slotOf(cell)).toBeUndefined();
+    expect(window.claimedSlotOf(cell)).toBeDefined();
+
+    window.markFilled(window.claimedSlotOf(cell)!);
+    expect(window.slotOf(cell)).toBe(window.claimedSlotOf(cell));
+  });
+
+  it("agrees with the query once the cell is filled", () => {
+    const window = windowAt();
+    const cell = { x: 0, y: 0, z: 0 };
+    window.markFilled(window.claimedSlotOf(cell)!);
+    expect(window.claimedSlotOf(cell)).toBe(window.slotOf(cell));
+    expect(window.has(cell)).toBe(true);
+  });
+
+  it("has no slot for a cell the window does not hold", () => {
+    const window = windowAt();
+    expect(window.claimedSlotOf({ x: 99, y: 0, z: 0 })).toBeUndefined();
+    expect(window.covers({ x: 99, y: 0, z: 0 })).toBe(false);
+  });
+
+  it("still finds the slot after the window scrolls past the cell", () => {
+    // A holder of slots has to be able to say where a chunk *was*, long enough to abandon
+    // its outstanding work — which is why this is a different question from `slotOf`.
+    const window = windowAt();
+    const cell = { x: 0, y: 0, z: 0 };
+    expect(window.claimedSlotOf(cell)).toBeDefined();
+    window.scrollTo({ x: 40000, y: 0, z: 0 });
+    expect(window.claimedSlotOf(cell)).toBeUndefined();
+    expect(window.covers(cell)).toBe(false);
+  });
+});

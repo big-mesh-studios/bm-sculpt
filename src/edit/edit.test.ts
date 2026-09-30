@@ -1,0 +1,415 @@
+import { describe, expect, it } from "vitest";
+
+import { makeOperation, type Operation } from "../csg";
+
+import { SculptDocument, boundsOf } from "./document";
+import { beginStroke, DAB_SPACING, DEFAULT_BRUSH } from "./brush";
+
+const dab = (index: number, x = 0, radius = 10): Operation =>
+  makeOperation(
+    index,
+    { x, y: 0, z: 0 },
+    { type: "Ellipsoid", radius: { x: radius, y: radius, z: radius } },
+    "Add",
+  );
+
+/**
+ * A group of operations with correctly increasing indices, as a stroke writes them.
+ *
+ * Built by appending to a document rather than by listing radii, because an operation's
+ * index is its position in the fold: a helper that restarted at zero would hand the
+ * document duplicate indices and every test using two groups would be wrong in a way that
+ * looks like a bug in the document.
+ */
+const addGroup = (
+  document: SculptDocument,
+  ...radii: number[]
+): Operation[] => {
+  const from = document.count;
+  const added = radii.map((radius, at) => dab(from + at, 0, radius));
+  document.add(added);
+  return added;
+};
+
+describe("the model as a history", () => {
+  it("starts empty with nothing to undo", () => {
+    const document = new SculptDocument();
+    expect(document.count).toBe(0);
+    expect(document.canUndo).toBe(false);
+    expect(document.canRedo).toBe(false);
+  });
+
+  it("appends operations in order", () => {
+    const document = new SculptDocument();
+    addGroup(document, 10, 20, 30);
+    expect(document.list.map((o) => o.index)).toEqual([0, 1, 2]);
+    expect(document.count).toBe(3);
+  });
+
+  it("ignores an empty addition rather than putting a command on the stack", () => {
+    // A click that landed on nothing — a stroke begun and released without moving — must
+    // not be something the user has to press undo twice to get past.
+    const document = new SculptDocument();
+    expect(document.add([])).toBe(false);
+    expect(document.canUndo).toBe(false);
+  });
+
+  it("removes what an undo added, and puts it back", () => {
+    const document = new SculptDocument();
+    addGroup(document, 10, 20, 30);
+    addGroup(document, 40, 50);
+
+    expect(document.count).toBe(5);
+    document.undo();
+    expect(document.count).toBe(3);
+    expect(document.canRedo).toBe(true);
+
+    document.redo();
+    expect(document.count).toBe(5);
+    expect(document.list.map((o) => o.index)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("undoes a whole stroke as one step", () => {
+    // A stroke across a large model is hundreds of dabs, and undoing them one at a time
+    // would be unusable.
+    const document = new SculptDocument();
+    document.add(Array.from({ length: 200 }, (_, i) => dab(i)));
+    document.undo();
+    expect(document.count).toBe(0);
+    expect(document.canUndo).toBe(false);
+  });
+
+  it("does not renumber what survives an undo", () => {
+    // An operation's index is its position in the fold and must increase monotonically and
+    // never be reused, or the colour resolution order changes under a stroke in progress.
+    const document = new SculptDocument();
+    addGroup(document, 10, 20, 30);
+    addGroup(document, 40, 50, 60);
+    document.undo();
+
+    expect(document.list.map((o) => o.index)).toEqual([0, 1, 2]);
+    const indices = document.list.map((o) => o.index);
+    for (let i = 1; i < indices.length; i++) {
+      expect(indices[i]).toBeGreaterThan(indices[i - 1]);
+    }
+  });
+
+  it("redo restores the operations themselves, not a record of them", () => {
+    // A redo that recomputed would be free to differ from what the undo actually did.
+    const document = new SculptDocument();
+    addGroup(document, 11, 22, 33);
+    const before = [...document.list];
+
+    document.undo();
+    document.redo();
+    expect(document.list).toEqual(before);
+  });
+
+  it("forgets the redo stack once something new is added", () => {
+    // The list has moved past it, so a redo would put operations back at a position that
+    // no longer means what it did.
+    const document = new SculptDocument();
+    addGroup(document, 10, 20);
+    document.undo();
+    expect(document.canRedo).toBe(true);
+
+    addGroup(document, 30);
+    expect(document.canRedo).toBe(false);
+
+    // Undoing the new group and redoing it must not bring the old one back with it.
+    document.undo();
+    document.redo();
+    expect(document.count).toBe(1);
+    expect((document.list[0].shape as { radius: { x: number } }).radius.x).toBe(
+      30,
+    );
+  });
+
+  it("does nothing when asked to undo or redo past the ends", () => {
+    const document = new SculptDocument();
+    expect(document.undo()).toBeUndefined();
+    expect(document.redo()).toBeUndefined();
+    addGroup(document, 10);
+    expect(document.redo()).toBeUndefined();
+  });
+
+  it("throws the history away without throwing away the list", () => {
+    // For loading: the list is the whole of the saved state and there is no earlier version
+    // to return to.
+    const document = new SculptDocument();
+    addGroup(document, 10, 20);
+    document.resetHistory();
+    expect(document.count).toBe(2);
+    expect(document.canUndo).toBe(false);
+    expect(document.canRedo).toBe(false);
+  });
+
+  it("reports every change, with what it touched", () => {
+    const document = new SculptDocument();
+    const seen: string[] = [];
+    const stop = document.onChange((_list, change) =>
+      seen.push(`${change.kind}:${change.count}`),
+    );
+
+    addGroup(document, 10, 20);
+    document.undo();
+    document.redo();
+    expect(seen).toEqual(["add:2", "undo:2", "redo:2"]);
+
+    stop();
+    addGroup(document, 30);
+    expect(seen).toHaveLength(3);
+  });
+
+  it("reports bounds for an undo from the operations it removed", () => {
+    const document = new SculptDocument();
+    document.add([dab(0, 100, 25)]);
+    const change = document.undo();
+    expect(change?.bounds).toEqual({
+      min: { x: 75, y: -25, z: -25 },
+      max: { x: 125, y: 25, z: 25 },
+    });
+  });
+});
+
+describe("the bounds an edit touched", () => {
+  it("has none for an empty set", () => {
+    expect(boundsOf([])).toBeUndefined();
+  });
+
+  it("covers every operation's own extents", () => {
+    const bounds = boundsOf([dab(0, 0, 10), dab(1, 100, 20)])!;
+    expect(bounds.min.x).toBe(-10);
+    expect(bounds.max.x).toBe(120);
+  });
+
+  it("reads each shape's own extents rather than a table", () => {
+    // A table here is a second place to update when a shape is added, and the wrong place
+    // to be wrong: the invalidation box would be too small and the edit would half appear.
+    const box = makeOperation(
+      0,
+      { x: 0, y: 0, z: 0 },
+      { type: "Box", len: { x: 10, y: 20, z: 30 } },
+      "Add",
+    );
+    const capsule = makeOperation(
+      1,
+      { x: 0, y: 0, z: 0 },
+      { type: "Capsule", lenX: 100, radius: 10 },
+      "Add",
+    );
+    const bounds = boundsOf([box, capsule])!;
+    expect(bounds.max.x).toBeCloseTo(60, 9);
+    expect(bounds.max.z).toBeCloseTo(30, 9);
+  });
+});
+
+describe("a brush stroke", () => {
+  it("marks a dab on the first point, so a click is a stroke", () => {
+    const document = new SculptDocument();
+    const stroke = beginStroke(document);
+    expect(stroke.extendTo({ x: 0, y: 0, z: 0 })).toBe(1);
+    expect(stroke.dabCount).toBe(1);
+  });
+
+  it("spaces dabs along the path rather than where the pointer happened to be", () => {
+    // Measured from the last dab, not the last point handed in, so a fast drag produces
+    // even spacing instead of gaps and a slow drag produces hundreds of redundant dabs.
+    const document = new SculptDocument();
+    const stroke = beginStroke(document, { ...DEFAULT_BRUSH, radius: 40 });
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    stroke.extendTo({ x: 400, y: 0, z: 0 });
+
+    const expected = Math.floor(400 / (40 * DAB_SPACING));
+    expect(stroke.dabCount).toBeGreaterThanOrEqual(expected);
+  });
+
+  it("adds nothing when the pointer has not moved far enough", () => {
+    const document = new SculptDocument();
+    const stroke = beginStroke(document, { ...DEFAULT_BRUSH, radius: 40 });
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    const before = stroke.dabCount;
+    stroke.extendTo({ x: 1, y: 0, z: 0 });
+    expect(stroke.dabCount).toBe(before);
+  });
+
+  it("gives every dab an index that keeps increasing", () => {
+    const document = new SculptDocument();
+    addGroup(document, 10);
+    const stroke = beginStroke(document);
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    stroke.extendTo({ x: 200, y: 0, z: 0 });
+    stroke.end();
+
+    // The document already held one operation at index 0, so the stroke's own dabs start
+    // at 1 and nothing anywhere repeats or goes backwards.
+    const indices = document.list.map((o) => o.index);
+    expect(indices[0]).toBe(0);
+    expect(indices[1]).toBe(1);
+    expect(indices).toHaveLength(1 + stroke.dabCount);
+    for (let i = 1; i < indices.length; i++) {
+      expect(indices[i]).toBeGreaterThan(indices[i - 1]);
+    }
+  });
+
+  it("ends the stroke where the pointer lifted", () => {
+    // Evenly spaced dabs leave a remainder of up to one spacing, which at a quarter of the
+    // radius is plainly visible as the stroke stopping short of the cursor.
+    const document = new SculptDocument();
+    const stroke = beginStroke(document, { ...DEFAULT_BRUSH, radius: 40 });
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    // A remainder large enough to be worth a dab of its own: 306 is thirty spacings and
+    // most of one more.
+    stroke.extendTo({ x: 306, y: 0, z: 0 });
+
+    expect(stroke.bounds!.max.x).toBeCloseTo(346, 6);
+  });
+
+  it("ignores a leftover too small to be worth a dab", () => {
+    // Pointer jitter rather than intent: dabbing every jittered frame of a slow drag would
+    // put hundreds of redundant operations into one undo step.
+    const document = new SculptDocument();
+    const stroke = beginStroke(document, { ...DEFAULT_BRUSH, radius: 40 });
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    stroke.extendTo({ x: 302, y: 0, z: 0 });
+
+    // 302 is thirty spacings and two tenths of one, so the last dab is at 300 and the
+    // stroke ends two units — a twentieth of the radius — short of where the pointer was.
+    expect(stroke.bounds!.max.x).toBeCloseTo(340, 6);
+  });
+
+  it("commits as one command, so a whole stroke undoes at once", () => {
+    const document = new SculptDocument();
+    const stroke = beginStroke(document);
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    stroke.extendTo({ x: 300, y: 0, z: 0 });
+    const dabs = stroke.dabCount;
+    expect(dabs).toBeGreaterThan(1);
+
+    expect(stroke.end()).toBe(true);
+    expect(document.count).toBe(dabs);
+    expect(document.undoDepth).toBe(1);
+
+    document.undo();
+    expect(document.count).toBe(0);
+  });
+
+  it("leaves nothing behind when discarded", () => {
+    const document = new SculptDocument();
+    const stroke = beginStroke(document);
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    stroke.extendTo({ x: 300, y: 0, z: 0 });
+    stroke.discard();
+
+    expect(stroke.end()).toBe(false);
+    expect(document.count).toBe(0);
+    expect(document.canUndo).toBe(false);
+  });
+
+  it("reports the box the whole stroke touched", () => {
+    const document = new SculptDocument();
+    const stroke = beginStroke(document, { ...DEFAULT_BRUSH, radius: 40 });
+    expect(stroke.bounds).toBeUndefined();
+
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    stroke.extendTo({ x: 306, y: 20, z: 0 });
+    const bounds = stroke.bounds!;
+    expect(bounds.min.x).toBeCloseTo(-40, 6);
+    expect(bounds.max.x).toBeCloseTo(346, 6);
+    expect(bounds.max.y).toBeCloseTo(60, 6);
+  });
+
+  it("pads the box by the blend band, so the join is inside it", () => {
+    // An invalidation box that stopped at the surface would leave the soft join outside
+    // the re-meshed chunks, so the stroke would show a hard edge at the chunk boundary.
+    const document = new SculptDocument();
+    const soft = beginStroke(document, {
+      ...DEFAULT_BRUSH,
+      radius: 10,
+      softness: 0.25,
+    });
+    soft.extendTo({ x: 0, y: 0, z: 0 });
+    const bounds = soft.bounds!;
+    expect(bounds.min.x).toBeCloseTo(-10 - 1, 6);
+    expect(bounds.max.x).toBeCloseTo(10 + 1, 6);
+  });
+
+  it("takes the mode into the operation it writes", () => {
+    const document = new SculptDocument();
+    for (const [mode, expected] of [
+      ["add", "Add"],
+      ["subtract", "Subtract"],
+      ["paint", "Paint"],
+    ] as const) {
+      const stroke = beginStroke(document, { ...DEFAULT_BRUSH, mode });
+      stroke.extendTo({ x: 0, y: 0, z: 0 });
+      stroke.end();
+      expect(document.list[document.count - 1].combine).toBe(expected);
+    }
+  });
+
+  it("holds softness inside the maximum", () => {
+    // `MAX_SOFTNESS` exists so the candidate cache can be sized by a fixed margin; a
+    // stroke that exceeded it would make that margin wrong.
+    const document = new SculptDocument();
+    const stroke = beginStroke(document, { ...DEFAULT_BRUSH, softness: 99 });
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    stroke.end();
+    expect(document.list[0].softness).toBeLessThanOrEqual(0.25);
+  });
+
+  it("takes a brush size from the settings, clamped away from zero", () => {
+    const document = new SculptDocument();
+    const stroke = beginStroke(document, { ...DEFAULT_BRUSH, radius: 0 });
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    stroke.end();
+    // A zero radius would be a division by zero in the distance function and a NaN mesh.
+    expect(document.list[0].shape).toMatchObject({
+      type: "Ellipsoid",
+      radius: { x: expect.any(Number) },
+    });
+    const radius = (document.list[0].shape as { radius: { x: number } }).radius
+      .x;
+    expect(radius).toBeGreaterThan(0);
+  });
+
+  it("keeps a colour inside a byte", () => {
+    const document = new SculptDocument();
+    const stroke = beginStroke(document, {
+      ...DEFAULT_BRUSH,
+      colour: { r: 999, g: -5, b: 12.6 },
+    });
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    stroke.end();
+    expect(document.list[0].colour).toEqual({ r: 255, g: 0, b: 13 });
+  });
+
+  it("survives a pointer jump without spinning", () => {
+    const document = new SculptDocument();
+    const stroke = beginStroke(document, { ...DEFAULT_BRUSH, radius: 40 });
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    // A pointer teleport, from a stale position or a window dragged across the screen.
+    expect(() => stroke.extendTo({ x: 1e6, y: 0, z: 0 })).not.toThrow();
+    expect(stroke.dabCount).toBeGreaterThan(1);
+  });
+
+  it("changes shape mid-stroke without losing the ones already made", () => {
+    // A tool palette makes it easy to change the brush by accident, and a stroke that
+    // restarted would be two commands where the user expects one.
+    const document = new SculptDocument();
+    const stroke = beginStroke(document, { ...DEFAULT_BRUSH, radius: 20 });
+    stroke.extendTo({ x: 0, y: 0, z: 0 });
+    const first = stroke.dabCount;
+    stroke.configure({ ...DEFAULT_BRUSH, radius: 80 });
+    stroke.extendTo({ x: 200, y: 0, z: 0 });
+    stroke.end();
+
+    expect(stroke.dabCount).toBeGreaterThan(first);
+    const radii = document.list.map(
+      (o) => (o.shape as { radius: { x: number } }).radius.x,
+    );
+    expect(radii[0]).toBe(20);
+    expect(Math.max(...radii)).toBe(80);
+    expect(document.undoDepth).toBe(1);
+  });
+});

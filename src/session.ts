@@ -34,6 +34,7 @@ import {
   type LodBands,
   ChunkWindow,
   cellDistance,
+  chunkCellOf,
   sameCell,
 } from "./world";
 import {
@@ -44,6 +45,7 @@ import {
   WorldWorkerPool,
 } from "./mesh";
 import { ChunkMeshStore, hooksFor } from "./render";
+import type { Bounds } from "./edit/document";
 
 /** What a mesh request is remembered as, so its answer can be applied where it belongs. */
 interface Outstanding {
@@ -168,7 +170,6 @@ export class Session {
     // leaves the store ready for the requests that follow.
     this.store.resize(this.window.capacity);
     this.setOperations(options.operations);
-    this.requestAll();
   }
 
   /** The model, as the workers need it. */
@@ -183,14 +184,18 @@ export class Session {
   }
 
   /**
-   * Replaces the model, and tells every worker.
+   * Replaces the model, tells every worker, and re-requests what the change left undone.
    *
-   * Sent to all of them rather than one, because each holds its own copy and each is
-   * about to be handed a chunk. The pool cancels everything in flight first: a worker
-   * that was mid-chunk under the old model must not answer from it, and must not quietly
-   * answer from a mixture of the two.
+   * The re-request is the part that is easy to miss and matters most here. Sending a model
+   * cancels everything in flight, so a sculpt — which changes the model on every dab —
+   * would silently strand every chunk that happened to be mid-mesh at that instant. They
+   * would stay blank until something unrelated scrolled the window, which looks like a
+   * mesher that hangs.
+   *
+   * Chunks that are already filled are left alone: their geometry is still valid, because
+   * `touched` is what says which chunks the change actually altered.
    */
-  setOperations(operations: readonly Operation[]): void {
+  setOperations(operations: readonly Operation[], touched?: Bounds): void {
     this.operations = operations;
     this.revision++;
     this.pool.setModel({
@@ -204,6 +209,35 @@ export class Session {
     // their generations say. Dropping the record is enough: the store's revision has not
     // moved, so a late answer would find a record that is gone.
     this.inFlight.clear();
+
+    this.requestAll();
+
+    if (touched !== undefined) this.invalidateBox(touched);
+  }
+
+  /**
+   * Invalidates every resident chunk a world-space box touches, and re-requests them.
+   *
+   * Derived from the edit's own bounds rather than from a list of chunks the brush
+   * happened to visit, because a stroke's operations know their extents and a caller
+   * tracking them separately is a second thing to get wrong in the one place where being
+   * wrong is invisible — the edit appears, but only partly.
+   */
+  invalidateBox(bounds: Bounds): number {
+    let invalidated = 0;
+    for (const cell of cellsInBox(bounds)) {
+      // `claimedSlotOf` and not `slotOf`: a query refuses an unfilled chunk, but a chunk
+      // whose mesh has not arrived is exactly the one an edit most needs to invalidate,
+      // because it is the one most likely to have an answer in flight.
+      const slot = this.window.claimedSlotOf(cell);
+      if (slot === undefined) continue;
+      this.store.markStale(slot);
+      this.window.markStale(slot);
+      this.forgetSlot(slot);
+      this.requestSlot(slot);
+      invalidated++;
+    }
+    return invalidated;
   }
 
   /** Moves the window to follow a world position, and asks for whatever is now missing. */
@@ -257,7 +291,7 @@ export class Session {
   }
 
   /**
-   * Asks for every slot, nearest first.
+   * Asks for every unfilled slot, nearest first.
    *
    * Sorted here rather than left to the window because the window does not sort: its
    * `sphereCells` documents that callers order by distance, and `scrollTo` does — but the
@@ -274,7 +308,14 @@ export class Session {
         const there = this.window.slots[b];
         return cellDistance(here.cell, focus) - cellDistance(there.cell, focus);
       });
-    for (const slot of order) this.requestSlot(slot);
+    for (const slot of order) {
+      const entry = this.window.slots[slot];
+      // Filled slots are left alone, which is what stops a model change re-mesh chunks
+      // whose geometry is still perfectly good. Every chunk is *unfilled* after one, since
+      // sending a model cancels the work in flight — so this asks for the whole window
+      // again, not just the edit's.
+      if (entry !== undefined && !entry.filled) this.requestSlot(slot);
+    }
   }
 
   /**
@@ -442,3 +483,26 @@ export const starterOperations = (): Operation[] => [
     { colour: { r: 120, g: 200, b: 170 } },
   ),
 ];
+
+/** Every chunk cell a world-space box overlaps. */
+const cellsInBox = (bounds: Bounds): CellCoord[] => {
+  const min = chunkCellOf(bounds.min);
+  const max = chunkCellOf({
+    // The far corner is exclusive: a box ending exactly on a chunk boundary does not reach
+    // into the next chunk, and including it would invalidate a chunk the edit did not
+    // touch — which costs a re-mesh of something that did not change.
+    x: bounds.max.x - 1e-6,
+    y: bounds.max.y - 1e-6,
+    z: bounds.max.z - 1e-6,
+  });
+
+  const cells: CellCoord[] = [];
+  for (let x = Math.min(min.x, max.x); x <= Math.max(min.x, max.x); x++) {
+    for (let y = Math.min(min.y, max.y); y <= Math.max(min.y, max.y); y++) {
+      for (let z = Math.min(min.z, max.z); z <= Math.max(min.z, max.z); z++) {
+        cells.push({ x, y, z });
+      }
+    }
+  }
+  return cells;
+};

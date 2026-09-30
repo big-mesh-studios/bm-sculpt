@@ -235,19 +235,22 @@ export interface StoreHooks {
    */
   onSlotReposition: (slot: number) => void;
   onSlotRelease: (slot: number) => void;
+  onSlotStale: (slot: number) => void;
   onSlotCountChanged: (count: number) => void;
 }
 
 /**
  * Wires a store to a window's callbacks.
  *
- * `reposition` and `release` both invalidate. They could differ — a released slot has
- * gone and a repositioned one has not — but the effect on the store is the same: this
- * cell's mesh is no longer this slot's, so its buffers go and its revision moves. The
- * distinction belongs to whoever asks for a replacement, not to whoever owns the bytes.
+ * Reposition, release and staleness all invalidate, and the effect on the store is the same
+ * for all three: this cell's mesh is no longer this slot's, so its buffers go and its
+ * revision moves. They differ in *why* — a released slot has gone, a repositioned one has
+ * not, a stale one is still there and simply has a different model — and that distinction
+ * belongs to whoever asks for a replacement, not to whoever owns the bytes.
  */
 export const hooksFor = (store: ChunkMeshStore): StoreHooks => ({
   onSlotReposition: (slot: number) => store.markStale(slot),
   onSlotRelease: (slot: number) => store.markStale(slot),
+  onSlotStale: (slot: number) => store.markStale(slot),
   onSlotCountChanged: (count: number) => store.resize(count),
 });

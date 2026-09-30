@@ -389,13 +389,34 @@ describe("a session scrolling", () => {
 });
 
 describe("changing the model", () => {
-  it("sends it again and clears what was in flight", () => {
+  it("sends it again and asks for everything that was left unfinished", () => {
+    // Sending a model cancels everything in flight, so a sculpt — which changes the model
+    // on every dab — would strand every chunk that happened to be mid-mesh at that instant.
+    // They would stay blank until something unrelated scrolled the window, which looks
+    // like a mesher that hangs rather than like a lost request.
     const { session, fakes, stats } = newSession({ radius: 1, workers: 1 });
-    const before = fakes[0].models().length;
+    drain(fakes);
+    expect(stats().filled).toBe(stats().chunks);
 
     session.setOperations(model());
-    expect(fakes[0].models().length).toBeGreaterThan(before);
+    // Everything was filled, so nothing is outstanding and nothing is asked for again.
     expect(stats().pending).toBe(0);
+
+    session.setOperations(model(), {
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 10, y: 10, z: 10 },
+    });
+    // Now one chunk was invalidated, and exactly one was asked for.
+    expect(stats().pending).toBe(1);
+    session.dispose();
+  });
+
+  it("asks again for chunks that were still waiting when the model changed", () => {
+    const { session, stats } = newSession({ radius: 1, workers: 1 });
+    expect(stats().pending).toBe(stats().chunks);
+
+    session.setOperations(model());
+    expect(stats().pending).toBe(stats().chunks);
     session.dispose();
   });
 
@@ -497,5 +518,125 @@ describe("disposing a session", () => {
     expect(() => session.dispose()).not.toThrow();
     session.follow({ x: 5000, y: 0, z: 0 });
     expect(fakes[0].requests().length).toBe(asked);
+  });
+});
+
+describe("invalidating what an edit touched", () => {
+  it("invalidates the chunks a box overlaps and asks for them again", () => {
+    const { session, fakes, stats } = newSession({ radius: 1, workers: 1 });
+    drain(fakes);
+    expect(stats().drawn).toBe(stats().chunks);
+
+    const invalidated = session.invalidateBox({
+      min: { x: -10, y: -10, z: -10 },
+      max: { x: 10, y: 10, z: 10 },
+    });
+
+    expect(invalidated).toBeGreaterThan(0);
+    // The chunk under the edit is no longer filled and is being meshed again; the rest keep
+    // the geometry they had, which is still correct.
+    expect(stats().filled).toBeLessThan(stats().chunks);
+    expect(stats().pending).toBe(invalidated);
+    session.dispose();
+  });
+
+  it("leaves chunks outside the box alone", () => {
+    // Derived from the edit's bounds rather than from the chunks a brush visited, so an
+    // edit only costs the chunks it actually altered.
+    const { session, fakes, stats } = newSession({ radius: 2, workers: 1 });
+    drain(fakes);
+    const filledBefore = stats().filled;
+
+    session.invalidateBox({
+      min: { x: -10, y: -10, z: -10 },
+      max: { x: 10, y: 10, z: 10 },
+    });
+    expect(stats().filled).toBeLessThan(filledBefore);
+    expect(stats().filled).toBeGreaterThan(0);
+    session.dispose();
+  });
+
+  it("invalidates one chunk for a box inside one", () => {
+    const { session, fakes } = newSession({ radius: 2, workers: 1 });
+    drain(fakes);
+
+    // Chunks are centred on multiples of BLOCK_WORLD, so cell 0 covers -160 to 160 and a
+    // box well inside that is one chunk.
+    expect(
+      session.invalidateBox({
+        min: { x: 0, y: 0, z: 0 },
+        max: { x: 100, y: 100, z: 100 },
+      }),
+    ).toBe(1);
+    drain(fakes);
+    session.dispose();
+  });
+
+  it("invalidates every chunk a box spans", () => {
+    // A box reaching 320 on all three axes crosses a chunk boundary on each, so it covers
+    // eight. Getting this wrong in the cheap direction is the failure that matters: too few
+    // leaves part of an edit's chunk showing the old surface.
+    const { session, fakes } = newSession({ radius: 2, workers: 1 });
+    drain(fakes);
+    expect(
+      session.invalidateBox({
+        min: { x: 0, y: 0, z: 0 },
+        max: { x: 320, y: 320, z: 320 },
+      }),
+    ).toBe(8);
+    session.dispose();
+  });
+
+  it("ignores chunks the window does not hold", () => {
+    const { session } = newSession({ radius: 1, workers: 1 });
+    // Far outside the resident window, so every cell resolves to no slot.
+    const invalidated = session.invalidateBox({
+      min: { x: 100000, y: 100000, z: 100000 },
+      max: { x: 100100, y: 100100, z: 100100 },
+    });
+    expect(invalidated).toBe(0);
+    session.dispose();
+  });
+
+  it("does not apply a mesh that was already in flight when the edit landed", () => {
+    // Caught in two places by design, and neither of them is the store's revision counter:
+    // invalidating a slot drops its record of what was asked for, and asking again
+    // supersedes the generation, so a late reply finds a record that no longer matches it.
+    // The store's own guard covers the other race — a slot re-pointed at a different cell,
+    // where the old cell's record survives — and is tested in `chunk-mesh-store.test.ts`.
+    const { session, fakes, stats } = newSession({ radius: 1, workers: 1 });
+    const asked = fakes[0].requests()[0];
+
+    session.invalidateBox({
+      min: { x: -100, y: -100, z: -100 },
+      max: { x: 100, y: 100, z: 100 },
+    });
+    const drawnAfterEdit = stats().drawn;
+
+    replyWith(fakes[0], asked);
+    // The surface from before the edit is not on screen, and the chunk is still waiting
+    // for a mesh built from the model that includes it.
+    expect(stats().drawn).toBe(drawnAfterEdit);
+    expect(stats().filled).toBeLessThan(stats().chunks);
+    session.dispose();
+  });
+
+  it("does not ask twice for a chunk that was already stale", () => {
+    // A stroke invalidates the same box on every dab; without the window refusing a
+    // second staleness, each dab would re-request the same chunk.
+    const { session, fakes, stats } = newSession({ radius: 1, workers: 1 });
+    drain(fakes);
+
+    const box = {
+      min: { x: -10, y: -10, z: -10 },
+      max: { x: 10, y: 10, z: 10 },
+    };
+    const first = session.invalidateBox(box);
+    const after = stats().pending;
+    const second = session.invalidateBox(box);
+
+    expect(second).toBe(first);
+    expect(stats().pending).toBe(after);
+    session.dispose();
   });
 });

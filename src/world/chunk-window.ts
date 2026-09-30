@@ -94,6 +94,16 @@ export interface ChunkWindowParams {
   /** Told which slots a focus move has invalidated and must have rebuilt. */
   onSlotsChanged?: (slots: readonly number[]) => void;
   /**
+   * Told a slot's *contents* have gone stale without the slot moving.
+   *
+   * The third way a slot loses its contents, and the one that was missing: a sculpt edit
+   * invalidates the chunks it touched and leaves them exactly where they are, so neither
+   * reposition nor release fires. Without this the window would correctly forget it was
+   * filled while whatever holds the slot's geometry kept drawing it — the model visibly
+   * unchanged by the edit, and the edit invisible in the undo history's effect.
+   */
+  onSlotStale?: (slot: number) => void;
+  /**
    * Called once per arriving or refilled slot, in the order they should be worked.
    * The client uses it to request meshes, nearest first.
    */
@@ -178,6 +188,23 @@ export class ChunkWindow {
   /** Whether a cell is inside the window's shape, whether or not it is filled. */
   covers(cell: CellCoord): boolean {
     return this.index.has(cell.x, cell.y, cell.z);
+  }
+
+  /**
+   * The slot standing for a cell, whether or not that cell is filled.
+   *
+   * The counterpart to `slotOf`, and the one anything *holding* slots wants rather than
+   * anything *asking about* one. `slotOf` refuses an unfilled slot because a query about a
+   * chunk whose contents have not arrived has no honest answer; a holder of slots needs to
+   * know where a chunk lives precisely while its contents are missing, since that is
+   * exactly when it has to invalidate, re-request or re-mesh it.
+   *
+   * Using `slotOf` for that job fails quietly and expensively: every unfilled chunk looks
+   * like it is not in the window at all, so a sculpt edit skips the chunks that were still
+   * being meshed, which are the ones most likely to be mid-answer.
+   */
+  claimedSlotOf(cell: CellCoord): number | undefined {
+    return this.index.get(cell.x, cell.y, cell.z);
   }
 
   /**
@@ -405,11 +432,19 @@ export class ChunkWindow {
     entry.filled = true;
   }
 
-  /** Marks a slot's contents as stale, so queries against it are refused. */
+  /**
+   * Marks a slot's contents as stale, so queries against it are refused.
+   *
+   * Refuses to do so twice: an edit that touches a chunk already waiting on a mesh would
+   * otherwise be told about it every time, and a stroke invalidating the same box on every
+   * dab would re-request it on every dab.
+   */
   markStale(slot: number): void {
     const entry = this.slots[slot];
     if (entry === undefined) return;
+    if (!entry.filled) return;
     entry.filled = false;
+    this.params.onSlotStale?.(slot);
   }
 
   /** The level of detail a slot currently holds, as a sample size. */
