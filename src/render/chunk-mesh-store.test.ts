@@ -285,7 +285,7 @@ describe("the window hooks", () => {
     const hooks = hooksFor(store);
     store.apply(0, meshOf(12, 4), store.revisionOf(0));
 
-    hooks.onSlotReposition(0, { x: 1, y: 0, z: 0 });
+    hooks.onSlotReposition(0);
     expect(store.draws(0)).toBe(false);
   });
 
@@ -315,7 +315,7 @@ describe("the window hooks", () => {
     const store = newStore();
     const hooks = hooksFor(store);
     for (const [name, call] of [
-      ["reposition", () => hooks.onSlotReposition(0, { x: 1, y: 0, z: 0 })],
+      ["reposition", () => hooks.onSlotReposition(0)],
       ["release", () => hooks.onSlotRelease(0)],
     ] as const) {
       const before = store.revisionOf(0);

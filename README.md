@@ -6,10 +6,16 @@ A sculptor whose field is an operation list rather than a stored volume, meshed
 per chunk in web workers, drawn with a node-graph renderer, and built to stay
 responsive on hardware several years old.
 
-This repository is at **phase 3** of a planned rebuild. The CSG core, the
-streaming foundation and the mesher exist and are tested; what is on screen is
-still the phase 0 spike scene, not the application. Phases 0 to 5 are the
-sculpting application and are independently shippable.
+This repository is at **phase 4** of a planned rebuild. The CSG core, the streaming
+foundation, the mesher and the render path exist and are tested, and the
+application now draws chunks meshed in workers. What is on screen is a model with
+no tools on it yet: there is no picking, no brush and no undo. Phases 0 to 5 are
+the sculpting application and are independently shippable.
+
+Load it and you get a streamed model; load `?spike` and you get the phase 0
+diagnostic, which is kept because the application draws with the same material and
+the same vertex layout, and the first question about anything that looks wrong is
+which of the two broke it.
 
 ## What exists
 
@@ -112,6 +118,48 @@ Phases 1 to 8, in order, are in the project plan. Phases 0 to 5 are the sculptin
 application and are independently shippable; 6 to 8 are an infinite streaming
 world, and because the field is never stored they add no changes to the CSG or the
 mesher — only a `baseField` binding and a camera.
+
+## Phase 4 — drawing it
+
+`src/session.ts` is where the phases meet, and it is the most bug-prone file in the
+project for a reason that is worth stating: a seam between two correct pieces is not
+automatically correct. Each of the pieces enforces its own invariant, and none of them
+knows whether the wiring honours it. So the session takes an injected worker factory, and
+its tests drive the whole streaming loop against workers that answer when told to —
+because every failure here is about _when_ something arrives relative to a scroll, and a
+fake that answered immediately could express none of them.
+
+Three seams carry a decision:
+
+- **A mesh is applied at the revision recorded when it was requested, not the slot's
+  current one.** Between the two the window may have scrolled and given that slot to a
+  different cell, and applying it anyway draws one chunk's surface at another's
+  coordinates.
+- **A chunk leaving the window is abandoned in the pool, not merely dropped.** The pool
+  queues by cell and the window forgets by slot, so without this the queue fills with work
+  nobody is waiting for and the cancellation line never advances.
+- **The window follows what the camera looks at, not where it is.** Panning is how a user
+  moves around a model; a window tracking the eye would scroll the world sideways on every
+  dolly.
+
+Two bugs the session's own tests caught:
+
+- **The window fires `onSlotsWanted` from inside its own constructor**, before the session
+  holds a window at all. This threw on the first line of the application.
+- **The window's initial placement is unsorted** — deliberately, its documentation says
+  callers order by distance — so startup meshed the far corners of the window while the
+  chunk the player was standing in waited its turn.
+
+`src/render/chunk-mesh-store.ts` enforces ADR 0007's rule that a slot is marked unfilled by
+whatever invalidates it and refused for a revision the caller does not hold. That rule turned
+out to need to be stronger than the record expected: the store owns a revision per slot, so
+the invariant is enforced by the owner of the state rather than by every caller remembering
+to invalidate.
+
+A renderer's buffers are keyed by geometry object, so a dropped geometry is held for the
+renderer's whole life. In a scrolling world that is a leak several times a second, so
+`dispose` belongs to _replacing_ a mesh rather than to shutting down — including when a
+sculpt deletes a chunk's surface, which is what every deletion produces.
 
 ## Phase 3 — meshing
 

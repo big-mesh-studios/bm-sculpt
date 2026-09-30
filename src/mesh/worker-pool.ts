@@ -40,7 +40,13 @@ import type { Wanted } from "./worker";
  * believed — and none of it can be tested through a real `Worker` without a browser.
  */
 export interface PoolWorker {
-  post(message: ToWorker, transfer?: Transferable[]): void;
+  /**
+   * Sends a message. No transfer list, because the pool never transfers: the model goes
+   * out cloned, and the mesh comes back transferred by the *worker*, which is the only
+   * party that both holds and wants to give up those buffers. Naming a transfer list here
+   * would imply otherwise.
+   */
+  post(message: ToWorker): void;
   addEventListener(
     type: "message",
     listener: (event: { data: unknown }) => void,

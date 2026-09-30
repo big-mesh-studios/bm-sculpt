@@ -39,5 +39,13 @@ Phases 1 through 3, in the order the decisions constrain each other:
   far a distance is trusted, and what a query may read from a slot being rebuilt.
 - **0008** — the boundary a chunk's mesh crosses to get to the screen.
 
+**Superchunk membership is deferred from phase 4.** ADR 0007 named it, and rmsl's
+`Mesh.drawRange` is built for it — several meshes sharing one uploaded geometry, each
+drawing its own run of indices. It is not built yet, and the reason is that its benefit is
+unmeasured: nothing was on screen until this phase's last commit, so there is no count of
+draw calls to reduce. Merging is an optimisation, and it costs a second code path — merged
+and per-chunk — that doubles what has to stay correct. It should be built against a
+measured number, not against an expectation, and the number is now obtainable.
+
 The phases themselves are in the repository history, one commit per phase, each verified
 before the next began.

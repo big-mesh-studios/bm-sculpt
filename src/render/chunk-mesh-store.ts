@@ -29,7 +29,6 @@ import type { Material } from "@random-mesh/rmsl/scene";
 import type { Mesh as SceneMesh, Scene } from "@random-mesh/rmsl/scene";
 
 import type { ChunkMesh } from "../mesh";
-import type { CellCoord } from "../world";
 
 import {
   type SlotGeometry,
@@ -225,7 +224,16 @@ export class ChunkMeshStore {
  * owns GPU resources, and the only thing between them is this bundle of four functions.
  */
 export interface StoreHooks {
-  onSlotReposition: (slot: number, cell: CellCoord) => void;
+  /**
+   * Takes the slot and nothing else.
+   *
+   * The window's own callback also receives the cell, and deliberately so — dropping it
+   * would be a good way to make the store's signature look compatible with the window's
+   * so the hooks could be spread straight in. They cannot, and should not: the store does
+   * not know what cells are, and an argument it ignores is an argument that will be read
+   * one day as if it meant something.
+   */
+  onSlotReposition: (slot: number) => void;
   onSlotRelease: (slot: number) => void;
   onSlotCountChanged: (count: number) => void;
 }
