@@ -1,3 +1,4 @@
+import { BLOCK_WORLD } from "../constants";
 import { compileGLSL } from "@random-mesh/rmsl";
 import { Scene } from "@random-mesh/rmsl/scene";
 import { describe, expect, it } from "vitest";
@@ -137,5 +138,19 @@ describe("the spike material compiles", () => {
     // diverge — rather than a stronger claim the compiler is free to break.
     const { vertex } = compile(new SpikeMaterial());
     expect(vertex).not.toMatch(/\bif\s*\(/);
+  });
+});
+
+describe("the volume's placement in world space", () => {
+  it("spans the scene rather than a fraction of a world unit", () => {
+    // The scale fed to the shader is the reciprocal of this, and the two used to be the
+    // same number written in opposite senses: a value of 1.6 as "volume units per world
+    // unit" is a volume 0.625 units across. Both shapes sit more than a hundred units
+    // from the origin, so every sample clamped to an edge texel and the volume did
+    // nothing but dim them — a picture indistinguishable from a wrongly-addressed
+    // sampler, which is what this spike exists to rule out.
+    const material = new SpikeMaterial();
+    expect(material.volumeWorldSize).toBeGreaterThan(BLOCK_WORLD);
+    expect(1 / material.volumeWorldSize).toBeLessThan(0.01);
   });
 });

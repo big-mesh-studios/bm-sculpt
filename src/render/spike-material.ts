@@ -60,8 +60,18 @@ export class SpikeMaterial extends NodeMaterial {
    */
   volume: DataTexture | null = null;
 
-  /** How many world units one unit of volume-space covers. */
-  volumeScale = 1.6;
+  /**
+   * How many world units the volume spans, edge to edge.
+   *
+   * Named as a size rather than a scale because a scale here is a reciprocal, and
+   * writing the reciprocal is how the previous value ended up wrong by a factor of a
+   * thousand: `1.6` as "volume units per world unit" is a volume 0.625 world units
+   * across, which no shape in this scene comes within a hundred units of, so every
+   * sample clamped to an edge texel and the volume did nothing but dim both shapes by
+   * four. The image it produced was indistinguishable from a wrongly-addressed
+   * sampler, which is the one thing this spike exists to rule out.
+   */
+  volumeWorldSize = 1200;
 
   keyDirection: [number, number, number] = [0.4, 0.8, 0.45];
   fillDirection: [number, number, number] = [-0.7, 0.1, 0.4];
@@ -131,7 +141,7 @@ export class SpikeMaterial extends NodeMaterial {
     this.volumeScaleUniform = b.materialUniform(
       "uVolumeScale",
       "float",
-      () => this.volumeScale,
+      () => 1 / Math.max(this.volumeWorldSize, 1e-6),
     );
     this.volumeStrengthUniform = b.materialUniform(
       "uVolumeStrength",
@@ -168,19 +178,30 @@ export class SpikeMaterial extends NodeMaterial {
     const normal = b.normalWorld.normalize().toVar();
     const albedo = b.varying("vColour", "vec4").xyz.toVar();
 
-    // The volume's contribution, addressed in world space so it stays put while
-    // the surface moves. Mapped into the unit cube and clamped: the volume is a
-    // single sphere, and clamping is what makes everything outside it read the
-    // same rather than whatever the wrap mode decides.
+    // The volume's contribution, addressed in world space so it stays put while the
+    // surface moves. Mapped into the unit cube and clamped: the volume is a single
+    // sphere, and clamping is what makes everything outside it read the same rather
+    // than whatever the wrap mode decides.
     if (this.volumeSampler !== undefined) {
       const uvw = b.positionWorld
         .mul(this.volumeScaleUniform!)
         .add(vec3(0.5, 0.5, 0.5))
         .clamp(vec3(0, 0, 0), vec3(1, 1, 1));
-      const inside = this.volumeSampler.texture(uvw).r;
+      const sampled = this.volumeSampler.texture(uvw);
+
+      const covered = sampled.r;
       const darken = float(1).sub(
-        this.volumeStrengthUniform!.mul(float(1).sub(inside)),
+        this.volumeStrengthUniform!.mul(float(1).sub(covered)),
       );
+
+      // Where the volume does not cover, the albedo is darkened *and* tinted toward the
+      // texel's own address, which the green and blue channels carry. That is what makes
+      // a misaligned or wrongly-sized binding visible as a ramp instead of as a sphere
+      // that happens to land somewhere plausible: the sphere's silhouette alone cannot
+      // tell you where the binding's origin is, so a binding shifted by half the volume
+      // would still produce a smooth, correctly-shaded, completely wrong sphere.
+      const ramp = vec3(sampled.g, sampled.b, sampled.g.mul(sampled.b));
+      albedo.assign(albedo.mix(ramp, float(1).sub(covered)));
       albedo.mulAssign(darken);
     }
 
