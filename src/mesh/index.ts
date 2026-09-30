@@ -42,3 +42,32 @@ export {
   sampleSizeAt,
   SurfaceNetsChunkMesher,
 } from "./chunk-mesher";
+
+export type {
+  BaseFieldKind,
+  CancelMessage,
+  ChunkFailedMessage,
+  ChunkMeshMessage,
+  ChunkRequestMessage,
+  FromWorker,
+  ModelMessage,
+  PaintTileMessage,
+  ToWorker,
+} from "./protocol";
+export { isFromWorker, isToWorker, meshTransferables } from "./protocol";
+
+export type { Handled, MesherFactory, Wanted, WorkerState } from "./worker";
+export {
+  emptyWorkerState,
+  handleMeshMessage,
+  replyCell,
+  replyIsWanted,
+} from "./worker";
+
+export type {
+  PoolHandlers,
+  PoolWorker,
+  WorkerFactory,
+  WorldWorkerPoolOptions,
+} from "./worker-pool";
+export { WorldWorkerPool } from "./worker-pool";

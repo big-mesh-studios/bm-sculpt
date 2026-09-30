@@ -16,10 +16,28 @@ recorded cost is a decision nobody thought about.
 
 ## Records
 
-| #                                                    | Decision                                                       | Status   |
-| ---------------------------------------------------- | -------------------------------------------------------------- | -------- |
-| [0001](docs/adr/0001-rmsl-over-three.md)             | Render with `@random-mesh/rmsl`, not three.js                  | accepted |
-| [0002](docs/adr/0002-computed-field-never-stored.md) | The field is computed from an operation list, never stored     | accepted |
-| [0003](docs/adr/0003-surface-nets.md)                | Surface Nets per chunk, not marching cubes                     | accepted |
-| [0004](docs/adr/0004-csg-per-chunk.md)               | Each chunk evaluates the operation list at its own LOD         | accepted |
-| [0005](docs/adr/0005-streaming-shape.md)             | Slot-indexed flat arrays and a coordinate map, not a keyed map | accepted |
+| #                                                      | Decision                                                       | Status   |
+| ------------------------------------------------------ | -------------------------------------------------------------- | -------- |
+| [0001](docs/adr/0001-rmsl-over-three.md)               | Render with `@random-mesh/rmsl`, not three.js                  | accepted |
+| [0002](docs/adr/0002-computed-field-never-stored.md)   | The field is computed from an operation list, never stored     | accepted |
+| [0003](docs/adr/0003-surface-nets.md)                  | Surface Nets per chunk, not marching cubes                     | accepted |
+| [0004](docs/adr/0004-csg-per-chunk.md)                 | Each chunk evaluates the operation list at its own LOD         | accepted |
+| [0005](docs/adr/0005-streaming-shape.md)               | Slot-indexed flat arrays and a coordinate map, not a keyed map | accepted |
+| [0006](docs/adr/0006-field-saturation.md)              | The field saturates at a fixed distance                        | accepted |
+| [0007](docs/adr/0007-window-presence-and-lod-reset.md) | Invalidating a slot invalidates what a query may read from it  | accepted |
+| [0008](docs/adr/0008-worker-pool-and-generations.md)   | One chunk per worker, and a generation on every request        | accepted |
+
+## What is decided so far
+
+Phases 1 through 3, in the order the decisions constrain each other:
+
+- **0001, 0002** — the renderer, and the fact that there is no grid to store. Everything
+  after this is a consequence of the field being computed.
+- **0003, 0004** — how that field becomes triangles, per chunk, at a chunk's own level of
+  detail. 0003 carries the seam rule; 0004 carries the LOD cracks it does not solve.
+- **0005, 0006, 0007** — the shapes around it: which chunks exist and in which slot, how
+  far a distance is trusted, and what a query may read from a slot being rebuilt.
+- **0008** — the boundary a chunk's mesh crosses to get to the screen.
+
+The phases themselves are in the repository history, one commit per phase, each verified
+before the next began.
