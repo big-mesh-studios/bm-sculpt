@@ -183,6 +183,15 @@ export class OrbitController {
   private pinchDistance = 0;
   /** Set while a pointer is down, to keep a release from ending a drag early. */
   private button = -1;
+  /**
+   * Whether this controller responds at all.
+   *
+   * Set false by a tool that is using the same element for a gesture of its own. Both
+   * listen on the canvas, so without it a left drag orbits *and* sculpts — and the result
+   * is a stroke drawn along the path the camera went, which reads as the brush being wildly
+   * inaccurate rather than as two things both happening.
+   */
+  private enabled = true;
   private detachers: Array<() => void> = [];
 
   constructor(
@@ -191,6 +200,20 @@ export class OrbitController {
   ) {
     this.limits = { ...DEFAULT_ORBIT_LIMITS, ...options.limits };
     this.state = initialOrbitState(options.radius);
+  }
+
+  /**
+   * Stops or resumes responding, without detaching.
+   *
+   * Detaching would work too and is worse: the listeners would have to come back, and
+   * whatever re-added them would have to know about the tool.
+   */
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+    if (enabled) {
+      this.pointers.clear();
+      this.button = -1;
+    }
   }
 
   /** Starts listening. Returns a function that stops, and is safe twice. */
@@ -212,6 +235,7 @@ export class OrbitController {
     };
 
     on("pointerdown", (event) => {
+      if (!this.enabled) return;
       element.setPointerCapture(event.pointerId);
       this.pointers.set(event.pointerId, local(event));
       // A second finger turns the gesture into a pinch whatever button it
@@ -221,6 +245,7 @@ export class OrbitController {
     });
 
     on("pointermove", (event) => {
+      if (!this.enabled) return;
       const previous = this.pointers.get(event.pointerId);
       if (previous === undefined) return;
       const current = local(event);
@@ -272,6 +297,7 @@ export class OrbitController {
     on(
       "wheel",
       (event) => {
+        if (!this.enabled) return;
         // Not passive, so the gesture can be claimed: a wheel over a model that
         // also scrolls the page is a page that scrolls while the user is trying
         // to zoom.

@@ -106,7 +106,14 @@ export class Session {
   /** Bumped on every model change, so a worker can discard a model it has passed. */
   private revision = 1;
 
-  private operations: readonly Operation[] = [];
+  /**
+   * The operations the workers are meshing.
+   *
+   * Public because the picker needs its own field built from exactly these, and a second
+   * copy of the model kept alongside would be free to drift — which is the one disagreement
+   * this design exists to rule out.
+   */
+  private currentOperations: readonly Operation[] = [];
   private failures = 0;
   private disposed = false;
 
@@ -172,12 +179,17 @@ export class Session {
     this.setOperations(options.operations);
   }
 
+  /** The operations currently being streamed. */
+  get operations(): readonly Operation[] {
+    return this.currentOperations;
+  }
+
   /** The model, as the workers need it. */
   modelMessage(): ModelMessage {
     return {
       kind: "setModel",
       revision: this.revision,
-      operations: serialiseOperations(this.operations),
+      operations: serialiseOperations(this.currentOperations),
       paint: [],
       base: "none",
     };
@@ -196,7 +208,7 @@ export class Session {
    * `touched` is what says which chunks the change actually altered.
    */
   setOperations(operations: readonly Operation[], touched?: Bounds): void {
-    this.operations = operations;
+    this.currentOperations = operations;
     this.revision++;
     this.pool.setModel({
       revision: this.revision,

@@ -4,6 +4,9 @@ import { makeOperation, type Operation } from "../csg";
 
 import { SculptDocument, boundsOf } from "./document";
 import { beginStroke, DAB_SPACING, DEFAULT_BRUSH } from "./brush";
+import { SculptTool, type SculptTarget } from "./tool";
+import type { BrushStroke } from "./brush";
+import type { PickHit } from "../pick";
 
 const dab = (index: number, x = 0, radius = 10): Operation =>
   makeOperation(
@@ -411,5 +414,249 @@ describe("a brush stroke", () => {
     expect(radii[0]).toBe(20);
     expect(Math.max(...radii)).toBe(80);
     expect(document.undoDepth).toBe(1);
+  });
+});
+
+/**
+ * A tool test bed: picks wherever it is told to, and records what it was asked to commit.
+ *
+ * The tool's whole job is deciding what a pointer event means, so the tests drive events
+ * rather than geometry — the picking is `picker.test.ts`'s job and is tested there.
+ */
+type Hit = PickHit;
+
+const ON_SURFACE: Hit = {
+  point: { x: 0, y: 0, z: 0 },
+  normal: { x: 0, y: 1, z: 0 },
+  distance: 900,
+  steps: 12,
+};
+
+/** `null` rather than `undefined` for "no surface", because passing `undefined` to a
+ * parameter with a default gets the default. */
+const toolBed = (hit: Hit | null = ON_SURFACE) => {
+  const commits: BrushStroke[] = [];
+  const strokes: BrushStroke[] = [];
+  let undoCalls = 0;
+  let redoCalls = 0;
+
+  const target: SculptTarget = {
+    pick: () => hit ?? undefined,
+    beginStroke: () => {
+      const stroke = beginStroke(new SculptDocument(), DEFAULT_BRUSH);
+      strokes.push(stroke);
+      return stroke;
+    },
+    commit: (stroke) => commits.push(stroke),
+    undo: () => {
+      undoCalls++;
+      return true;
+    },
+    redo: () => {
+      redoCalls++;
+      return true;
+    },
+  };
+
+  const tool = new SculptTool({
+    camera: {
+      projectionMatrixInverse: { elements: [] },
+      matrixWorldInverse: { elements: [] },
+      position: { x: 0, y: 0, z: 0 },
+    },
+    target,
+  });
+
+  return {
+    tool,
+    commits,
+    strokes,
+    undoCalls: () => undoCalls,
+    redoCalls: () => redoCalls,
+  };
+};
+
+const down = (
+  overrides: Partial<{
+    button: number;
+    shiftKey: boolean;
+    clientX: number;
+    clientY: number;
+  }> = {},
+) => ({
+  button: 0,
+  shiftKey: false,
+  clientX: 100,
+  clientY: 100,
+  ...overrides,
+});
+
+describe("what a pointer drag means", () => {
+  it("sculpts on a left drag", () => {
+    const { tool, strokes } = toolBed();
+    expect(tool.pointerDown(down(), 800, 600)).toBe("sculpt");
+    expect(strokes).toHaveLength(1);
+    expect(tool.state.sculpting).toBe(true);
+  });
+
+  it("orbits on a right drag, so a drag can never do two things", () => {
+    const { tool, strokes } = toolBed();
+    expect(tool.pointerDown(down({ button: 2 }), 800, 600)).toBe("orbit");
+    expect(strokes).toHaveLength(0);
+    expect(tool.state.sculpting).toBe(false);
+  });
+
+  it("orbits on a shift-left drag, which is what every sculpting tool does", () => {
+    const { tool, strokes } = toolBed();
+    expect(tool.pointerDown(down({ shiftKey: true }), 800, 600)).toBe("orbit");
+    expect(strokes).toHaveLength(0);
+  });
+
+  it("pans on the middle button", () => {
+    expect(toolBed().tool.pointerDown(down({ button: 1 }), 800, 600)).toBe(
+      "pan",
+    );
+  });
+
+  it("begins no stroke when a sculpt press lands on nothing", () => {
+    // Pressing on empty space and dragging onto the model is not a stroke; it is a stroke
+    // from wherever it first landed.
+    const { tool, strokes } = toolBed(null);
+    expect(tool.pointerDown(down(), 800, 600)).toBe("sculpt");
+    expect(strokes).toHaveLength(0);
+  });
+
+  it("extends the stroke as the pointer moves", () => {
+    const { tool, strokes } = toolBed();
+    tool.pointerDown(down(), 800, 600);
+    tool.pointerMove({ clientX: 140, clientY: 100 }, 800, 600);
+    expect(strokes[0].dabCount).toBeGreaterThan(0);
+  });
+
+  it("keeps the stroke open across a gap in the model", () => {
+    // Dragging over empty space and coming back is one stroke, which is what a user
+    // expects; ending it would put two commands in the history for one gesture.
+    let hit: Hit | null = ON_SURFACE;
+    const commits: BrushStroke[] = [];
+    const strokes: BrushStroke[] = [];
+    const tool = new SculptTool({
+      camera: {
+        projectionMatrixInverse: { elements: [] },
+        matrixWorldInverse: { elements: [] },
+        position: { x: 0, y: 0, z: 0 },
+      },
+      target: {
+        pick: () => hit ?? undefined,
+        beginStroke: () => {
+          const stroke = beginStroke(new SculptDocument(), DEFAULT_BRUSH);
+          strokes.push(stroke);
+          return stroke;
+        },
+        commit: (stroke) => commits.push(stroke),
+        undo: () => false,
+        redo: () => false,
+      },
+    });
+
+    tool.pointerDown(down(), 800, 600);
+    hit = null;
+    tool.pointerMove({ clientX: 200, clientY: 100 }, 800, 600);
+    expect(tool.state.sculpting).toBe(true);
+
+    hit = {
+      point: { x: 10, y: 0, z: 0 },
+      normal: { x: 0, y: 1, z: 0 },
+      distance: 890,
+      steps: 13,
+    };
+    tool.pointerMove({ clientX: 300, clientY: 100 }, 800, 600);
+    tool.pointerUp();
+
+    expect(strokes).toHaveLength(1);
+    expect(commits).toHaveLength(1);
+  });
+
+  it("commits on release, once", () => {
+    const { tool, commits } = toolBed();
+    tool.pointerDown(down(), 800, 600);
+    tool.pointerMove({ clientX: 200, clientY: 100 }, 800, 600);
+    tool.pointerUp();
+    expect(commits).toHaveLength(1);
+    expect(tool.state.sculpting).toBe(false);
+  });
+
+  it("does not commit a stroke that never landed", () => {
+    // Pressed and released without moving, or moving over nothing: an empty command in the
+    // undo stack is something the user has to press undo twice to get past.
+    const { tool, commits } = toolBed();
+    tool.pointerDown(down(), 800, 600);
+    tool.pointerUp();
+    expect(commits).toHaveLength(0);
+  });
+
+  it("throws the stroke away when the pointer leaves the canvas", () => {
+    // Leaving mid-drag is a gesture the user did not finish, and half of it is not what
+    // they meant.
+    const { tool, commits, strokes } = toolBed();
+    tool.pointerDown(down(), 800, 600);
+    tool.pointerMove({ clientX: 200, clientY: 100 }, 800, 600);
+    tool.pointerLeave();
+    expect(tool.state.sculpting).toBe(false);
+    expect(commits).toHaveLength(0);
+    expect(strokes[0].end()).toBe(false);
+  });
+
+  it("previews the surface under a hovering pointer", () => {
+    const { tool } = toolBed();
+    expect(tool.state.hover).toBeUndefined();
+    tool.pointerMove({ clientX: 100, clientY: 100 }, 800, 600);
+    expect(tool.state.hover).toEqual({
+      point: { x: 0, y: 0, z: 0 },
+      normal: { x: 0, y: 1, z: 0 },
+    });
+  });
+
+  it("previews nothing over empty space", () => {
+    const { tool } = toolBed(null);
+    tool.pointerMove({ clientX: 100, clientY: 100 }, 800, 600);
+    expect(tool.state.hover).toBeUndefined();
+  });
+
+  it("does not move the preview while a stroke is in progress", () => {
+    // The preview would otherwise chase the pointer along the surface being drawn, which
+    // is a flickering ring rather than a cursor.
+    const { tool } = toolBed();
+    tool.pointerDown(down(), 800, 600);
+    tool.pointerMove({ clientX: 300, clientY: 300 }, 800, 600);
+    expect(tool.state.hover).toBeUndefined();
+  });
+});
+
+describe("history keys", () => {
+  it("undoes and redoes through the target", () => {
+    const { tool, undoCalls, redoCalls } = toolBed();
+    expect(tool.undo()).toBe(true);
+    expect(tool.redo()).toBe(true);
+    expect(undoCalls()).toBe(1);
+    expect(redoCalls()).toBe(1);
+  });
+
+  it("reports failure when there is nothing to undo", () => {
+    const tool = new SculptTool({
+      camera: {
+        projectionMatrixInverse: { elements: [] },
+        matrixWorldInverse: { elements: [] },
+        position: { x: 0, y: 0, z: 0 },
+      },
+      target: {
+        pick: () => undefined,
+        beginStroke: () => beginStroke(new SculptDocument()),
+        commit: () => {},
+        undo: () => false,
+        redo: () => false,
+      },
+    });
+    expect(tool.undo()).toBe(false);
+    expect(tool.redo()).toBe(false);
   });
 });

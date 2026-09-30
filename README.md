@@ -6,11 +6,11 @@ A sculptor whose field is an operation list rather than a stored volume, meshed
 per chunk in web workers, drawn with a node-graph renderer, and built to stay
 responsive on hardware several years old.
 
-This repository is at **phase 4** of a planned rebuild. The CSG core, the streaming
-foundation, the mesher and the render path exist and are tested, and the
-application now draws chunks meshed in workers. What is on screen is a model with
-no tools on it yet: there is no picking, no brush and no undo. Phases 0 to 5 are
-the sculpting application and are independently shippable.
+This repository is at **phase 5** of a planned rebuild. The CSG core, the streaming
+foundation, the mesher, the render path and the editing tools exist and are tested,
+and you can sculpt on a model that is meshed in workers and never stored. Phases 0
+to 5 are the sculpting application; what is not built is the palette and the
+primitive tools a parity pass would want.
 
 Load it and you get a streamed model; load `?spike` and you get the phase 0
 diagnostic, which is kept because the application draws with the same material and
@@ -118,6 +118,47 @@ Phases 1 to 8, in order, are in the project plan. Phases 0 to 5 are the sculptin
 application and are independently shippable; 6 to 8 are an infinite streaming
 world, and because the field is never stored they add no changes to the CSG or the
 mesher — only a `baseField` binding and a camera.
+
+## Phase 5 — sculpting on it
+
+Drag to sculpt. Right-drag orbits, shift-drag pans, ctrl-z undoes. The model is an
+operation list, the mesher runs in workers, and the picker traces the same field the
+mesher reads — so a dab lands where the field says the surface is, which is the property
+the whole design exists to make true.
+
+`src/pick/` traces the ray. `src/edit/` holds the model, the brush, and the tool that
+decides what a pointer event means. The single most important decision is recorded in
+[ADR 0009](docs/adr/0009-picking-and-history.md) and is worth repeating here: **the picker
+and the mesher read the same function of position**, so they cannot disagree about where the
+surface is. That rules out a class of error ADR 0007 records, where a query answered from a
+slot holding another cell's contents put a dab where the mesh said there was nothing. It does
+not mean they agree about _resolution_ — far away the mesh is coarse and the picker is not —
+which is why the brush preview is a solid sphere at the pick point rather than something
+derived from the mesh.
+
+Three things the tests found, all of which would have shown up as "the brush is broken":
+
+- **A stroke stopped up to one dab-spacing short of the cursor.** Evenly spaced dabs leave a
+  remainder, and a quarter of the radius is visible. There is now a final dab at the pointer —
+  but only when the remainder is more than a quarter of a spacing, because below that it is
+  pointer jitter, and dabbing every jittered frame puts hundreds of redundant operations in one
+  undo step.
+- **A sculpt stranded every chunk that happened to be mid-mesh.** Sending a model cancels
+  everything in flight, which is correct — a mesh built against a model that no longer exists is
+  worse than useless — but nothing re-requested the cancelled work, so those chunks stayed
+  blank until something unrelated scrolled the window. It looked like a mesher that hangs.
+- **`ChunkWindow.markStale` never notified anything.** So invalidating a chunk's contents —
+  which every dab needs to do — left the window correctly forgetting it was filled while the
+  store went on drawing its old geometry. ADR 0007's invariant, that there is exactly one way
+  for a slot to become unfilled and everything that invalidates contents goes through it, was
+  not actually holding: the third way to invalidate was silent.
+
+`invalidateBox` also found that the window had no way to ask "which slot holds this cell, even
+an unfilled one" — `slotOf` deliberately refuses unfilled chunks, since a query about a chunk
+whose contents have not arrived has no honest answer, and that is right. But the chunks an edit
+most needs to invalidate are exactly the ones still being meshed. `claimedSlotOf` is now there
+for holders of slots, as against askers, which is what the comment on `isClaimed` had always
+said it needed.
 
 ## Phase 4 — drawing it
 

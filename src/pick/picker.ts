@@ -51,6 +51,23 @@ export interface Ray {
   readonly direction: Vec3;
 }
 
+/**
+ * Where a pick landed.
+ *
+ * The distance along the ray is kept because a caller that only wants a point does not have
+ * to subtract two vectors to get it, and one that wants it — a depth readout, a falloff
+ * curve — would otherwise be reaching back into the field for something the trace already
+ * knew.
+ */
+export interface PickHit {
+  readonly point: Vec3;
+  /** The surface normal there, turned to face the camera. */
+  readonly normal: Vec3;
+  readonly distance: number;
+  /** Field evaluations spent. */
+  readonly steps: number;
+}
+
 export interface PickResult {
   /** Where the surface is, on it to within a fraction of a voxel. */
   readonly point: Vec3;

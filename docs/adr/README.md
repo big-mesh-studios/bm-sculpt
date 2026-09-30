@@ -38,6 +38,7 @@ Phases 1 through 3, in the order the decisions constrain each other:
 - **0005, 0006, 0007** — the shapes around it: which chunks exist and in which slot, how
   far a distance is trusted, and what a query may read from a slot being rebuilt.
 - **0008** — the boundary a chunk's mesh crosses to get to the screen.
+- **0009** — the two things that change it: where an edit lands, and how to take it back.
 
 **Superchunk membership is deferred from phase 4.** ADR 0007 named it, and rmsl's
 `Mesh.drawRange` is built for it — several meshes sharing one uploaded geometry, each
