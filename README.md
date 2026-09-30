@@ -109,6 +109,43 @@ application and are independently shippable; 6 to 8 are an infinite streaming
 world, and because the field is never stored they add no changes to the CSG or the
 mesher — only a `baseField` binding and a camera.
 
+## Phase 2 — the streaming foundation
+
+`src/world/` is where chunks live: which cells exist, which slot each is in, and what
+colour they hold. None of it touches the renderer, the DOM or the field, so a meshing
+worker needs its arithmetic and nothing else.
+
+|                     |                                                                                                                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coordinate-map.ts` | An integer-triple hash map: flat typed-array keys, FNV-1a, 0.7 load factor, backward-shift deletion. Ported from voxelscape's, which runs in a world that scrolls under a walking player. |
+| `level-data.ts`     | Chunk cells, level-of-detail bands, and the world/sample conversions.                                                                                                                     |
+| `chunk-window.ts`   | The slot pool, the free list, `scrollTo`, `reshape`, and the `filled` gate.                                                                                                               |
+| `paint-tiles.ts`    | Sparse chunk tiles of colour — the only stored voxel data in the system.                                                                                                                  |
+
+The property everything else follows from: **a chunk covers the same ground at every
+level of detail.** Only the resolution of the samples inside it changes, so a slot's
+level can be swapped as the camera moves without anything moving in the world. That
+is affordable only because the field is computed rather than stored (ADR 0004); a
+stored field would have to be refilled at a new resolution, and a refill is where
+cracks come from.
+
+Three things writing the tests corrected, recorded in
+[ADR 0005](docs/adr/0005-streaming-shape.md) and
+[ADR 0007](docs/adr/0007-window-presence-and-lod-reset.md):
+
+- **A fresh window has to be _covering_, not merely _sized_.** Allocating the pool
+  is not placing cells into it — every slot stood for the origin cell until
+  construction and `reshape` were made to share one placement routine.
+- **A slot whose LOD band moved was queued for rebuild but still reported `filled`**,
+  so a query answered from it handed the picker a surface at one resolution while the
+  rest of the model was at another. Nothing errored; the mesh disagreed with itself
+  across a band boundary.
+- **`CoordinateMap`'s deletion was inverted twice** before it was right. The hole
+  moves forward only _after_ a move, never on a skip — setting it to a skipped entry
+  points it at an occupied slot, and the next entry pulled in overwrites a live one.
+  Both versions lost about two entries per hundred deletions, which no test of the
+  entry just touched would notice.
+
 ## Phase 1 — the CSG core
 
 The model is a list of CSG operations and nothing else: no voxel grid, no baked
