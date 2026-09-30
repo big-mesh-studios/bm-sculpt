@@ -22,7 +22,11 @@
 import { createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { Color, Mesh } from "@random-mesh/rmsl/scene";
 import { OrbitController } from "./controls/orbit-camera";
-import { detectFragmentPrecision, type Precision } from "./render/precision";
+import {
+  describePrecision,
+  detectFragmentPrecision,
+  type PrecisionProbe,
+} from "./render/precision";
 import { SpikeMaterial } from "./render/spike-material";
 import {
   buildBox,
@@ -39,7 +43,7 @@ const SPHERE_RINGS = 32;
 
 export default function App() {
   let canvas!: HTMLCanvasElement;
-  const [precision, setPrecision] = createSignal<Precision | undefined>();
+  const [precision, setPrecision] = createSignal<PrecisionProbe | undefined>();
   const [geometry] = createSignal(() => {
     const sphere = buildSphere(230, SPHERE_SEGMENTS, SPHERE_RINGS, {
       r: 236,
@@ -67,9 +71,15 @@ export default function App() {
   onSettled(() => {
     const measured = detectFragmentPrecision();
     setPrecision(measured);
+    // The console too, because "the probe failed" is the answer to a question this
+    // scene was built to settle, and a readout in a corner of a canvas is easy to miss
+    // and impossible to copy out of a screenshot.
+    if (!measured.ok) console.warn("fragment precision probe:", measured.reason);
 
     const viewport: Viewport = createViewport(canvas, {
-      ...(measured !== undefined ? { precision: measured } : {}),
+      // A failed probe leaves the renderer's own default in place, which is the same
+      // outcome the previous `undefined` meant — but the readout now says why.
+      ...(measured.ok ? { precision: measured.precision } : {}),
     });
     viewport.setBackground(new Color(0.07, 0.07, 0.09));
 
@@ -114,12 +124,10 @@ export default function App() {
         <dl class={styles.readout}>
           <Show
             when={precision()}
-            fallback={
-              <div class={styles.row}>fragment precision: not probed</div>
-            }
+            fallback={<div class={styles.row}>fragment precision: not probed yet</div>}
           >
             {(value) => (
-              <div class={styles.row}>fragment precision: {value()}</div>
+              <div class={styles.row}>fragment precision: {describePrecision(value())}</div>
             )}
           </Show>
           <div class={styles.row}>
