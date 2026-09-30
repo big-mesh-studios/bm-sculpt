@@ -103,3 +103,46 @@ Phases 1 to 8, in order, are in the project plan. Phases 0 to 5 are the sculptin
 application and are independently shippable; 6 to 8 are an infinite streaming
 world, and because the field is never stored they add no changes to the CSG or the
 mesher — only a `baseField` binding and a camera.
+
+## Phase 1 — the CSG core
+
+The model is a list of CSG operations and nothing else: no voxel grid, no baked
+field, no stored mesh (ADR 0002). `src/csg/` is the whole of it.
+
+|                 |                                                                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `shapes.ts`     | Ellipsoid, box, capsule, and the signed distance to each. Two are exact; the ellipsoid is the standard two-term approximation, and its shortfall is bounded rather than assumed away. |
+| `operations.ts` | The operation type, the smooth booleans, an operation's world box, and **the fold** — the one piece of arithmetic that has to be exactly right.                                       |
+| `bvh.ts`        | A binned surface-area hierarchy over the operations, and the candidate cache that makes a chunk's cost independent of the model.                                                      |
+| `field.ts`      | The composition seam: `fold(operations, p, baseField?(p))`. Adding an infinite world is a new `baseField` and nothing else.                                                           |
+| `serialise.ts`  | File format v1. The field's _description_, never any voxel data — so a file's size is a function of what the user did, not how big the model is.                                      |
+
+Three things came out of building it that the plan did not foresee, each caught by a
+test comparing against a brute-force fold and each now its own decision:
+
+1. **A bounding-box test is not a sound way to skip an operation.** A minimum is won
+   by the nearest _surface_, not the nearest box, so a point a unit outside a box's
+   corner is a unit from the shape inside it. The skip has to be a distance against
+   a threshold derived from the boolean — and only _outside_ the box, since inside it
+   the box distance is zero while the true distance can be deeply negative
+   ([ADR 0006](docs/adr/0006-field-saturation.md)).
+2. **A subtraction raises the field.** It is a `max`, and a `max` goes up, so "the
+   field only falls" is false and a cache margin sized on that assumption does not
+   cover the case. Saturating the field at `FAR_DISTANCE` fixes it and makes the
+   margin a constant.
+3. **`smoothMin` is not associative**, so the fold's _order_ is part of what the field
+   is. Candidates come back from the tree in traversal order and are sorted by list
+   index, once per rebuild. Unsorted, two chunks either side of a level-of-detail
+   boundary would fold the same operations differently and crack along every
+   boundary in the world.
+
+### Measured
+
+One chunk's field — 39,304 samples (32³ plus a border), over a session's worth of 310
+operations — takes **275 ms** on an ARM phone. A 2016 laptop is several times quicker
+and four workers run four chunks at once. One candidate cache rebuild serves the whole
+chunk.
+
+`src/csg/cost.test.ts` holds that to a ceiling rather than reporting it as a
+benchmark, because the failure worth catching is a change that looks harmless and
+costs ten times as much, not a number that drifts.

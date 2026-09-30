@@ -1,0 +1,186 @@
+/**
+ * The field: what the mesher samples and the picker traces.
+ *
+ * A field is a signed distance function over space, composed of two parts:
+ *
+ *     distance(p) = fold( operations, p, baseField?(p) )
+ *
+ * The operation list is the model. The optional `baseField` is whatever the model
+ * is carved out of — absent for a sculpting session, a height field for an
+ * infinite world (ADR 0004). This class is the seam between them: adding an
+ * infinite world is a new `baseField` and nothing else, because the composition
+ * order, the candidate cache, the gradient and colour resolution are all here
+ * already.
+ *
+ * Composition order is fixed and matters. The base field is combined first and the
+ * operations after it, so a subtraction carves into terrain exactly as it carves
+ * into another operation. The other order would let a brush pass through the
+ * ground instead of digging into it.
+ *
+ * Everything here is a pure function of position, apart from the operation BVH's
+ * candidate cache. That is what makes the field safe to hand to a worker: the
+ * cache is rebuilt on first use there, and no sample depends on where the samples
+ * before it were taken.
+ */
+
+import type { Bounds, Rgb8, Vec3 } from "../constants";
+import { VOXEL_SIZE } from "../constants";
+import { OperationBVH } from "./bvh";
+import { emptyField, foldOperations, type Operation } from "./operations";
+
+/** A field everything else is carved out of. */
+export type BaseField = (x: number, y: number, z: number) => number;
+
+/** Somewhere to read a painted colour from, when a point has been painted. */
+export interface PaintSource {
+  /** The colour at a point, or undefined where none has been painted. */
+  at(x: number, y: number, z: number): Rgb8 | undefined;
+}
+
+/** The colour a surface takes where nothing has been painted. */
+export const DEFAULT_COLOUR: Rgb8 = { r: 190, g: 186, b: 176 };
+
+export interface FieldOptions {
+  base?: BaseField;
+  paint?: PaintSource;
+  /**
+   * The largest factor by which the base field may over-report a distance, and so
+   * the factor every reported distance is scaled down by.
+   *
+   * A signed distance function must never over-report. A sphere-tracing picker
+   * that is told a surface is further away than it is steps past it, and the
+   * symptom is a picker that appears to pass through the model.
+   *
+   * The operations alone are composed from exact distances by `min`, `max` and
+   * their smooth versions, so their bound is exactly 1 and this is 1. A height
+   * field is not a distance function in any direction but the vertical one, so it
+   * must be divided by the largest gradient it has — which is why the property
+   * lives on the composition rather than inside a terrain implementation.
+   */
+  lipschitz?: number;
+  /**
+   * The central-difference step for gradients. Left unset it is a tenth of a
+   * voxel, which is the smallest distance the mesher can resolve.
+   */
+  step?: number;
+}
+
+export class Field {
+  readonly bvh: OperationBVH;
+  readonly base: BaseField | undefined;
+  readonly paint: PaintSource | undefined;
+
+  /**
+   * A factor at or below one that every distance is scaled by, so that stepping
+   * by the result can never overshoot a surface. See `FieldOptions.lipschitz`.
+   */
+  readonly lipschitz: number;
+
+  /** The central-difference step used by `gradient`. */
+  readonly step: number;
+
+  constructor(bvh: OperationBVH, options: FieldOptions = {}) {
+    this.bvh = bvh;
+    this.base = options.base;
+    this.paint = options.paint;
+
+    const bound = options.lipschitz ?? 1;
+    // Clamped rather than trusted. A base field that mis-measures its gradient
+    // gets a conservative picker, which is slow; the alternative is a factor
+    // above one, which claims surfaces are further away than they are and is
+    // broken.
+    this.lipschitz = bound > 0 && bound <= 1 ? bound : 1;
+    this.step = options.step ?? VOXEL_SIZE / 10;
+  }
+
+  /** Replaces the operation list. The base field and paint source are unaffected. */
+  setOperations(operations: readonly Operation[]): void {
+    this.bvh.set(operations);
+  }
+
+  /** The signed distance at a point, in world units. Negative inside. */
+  distance(x: number, y: number, z: number): number {
+    const initial = this.base !== undefined ? this.base(x, y, z) : emptyField();
+    if (this.bvh.empty) return initial;
+    return foldOperations(
+      this.bvh.candidatesAt({ x, y, z }),
+      { x, y, z },
+      initial,
+    );
+  }
+
+  /**
+   * A distance safe to step along by, scaled so following it cannot overshoot.
+   *
+   * This is what a sphere-tracing picker walks with, and the reason a height
+   * field can be one without the picker passing through the ground.
+   *
+   * It does not make the mesher's job harder: the mesher reads signs and
+   * interpolates, and never steps, so it uses `distance` directly.
+   */
+  distanceForStepping(x: number, y: number, z: number): number {
+    return this.distance(x, y, z) * this.lipschitz;
+  }
+
+  /**
+   * The surface normal at a point, as central differences.
+   *
+   * Central rather than analytic because the field is a composition. A smooth
+   * minimum of several operations has no closed-form derivative, so an analytic
+   * gradient would have to be derived per boolean and would still miss the
+   * combination. Six evaluations is what `fast-surface-nets` spends on the same
+   * job.
+   */
+  gradient(x: number, y: number, z: number, step = this.step): Vec3 {
+    const h = step;
+    const dx = this.distance(x + h, y, z) - this.distance(x - h, y, z);
+    const dy = this.distance(x, y + h, z) - this.distance(x, y - h, z);
+    const dz = this.distance(x, y, z + h) - this.distance(x, y, z - h);
+    const length = Math.hypot(dx, dy, dz);
+    // A zero gradient is a point with no surface near it, or one exactly on a
+    // medial axis where the field has a crease. Neither can be shaded from a
+    // direction, and a normal of `(0, 0, 0)` propagates into a vertex buffer as a
+    // black triangle, so up is as good an answer as any and is at least finite.
+    return length === 0
+      ? { x: 0, y: 1, z: 0 }
+      : { x: dx / length, y: dy / length, z: dz / length };
+  }
+
+  /**
+   * The colour of the surface at a point.
+   *
+   * A painted tile wins over a paint operation. The tile is the direct record of a
+   * paint stroke and the operation is the shape it was drawn through, so when both
+   * cover a point the stroke is the more recent statement about it — and choosing
+   * otherwise would make a hard paint vanish the moment a soft paint covered the
+   * same ground.
+   */
+  colourAt(x: number, y: number, z: number): Rgb8 {
+    const painted = this.paint?.at(x, y, z);
+    if (painted !== undefined) return painted;
+    return this.bvh.evalPaint(x, y, z) ?? DEFAULT_COLOUR;
+  }
+
+  /**
+   * Whether a box could hold a surface at all.
+   *
+   * The mesher's first gate, and the reason a terrain world can be streamed: a
+   * chunk entirely above the tallest thing the base field can produce has no sign
+   * change anywhere in it and needs no samples at all. In a height-field world
+   * most chunks are exactly that — air above the landscape, or solid below it — and
+   * skipping them is the difference between streaming at a walking pace and
+   * grinding.
+   *
+   * Deliberately absent a sound implementation. Answering it generally would mean
+   * bounding the base field over a box, which is a property of the base field and
+   * not of the composition: a height field can answer it from the extremes of its
+   * column range in constant time, and an arbitrary base field cannot answer it at
+   * all. Phase 6 adds it to the terrain, where the question has an answer, rather
+   * than guessing at it here.
+   */
+  couldHoldSurface(_bounds: Bounds): boolean {
+    return true;
+  }
+}
+
+export type { Operation };
