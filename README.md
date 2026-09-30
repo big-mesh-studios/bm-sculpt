@@ -19,6 +19,9 @@ which of the two broke it.
 
 ## What exists
 
+Remaining work, and what is left of the phases after this one, is written down in
+[`TODO.md`](TODO.md).
+
 |              |                                                                                                                                                                                                                                                                            |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Renderer** | [`@random-mesh/rmsl`](https://www.npmjs.com/package/@random-mesh/rmsl) 1.14.0 — a scene graph and a node-graph shader DSL. Not a three.js fork; see [ADR 0001](docs/adr/0001-rmsl-over-three.md).                                                                          |
