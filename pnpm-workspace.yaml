@@ -15,33 +15,51 @@ allowBuilds:
   esbuild: true
 
 catalog:
-  # Solid 2.0 is a coordinated release. The reactive core (@solidjs/signals),
-  # the DOM runtime (@solidjs/web) and the framework (solid-js) share a version
-  # number and must agree on it; a mismatch does not degrade, it fails to
-  # type-check. All three are at the latest release candidate.
-  "solid-js": "2.0.0-rc.13"
-  "@solidjs/signals": "2.0.0-rc.13"
-  "@solidjs/web": "2.0.0-rc.13"
+  # Solid 2.0 is a coordinated release: the reactive core (@solidjs/signals), the
+  # DOM runtime (@solidjs/web) and the framework (solid-js) share a version number
+  # and must agree on it. A mismatch does not degrade, it fails to type-check.
+  #
+  # **Beta, not release candidate** — and the reason is the build toolchain rather
+  # than the framework. From `vite-plugin-solid@3.0.0-next.21` the plugin delegates
+  # to `@solidjs/vite-plugin`, which drives the *native* Solid compiler: a platform
+  # binary, with a WebAssembly fallback only where no binary exists for the
+  # platform. Termux is one of those platforms — it is Linux on arm64 but uses
+  # Bionic rather than glibc, so the published `linux-arm64-gnu` binary will not
+  # load, and the WebAssembly fallback is blocked by the sandbox, failing with
+  # `UVWASI_EACCES, uvwasi_init` before any code runs.
+  #
+  # `3.0.0-next.5` transforms JSX with Babel and `@babel/core`, which are pure
+  # JavaScript and have no platform to disagree with. That is the combination
+  # `big-mesh-studios` builds both of its applications with, and its peer ranges
+  # cover this exactly: Solid `>=2.0.0-beta.0 <2.0.0-experimental.0` and Vite up
+  # to 8.
+  "solid-js": "2.0.0-beta.29"
+  "@solidjs/signals": "2.0.0-beta.29"
+  "@solidjs/web": "2.0.0-beta.29"
 
-  # The Vite plugin tracks the same release line. `next` is its 3.x tag, which
-  # is the one built for Solid 2; its `latest` is still 2.11, which is Solid 1.
-  "vite-plugin-solid": "3.0.0-next.27"
+  # The last Babel-based line of this plugin. Its `latest` is still 2.11, which is
+  # Solid 1, and its `next` is the native-compiler line described above.
+  "vite-plugin-solid": "3.0.0-next.5"
 
-  # The renderer. Not a three.js fork: a scene graph plus a node-graph shader
-  # DSL. See docs/adr/0001-rmsl-over-three.md.
+  # The JSX transform, pinned to match the framework. The plugin asks for
+  # `>=2.0.0-beta.0 <2.0.0-experimental.0`, which floats forward to the newest beta
+  # — and each `babel-preset-solid` declares a peer of `^2.0.0-beta.<its own>`, so a
+  # floating resolve lands on a preset that wants a newer framework than the one
+  # installed. It works anyway, since the peer is advisory and the transform has not
+  # changed incompatibly across these betas, but a repository whose stated reason
+  # for pinning a version is that a mismatch fails to type-check should not also be
+  # carrying one. The override below pins the transitive resolve.
+  "babel-preset-solid": "2.0.0-beta.29"
+
+overrides:
+  babel-preset-solid: "catalog:"
+
+  # The renderer. Not a three.js fork: a scene graph plus a node-graph shader DSL.
+  # See docs/adr/0001-rmsl-over-three.md.
   "@random-mesh/rmsl": "1.14.0"
 
-  # Vite 8, not 7: `vite-plugin-solid` 3.0.0-next.27 depends on
-  # `@solidjs/vite-plugin`, whose current builds declare a peer range of
-  # `^8.0.0 || ^9.0.0`. The dependency is a caret range over `3.0.0-next.*`,
-  # so a plain install floats forward to a build that will not accept Vite 7.
   vite: "^8.3.1"
   vitest: "^4.1.3"
   typescript: "^5.7.2"
   prettier: "^3.9.6"
   jsdom: "^30.0.1"
-
-minimumReleaseAgeExclude:
-  - '@solidjs/signals@2.0.0-rc.13'
-  - '@solidjs/web@2.0.0-rc.13'
-  - solid-js@2.0.0-rc.13

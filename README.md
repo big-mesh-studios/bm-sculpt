@@ -67,24 +67,29 @@ pnpm build         # vite build
 pnpm format        # prettier --write
 ```
 
-### Known limitation on Android/Termux
+### Why Solid beta rather than RC
 
-**The Solid JSX transform cannot run on Termux**, so `pnpm dev` and `pnpm build`
-will fail here and the spike scene has not been seen in a browser on this
-machine. This is the environment, not the project:
+From `vite-plugin-solid@3.0.0-next.21`, the plugin delegates to
+`@solidjs/vite-plugin`, which drives the **native** Solid compiler — a platform
+binary, with a WebAssembly fallback only where no binary exists for the platform.
 
-- The Solid compiler is a native module. There is no prebuilt binary for Android
-  — Termux uses Bionic, and the published `linux-arm64-gnu` package will not load
-  — so it falls back to `@solidjs/compiler-wasm32-wasi`.
-- Node's WebAssembly host is blocked by the Termux sandbox, failing with
-  `UVWASI_EACCES, uvwasi_init` before any code runs.
+Termux is one of those platforms. It is Linux on arm64, but it uses Bionic rather
+than glibc, so the published `linux-arm64-gnu` binary will not load and the
+WebAssembly fallback is blocked by the sandbox, failing with `UVWASI_EACCES,
+uvwasi_init` before any code runs. Every RC of the framework has this problem on
+this machine.
 
-Because a `.ts` file cannot contain JSX, the Vite plugin is scoped to `.tsx` and
-`.jsx` (`include: /\.[jt]sx$/`), which is correct regardless and means the unit
-tests — all of which are JSX-free — run without a graphics device, a browser, or
-the compiler. Everything except the two entry files is exercised by `pnpm test`
-and `pnpm check-types` on this machine. On any desktop or CI runner the
-transform works normally.
+`vite-plugin-solid@3.0.0-next.5` transforms JSX with Babel and `@babel/core`,
+which are pure JavaScript and have no platform to disagree with. Its peer ranges
+cover this exactly — Solid `>=2.0.0-beta.0 <2.0.0-experimental.0`, Vite up to 8 —
+and it is the combination `big-mesh-studios` builds both of its applications with.
+So the framework is pinned to beta.29 and `babel-preset-solid` is pinned to match,
+because each preset declares a peer of `^2.0.0-beta.<its own>` and a floating
+resolve lands on one that wants a newer framework than the one installed.
+
+The Vite plugin is also scoped to `.tsx` and `.jsx` (`include: /\.[jt]sx$/`), which
+is correct regardless — a `.ts` file cannot contain JSX — and means the unit tests,
+all of which are JSX-free, run without a compiler at all.
 
 ## Plans
 
