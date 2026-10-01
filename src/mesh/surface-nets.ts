@@ -133,8 +133,27 @@ export interface SurfaceNetsParams {
   origin: readonly [number, number, number];
   /** Samples a chunk owns per axis. The sample grid is two larger. */
   samples: number;
-  /** World units between samples. */
+  /** World units between samples. Ignored where `lanes` is given. */
   sampleSize: number;
+  /**
+   * Where each sample actually sits on each axis, when that is not a single spacing.
+   *
+   * **Optional, and the uniform case is not a special case in the loops.** Omitting it
+   * builds the even lane `origin + (s - 1) * sampleSize` once and then runs the same code
+   * as any other lane set, so there is one code path rather than two that have to agree.
+   *
+   * It exists because "evenly spaced" is an assumption about the *world*, not about this
+   * algorithm, and at a level-of-detail boundary it stops being true. A coarse chunk and a
+   * fine one put their owned cells either side of the shared plane — a fine chunk's last
+   * cell ends at `x = 160` and a coarse one's begins at `x = 160` — so a chunk that refined
+   * its own boundary shell would have cells of two different widths, and a vertex placed
+   * by `origin + (c - 0.5) * sampleSize` would be in the wrong place by the difference.
+   *
+   * Giving the algorithm the sample positions rather than a spacing is what lets that be
+   * expressed at all; the crossing parameter itself is unchanged, because a linear
+   * interpolation crosses zero at the same *fraction* of an edge whatever its length.
+   */
+  lanes?: SampleLanes;
   sampler: SurfaceSampler;
   out: SurfaceOutput;
   scratch: SurfaceNetsScratch;
@@ -144,6 +163,27 @@ export interface SurfaceNetsParams {
    */
   onVertex?: (index: number, x: number, y: number, z: number) => void;
 }
+
+/** World position of every sample index along one axis, `0 .. samples + 1`. */
+export type SampleLane = Float64Array;
+
+/** A sample lane per axis. */
+export interface SampleLanes {
+  readonly x: SampleLane;
+  readonly y: SampleLane;
+  readonly z: SampleLane;
+}
+
+/** The lane an evenly spaced grid would have: sample `s` sits at `origin + (s - 1) * step`. */
+export const uniformLane = (
+  origin: number,
+  step: number,
+  grid: number,
+): SampleLane => {
+  const lane = new Float64Array(grid);
+  for (let s = 0; s < grid; s++) lane[s] = origin + (s - 1) * step;
+  return lane;
+};
 
 /**
  * Meshes one chunk's surface into `out`, which is emptied first.
@@ -160,17 +200,26 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
   const cells = SURFACE_NETS_CELLS(samples);
   const STRIDES = strideTable(cells);
 
+  // Where each sample sits on each axis, resolved once. An even grid is built rather than
+  // special-cased in the loops below, so there is a single version of the hot code and it
+  // is the version that supports uneven spacing.
+  const px = params.lanes?.x ?? uniformLane(origin[0], sampleSize, grid);
+  const py = params.lanes?.y ?? uniformLane(origin[1], sampleSize, grid);
+  const pz = params.lanes?.z ?? uniformLane(origin[2], sampleSize, grid);
+
   out.clear();
 
   const sample = (x: number, y: number, z: number): number =>
     scratch.samples[(z * grid + y) * grid + x];
   for (let z = 0; z < grid; z++) {
+    const wz = pz[z] as number;
     for (let y = 0; y < grid; y++) {
+      const wy = py[y] as number;
       for (let x = 0; x < grid; x++) {
         scratch.samples[(z * grid + y) * grid + x] = sampler.distance(
-          origin[0] + (x - 1) * sampleSize,
-          origin[1] + (y - 1) * sampleSize,
-          origin[2] + (z - 1) * sampleSize,
+          px[x] as number,
+          wy,
+          wz,
         );
       }
     }
@@ -209,21 +258,24 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
           crossings++;
         }
 
-        // The average is in the cell's own corner coordinates, 0..1. Subtracting a half
-        // centres it on the cell, which is what makes it a dual vertex rather than a
-        // point somewhere near one.
-        const localX = sumX / crossings - 0.5;
-        const localY = sumY / crossings - 0.5;
-        const localZ = sumZ / crossings - 0.5;
-
-        // Cell c is the cell of world voxel `origin + c - 1`, so its centre is
-        // `origin + (c - 1 + 0.5) * sampleSize`.
+        // The average is in the cell's own corner coordinates, 0..1, on each axis. That is
+        // a *fraction of the cell*, not a distance, which is why it survives the cell
+        // being a different width from its neighbours: the cell's own two samples give
+        // where its low corner is and how wide it is, and the fraction says how far along
+        // it the crossing fell. Subtracting a half centres it on the cell, which is what
+        // makes it a dual vertex rather than a point somewhere near one.
+        //
+        // Cell `c` is the cell of world voxel `origin + c - 1`, so its own samples are
+        // `c` and `c + 1` on the lane and its centre is their middle.
         const worldX =
-          origin[0] + (cx - 0.5) * sampleSize + localX * sampleSize;
+          (px[cx] as number) +
+          (sumX / crossings) * ((px[cx + 1] as number) - (px[cx] as number));
         const worldY =
-          origin[1] + (cy - 0.5) * sampleSize + localY * sampleSize;
+          (py[cy] as number) +
+          (sumY / crossings) * ((py[cy + 1] as number) - (py[cy] as number));
         const worldZ =
-          origin[2] + (cz - 0.5) * sampleSize + localZ * sampleSize;
+          (pz[cz] as number) +
+          (sumZ / crossings) * ((pz[cz + 1] as number) - (pz[cz] as number));
 
         scratch.cellVertex[(cz * cells + cy) * cells + cx] = out.vertex(
           worldX,

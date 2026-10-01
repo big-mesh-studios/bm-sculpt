@@ -6,6 +6,7 @@ import {
   surfaceNets,
   SURFACE_NETS_CELLS,
   SURFACE_NETS_GRID,
+  uniformLane,
 } from "./surface-nets";
 import { sdBox, sdCapsule, sdEllipsoid } from "../csg";
 
@@ -681,5 +682,189 @@ describe("reusing a scratch buffer", () => {
     mesh([N * STEP, 0, 0], N, mixed, STEP, scratch, out);
     expect(out.vertexCount).toBeGreaterThan(0);
     expect(out.vertexCount).not.toBe(first + first);
+  });
+});
+
+/**
+ * Unevenly spaced samples.
+ *
+ * "Evenly spaced" is an assumption about the world rather than about this algorithm, and
+ * at a level-of-detail boundary it stops being true: a coarse chunk and a fine one put
+ * their owned cells either side of a shared plane, so a chunk that refined its own
+ * boundary shell would have cells of two different widths. These tests pin that a lane
+ * set says where the samples are, and that where it agrees with an even grid the result
+ * is identical — which is what makes the refinement possible without changing what the
+ * algorithm means.
+ */
+describe("sample lanes", () => {
+  const LANES_N = 8;
+  const GRID = SURFACE_NETS_GRID(LANES_N);
+  // A tilted plane rather than a sphere, so that it cuts every cell it passes through
+  // with a clear sign change on its corners. A sphere only straddles a cell whose corners
+  // happen to fall either side of it, which makes "this cell has a vertex" a fact about
+  // the numbers chosen rather than about the code.
+  const field = (x: number, y: number, _z: number): number => y - 3 - x * 0.4;
+  const across = (step: number): Float64Array => uniformLane(0, step, GRID);
+
+  type Lanes = { x: Float64Array; y: Float64Array; z: Float64Array };
+
+  const meshWith = (
+    lanes: Lanes,
+    scratch: ReturnType<typeof scratchFor>,
+    out: ChunkMeshBuilder,
+  ): ChunkMeshBuilder => {
+    surfaceNets({
+      origin: [0, 0, 0],
+      samples: LANES_N,
+      sampleSize: STEP,
+      lanes,
+      sampler: { distance: field },
+      out,
+      scratch,
+    });
+    return out;
+  };
+
+  /** Where the mesher put the vertex for a cell, or undefined if it emitted none. */
+  const cellPosition = (
+    scratch: ReturnType<typeof scratchFor>,
+    out: ChunkMeshBuilder,
+    cx: number,
+    cy: number,
+    cz: number,
+  ): { x: number; y: number; z: number } | undefined => {
+    const cells = SURFACE_NETS_CELLS(LANES_N);
+    const index = scratch.cellVertex[(cz * cells + cy) * cells + cx];
+    return index < 0 ? undefined : out.positionOf(index);
+  };
+
+  it("gives the same answer as an even grid when the lanes are evenly spaced", () => {
+    // The equivalence that lets the rest of the project ignore lanes entirely: passing
+    // them explicitly must be indistinguishable from not passing them, so every existing
+    // caller and test keeps meaning what it meant.
+    const grid = SURFACE_NETS_GRID(LANES_N);
+    const even = {
+      x: uniformLane(0, STEP, grid),
+      y: uniformLane(0, STEP, grid),
+      z: uniformLane(0, STEP, grid),
+    };
+    // Finished, because the builder's own buffers are a growable: indexing one past its
+    // length yields undefined, and `undefined === undefined` would make every comparison
+    // below pass while checking nothing.
+    const implicit = mesh([0, 0, 0], LANES_N, field).finish();
+    const explicit = meshWith(
+      even,
+      scratchFor(LANES_N),
+      new ChunkMeshBuilder(),
+    ).finish();
+
+    expect(explicit.vertexCount).toBe(implicit.vertexCount);
+    expect([...explicit.indices]).toEqual([...implicit.indices]);
+    for (let i = 0; i < implicit.vertexCount; i++) {
+      for (const component of [0, 1, 2] as const) {
+        expect(
+          explicit.positions[i * 3 + component],
+          `vertex ${i} component ${component}`,
+        ).toBe(implicit.positions[i * 3 + component]);
+      }
+    }
+  });
+
+  it("places a refined cell's vertex where an even grid of that width puts it", () => {
+    // The point of lanes. Two meshes that cover the *same world cells* express that
+    // coverage differently: one as a uniformly fine grid, the other as a coarse grid
+    // whose first cell has been narrowed to match. The cell they share is the same piece
+    // of world, so its vertex has to be the same point — which it only can be if the
+    // algorithm is told where the samples are rather than how far apart they are.
+    // Both grids are expressed as lanes, because the point is that they agree on y and z
+    // and disagree only on x — which a single `sampleSize` cannot express.
+    const fine = scratchFor(LANES_N);
+    const fineOut = meshWith(
+      { x: across(5), y: across(10), z: across(10) },
+      fine,
+      new ChunkMeshBuilder(),
+    );
+
+    // Cell 1 of the fine grid spans x 0..5. The coarse grid below is 10 wide everywhere
+    // except its second cell, which is narrowed onto the same span.
+    const coarse = scratchFor(LANES_N);
+    const coarseOut = meshWith(
+      {
+        x: Float64Array.from([-20, -10, 0, 5, 25, 45, 65, 85, 105, 125]),
+        y: across(10),
+        z: across(10),
+      },
+      coarse,
+      new ChunkMeshBuilder(),
+    );
+
+    // Cell (1, cy, cz) of the fine grid and cell (2, cy, cz) of the coarse one are the
+    // same world cell on x, and identical on y and z because those lanes match.
+    let compared = 0;
+    let worst = 0;
+    for (let cz = 1; cz < SURFACE_NETS_CELLS(LANES_N) - 1; cz++)
+      for (let cy = 1; cy < SURFACE_NETS_CELLS(LANES_N) - 1; cy++) {
+        const a = cellPosition(fine, fineOut, 1, cy, cz);
+        const b = cellPosition(coarse, coarseOut, 2, cy, cz);
+        if (a === undefined || b === undefined) continue;
+        compared++;
+        worst = Math.max(
+          worst,
+          Math.abs(a.x - b.x),
+          Math.abs(a.y - b.y),
+          Math.abs(a.z - b.z),
+        );
+      }
+
+    expect(compared).toBeGreaterThan(0);
+    expect(worst).toBeLessThan(1e-9);
+  });
+
+  it("moves every vertex by exactly what the lane moved by", () => {
+    // The other direction: a lane has to be honoured, or the equivalence above would pass
+    // for a mesher that ignored lanes entirely.
+    //
+    // The field depends only on y, which is what makes a shift of the x lane a pure
+    // translation. Shifting the samples of a field that varies along x would move the
+    // surface relative to the lattice and change which cells straddle, so the mesh would
+    // legitimately differ in more than position. With a field blind to x, nothing about
+    // the crossings can change — so the same vertices must appear, seven units along.
+    // Deliberately blind to x and z.
+    const flat = (_x: number, y: number, _z: number): number => y - 3;
+    const build = (lanes: Lanes, out: ChunkMeshBuilder): ChunkMeshBuilder => {
+      surfaceNets({
+        origin: [0, 0, 0],
+        samples: LANES_N,
+        sampleSize: STEP,
+        lanes,
+        sampler: { distance: flat },
+        out,
+        scratch: scratchFor(LANES_N),
+      });
+      return out;
+    };
+
+    const even = build(
+      { x: across(STEP), y: across(STEP), z: across(STEP) },
+      new ChunkMeshBuilder(),
+    ).finish();
+    const shifted = across(STEP);
+    for (let i = 0; i < GRID; i++) shifted[i] = shifted[i]! + 7;
+    const moved = build(
+      { x: shifted, y: across(STEP), z: across(STEP) },
+      new ChunkMeshBuilder(),
+    ).finish();
+
+    expect(moved.vertexCount).toBe(even.vertexCount);
+    expect([...moved.indices]).toEqual([...even.indices]);
+    for (let i = 0; i < even.vertexCount; i++) {
+      expect(moved.positions[i * 3], `vertex ${i} x`).toBeCloseTo(
+        (even.positions[i * 3] as number) + 7,
+        9,
+      );
+      // And nothing else moved, or the lane on one axis would be leaking into the others.
+      expect(moved.positions[i * 3 + 1]).toBe(even.positions[i * 3 + 1]);
+      expect(moved.positions[i * 3 + 2]).toBe(even.positions[i * 3 + 2]);
+    }
   });
 });
