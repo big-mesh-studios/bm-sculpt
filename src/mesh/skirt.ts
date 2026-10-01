@@ -111,10 +111,12 @@ export const addSkirts = (
     return side < 0 ? value <= lo + shell : value >= hi - shell;
   };
 
-  // Outward into the neighbour and down past the slit. Two samples each way is generous
-  // against a crack of one to two samples and cheap against a chunk's triangle count.
-  const outward = sampleSize;
-  const depth = sampleSize * 2;
+  // Outward into the neighbour and down past the slit. Generous against a crack of one to
+  // two samples and cheap against a chunk's triangle count, and the extra reach is what
+  // closes the pinhole where two level steps meet at a corner, where the two faces' flaps
+  // have to overlap rather than merely abut.
+  const outward = sampleSize * 2;
+  const depth = sampleSize * 3;
 
   for (const [key, count] of uses) {
     if (count !== 1) continue;

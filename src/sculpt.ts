@@ -31,6 +31,7 @@ import {
 } from "./pick";
 import { SculptTool, type PickCamera, type SculptTarget } from "./edit/tool";
 import {
+  type BrushMode,
   type BrushSettings,
   type BrushStroke,
   DEFAULT_BRUSH,
@@ -108,6 +109,20 @@ export class SculptSession {
   private streamedDabs = 0;
   private streamedBounds: Bounds | undefined;
 
+  /**
+   * The target behind both the pointer tool and the aim tool.
+   *
+   * One instance rather than two, so a gameplay dig and an editor sculpt share
+   * the document, the streaming and the history by construction — there is no
+   * second path that could edit the model without invalidating what is on
+   * screen.
+   */
+  private readonly targetImpl: SculptTarget;
+
+  /** The stroke an aim is currently laying, and the mode it was begun in. */
+  private aimStroke: BrushStroke | undefined;
+  private aimMode: BrushMode | undefined;
+
   constructor(private readonly options: SculptSessionOptions) {
     // The document is where the model lives, and it starts empty. Seeding it here is what
     // makes a stroke an *edit* rather than a replacement: every rebuild reads
@@ -122,9 +137,10 @@ export class SculptSession {
     this.terrain =
       options.terrain !== undefined ? terrainField(options.terrain) : undefined;
     this.field = this.buildField();
+    this.targetImpl = this.target();
     this.tool = new SculptTool({
       camera: options.camera,
-      target: this.target(),
+      target: this.targetImpl,
       onHover: (hover) => {
         this.previewState.visible = hover !== undefined;
         if (hover !== undefined) {
@@ -139,6 +155,29 @@ export class SculptSession {
     return this.previewState;
   }
 
+  /**
+   * The field as it stands, for a caller that must read the same surface the
+   * picker traces and the workers mesh.
+   *
+   * The player's collision samples through this rather than holding a field of
+   * its own, so a dug hole is walked into on the next frame and cannot be missed
+   * by a copy that was built when the session started.
+   */
+  get collisionField(): Field {
+    return this.field;
+  }
+
+  /**
+   * The terrain surface height at a column, when the world has a height field.
+   *
+   * Bound to the terrain the field was built from, so a spawn placed on the
+   * ground and a player collided against it cannot disagree about where the
+   * ground is.
+   */
+  get terrainHeight(): ((x: number, z: number) => number) | undefined {
+    return this.terrain?.heightAt;
+  }
+
   /** The brush settings, and a way to change them. */
   get settings(): BrushSettings {
     return this.brush;
@@ -146,6 +185,94 @@ export class SculptSession {
 
   configure(settings: Partial<BrushSettings>): void {
     this.brush = { ...this.brush, ...settings };
+  }
+
+  /**
+   * Starts a stroke at the crosshair, for a gameplay dig or place.
+   *
+   * The same stroke machinery the pointer tool drives, aimed at the centre of
+   * the screen instead of at a pointer position — so a dig from a crosshair and a
+   * sculpt from a cursor are the same edit, and there is no second code path that
+   * could touch the model without going through the document's history.
+   *
+   * @returns whether the ray met a surface. A miss leaves no stroke open, so the
+   * caller simply tries again next frame as the player turns.
+   */
+  beginAim(camera: PickCamera, mode: BrushMode, ndcX = 0, ndcY = 0): boolean {
+    const hit = this.pickNdc(camera, ndcX, ndcY);
+    if (hit === undefined) return false;
+    this.forgetStroke();
+    // The brush reads its mode at `beginStroke`, so it is set before the stroke
+    // starts and stays for the life of the stroke.
+    this.configure({ mode });
+    this.aimMode = mode;
+    this.aimStroke = this.targetImpl.beginStroke(hit.point, hit.normal);
+    // A click that never moves still marks: the first dab lands at the aim.
+    this.aimStroke.extendTo(this.dabPoint(hit, mode));
+    this.targetImpl.preview(this.aimStroke);
+    return true;
+  }
+
+  /** Re-picks the crosshair and extends the open aim stroke toward it. */
+  updateAim(camera: PickCamera, ndcX = 0, ndcY = 0): void {
+    const stroke = this.aimStroke;
+    if (stroke === undefined) return;
+    const hit = this.pickNdc(camera, ndcX, ndcY);
+    if (hit === undefined) return;
+    if (stroke.extendTo(this.dabPoint(hit, this.aimMode)) > 0) {
+      this.targetImpl.preview(stroke);
+    }
+  }
+
+  /** Commits the open aim stroke, if it laid anything. */
+  endAim(): void {
+    const stroke = this.aimStroke;
+    this.aimStroke = undefined;
+    this.aimMode = undefined;
+    if (stroke === undefined) return;
+    if (stroke.dabCount === 0) {
+      this.targetImpl.discardStroke();
+      stroke.discard();
+      return;
+    }
+    this.targetImpl.commit(stroke);
+  }
+
+  /** Throws the open aim stroke away without committing it. */
+  cancelAim(): void {
+    const stroke = this.aimStroke;
+    this.aimStroke = undefined;
+    this.aimMode = undefined;
+    if (stroke === undefined) return;
+    this.targetImpl.discardStroke();
+    stroke.discard();
+  }
+
+  /**
+   * Where an aim's dab lands.
+   *
+   * A dig removes material at the surface. A place adds it, and is pushed out
+   * along the surface normal by half the brush radius so the new material sits on
+   * top of the surface rather than being half-buried in it.
+   */
+  private dabPoint(hit: PickHit, mode: BrushMode | undefined): Vec3 {
+    if (mode !== "add") return hit.point;
+    const offset = this.brush.radius * 0.5;
+    return {
+      x: hit.point.x + hit.normal.x * offset,
+      y: hit.point.y + hit.normal.y * offset,
+      z: hit.point.z + hit.normal.z * offset,
+    };
+  }
+
+  /** Traces a ray through a screen point, in normalised device coordinates. */
+  private pickNdc(
+    camera: PickCamera,
+    ndcX: number,
+    ndcY: number,
+  ): PickHit | undefined {
+    const ray: Ray = rayThroughScreen(camera, ndcX, ndcY);
+    return pickAlong(this.field, ray);
   }
 
   /** How many commands are undoable, and how many can be redone. For a readout. */

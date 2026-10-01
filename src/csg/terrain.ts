@@ -28,17 +28,29 @@
  *
  * ## The bound, and why it is loose on purpose
  *
- * With `h = origin + scale · fbm(x/F, z/F, octaves)` and the usual fBm — amplitude halved
- * and frequency doubled per octave — each octave contributes the *same* gradient, because
- * `0.5^i · 2^i = 1`. So a single axis obeys
+ * The surface is a base fBm plus a ridged term confined by a mask:
  *
- *     |∂h/∂x| ≤ octaves · G · scale / F
+ *     h = origin + scale · ( base + R · ridge · mask )
+ *     base  = fbm(x/F,  z/F,  octaves)
+ *     ridge = max(0, 1 - |fbm(x/Fm, z/Fm, octaves)|)   in [0, 1]
+ *     mask  = clamp01(0.5 + 0.5 · fbm(x/Fk, z/Fk, maskOctaves))  in [0, 1]
  *
- * where `G` bounds `|∂noise/∂u|`. Bounding the two axes separately and combining gives
+ * With the usual fBm — amplitude halved and frequency doubled per octave — each octave
+ * contributes the *same* gradient, because `0.5^i · 2^i = 1`. A single axis is therefore
+ * bounded by the sum of the parts' gradients:
  *
- *     |∇h| ≤ √2 · octaves · G · scale / F   and so   lipschitz = 1 / sqrt(1 + 2A²)
+ *     d(base)/dx  ≤ octaves · G / F
+ *     d(ridge)/dx ≤ octaves · G / Fm
+ *     d(mask)/dx  ≤ maskOctaves · G / Fk
+ *     |∂h/∂x|     ≤ scale · ( d(base) + R · (d(ridge)·mask + ridge·d(mask)) )
+ *                 ≤ scale · ( octaves·G/F + R · (octaves·G/Fm + maskOctaves·G/Fk) )
  *
- * with `A = octaves · G · scale / F`. `G` is `NOISE_GRADIENT_BOUND` below, and it is
+ * where `G` bounds `|∂noise/∂u|` and the products are bounded because `ridge` and `mask`
+ * are in `[0, 1]`. Bounding the two axes separately and combining gives
+ *
+ *     |∇h| ≤ √2 · A   and so   lipschitz = 1 / sqrt(1 + 2A²)
+ *
+ * with `A` the per-axis bound above. `G` is `NOISE_GRADIENT_BOUND` below, and it is
  * deliberately pessimistic: it is the worst case of a corner gradient difference times the
  * peak of the quintic's derivative, and the two corner gradients are chosen by independent
  * hashes, so nothing rules that combination out. Being wrong in the pessimistic direction
@@ -64,15 +76,47 @@ import type { Bounds } from "../constants";
 import type { BaseField, SurfaceExtent } from "./field";
 
 /**
- * World units per noise cell, horizontally.
+ * World units per noise cell, horizontally, for the rolling base.
  *
  * The vertical character of a landscape is the `scale` in `TerrainParams`; this is the
  * horizontal one, and the message block has no field for it, so it lives here. Sized against
  * the chunk: `BLOCK_WORLD` is 320, so this puts roughly two and a half features across a
- * chunk and about six across the default streaming window — rolling hills rather than
- * mountains, which is the right register for something a sculptor is carving into.
+ * chunk and about six across the default streaming window.
  */
 export const TERRAIN_FEATURE = 768;
+
+/**
+ * World units per ridge noise cell, horizontally.
+ *
+ * Larger than `TERRAIN_FEATURE`, so a mountain is a bigger feature than a hill. Ridged
+ * noise — `1 - |fbm|` — turns the smooth fBm's extrema into sharp crests, which is what
+ * makes a slope read as a mountain rather than as a dune.
+ */
+export const MOUNTAIN_FEATURE = 1600;
+
+/**
+ * World units per mask noise cell. The mask decides *where* mountains stand, so it is the
+ * coarsest of the three: a range several features wide, with plains between.
+ */
+export const MOUNTAIN_MASK_FEATURE = 2600;
+
+/** Octaves in the mask. Two is enough for a smooth continent-scale decision. */
+export const MOUNTAIN_MASK_OCTAVES = 2;
+
+/**
+ * How much a ridge raises the surface, in units of the base noise's own range.
+ *
+ * The base contributes `scale * fbm` in `[-R, R]`; a ridge contributes
+ * `RIDGE_STRENGTH * scale * ridge * mask`, and both `ridge` and `mask` are in `[0, 1]`.
+ * The height range therefore grows by `RIDGE_STRENGTH * scale`, which `reach` accounts
+ * for. Two, so a ridge is about as tall as the base landscape is deep — mountains rising
+ * out of hills.
+ */
+export const RIDGE_STRENGTH = 2;
+
+/** Keeps a value inside `[0, 1]`, so the mask and ridge bounds hold. */
+const clamp01 = (value: number): number =>
+  value < 0 ? 0 : value > 1 ? 1 : value;
 
 /**
  * A bound on `|∂noise/∂u|` for the interpolation below.
@@ -252,19 +296,48 @@ export const terrainField = (params: TerrainParams): TerrainField => {
   const scale = params.scale;
   const origin = params.origin;
 
-  const heightAt = (x: number, z: number): number =>
-    origin +
-    scale * noise.fbm(x / TERRAIN_FEATURE, z / TERRAIN_FEATURE, octaves);
+  const heightAt = (x: number, z: number): number => {
+    const base = noise.fbm(x / TERRAIN_FEATURE, z / TERRAIN_FEATURE, octaves);
+    // Ridged noise: `1 - |fbm|` peaks where the noise crosses zero, which is where a
+    // mountain's crest is. Clamped at zero so a deep trough does not become a ridge.
+    const ridge = Math.max(
+      0,
+      1 -
+        Math.abs(
+          noise.fbm(x / MOUNTAIN_FEATURE, z / MOUNTAIN_FEATURE, octaves),
+        ),
+    );
+    // The mask decides where a range stands at all, so plains stay plains.
+    const mask = clamp01(
+      0.5 +
+        0.5 *
+          noise.fbm(
+            x / MOUNTAIN_MASK_FEATURE,
+            z / MOUNTAIN_MASK_FEATURE,
+            MOUNTAIN_MASK_OCTAVES,
+          ),
+    );
+    return origin + scale * (base + RIDGE_STRENGTH * ridge * mask);
+  };
 
-  const reach = FBM_AMPLITUDE_BOUND * Math.abs(scale);
+  // The base can fall to `-R`; a ridge can only rise, up to `RIDGE_STRENGTH` on top of the
+  // base's `+R`. The reach is the larger magnitude, used symmetrically because the gate
+  // only needs a band that contains the surface.
+  const reach = (FBM_AMPLITUDE_BOUND + RIDGE_STRENGTH) * Math.abs(scale);
   const lowest = origin - reach;
   const highest = origin + reach;
 
   // `A` is the per-axis bound on the height's gradient; see the file header for where each
   // factor comes from. The √2 combines two axes bounded separately, and the `1` under the
   // square root is the vertical term of the distance function's own gradient.
-  const perAxis =
-    octaves * NOISE_GRADIENT_BOUND * (Math.abs(scale) / TERRAIN_FEATURE);
+  const gradientPerAxis =
+    octaves * NOISE_GRADIENT_BOUND * (1 / TERRAIN_FEATURE) +
+    RIDGE_STRENGTH *
+      (octaves * NOISE_GRADIENT_BOUND * (1 / MOUNTAIN_FEATURE) +
+        MOUNTAIN_MASK_OCTAVES *
+          NOISE_GRADIENT_BOUND *
+          (1 / MOUNTAIN_MASK_FEATURE));
+  const perAxis = Math.abs(scale) * gradientPerAxis;
   const lipschitz = 1 / Math.sqrt(1 + 2 * perAxis * perAxis);
 
   const distance = (x: number, y: number, z: number): number =>

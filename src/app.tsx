@@ -1,15 +1,18 @@
 /**
  * The application shell: a canvas, a header, and whichever scene the URL asks for.
  *
- * Two scenes, and the switch is a query parameter rather than a build flag. The spike at
- * `?spike` is the diagnostic that proved the renderer, the packed vertex layout and the
- * octahedral fold; the application draws chunks with the same material and the same
- * layout, so when something looks wrong the first question is which of the two broke it.
- * A spike behind a build flag is a spike that stops being rebuilt.
+ * Three scenes now, and the switch is still a query parameter rather than a build
+ * flag. The default is the **game**: a first-person player over the terrain who
+ * digs and places with the same stroke machinery the sculptor uses. `?edit` keeps
+ * the orbit-and-sculpt view the application grew up as, and `?spike` is the phase
+ * 0 diagnostic that proved the renderer, the packed vertex layout and the
+ * octahedral fold. A spike behind a build flag is a spike that stops being
+ * rebuilt; a game that cannot be put back into the editor it came from is a game
+ * whose tools are only ever tested from the outside.
  *
- * The frame loop is here rather than in either scene, because it is the same loop for
- * both: follow the camera, then draw. All that differs is what "follow" means — the
- * session's chunk window tracks the orbit target, and the spike has nothing to stream.
+ * The frame loop differs by scene, and deliberately so: the game steps a body and
+ * follows it, the editor streams toward an orbit target, and the spike streams
+ * nothing. What they share is one renderer and one render call.
  */
 
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
@@ -35,15 +38,33 @@ import { LOD_OFF, lodIsOff, type LodBands } from "./world";
 import { SculptSession } from "./sculpt";
 import { DEFAULT_BRUSH } from "./edit/brush";
 import { buildSpikeScene, type SpikeScene } from "./spike-scene";
+import { createInput } from "./player/input";
+import { TouchControls } from "./player/touch-controls";
+import { Game } from "./engine/game";
+import { createWater, SEA_LEVEL } from "./world/water";
+import { createClouds } from "./world/clouds";
 
 import styles from "./app.module.css";
 
 /** How often the header is refreshed. A frame's worth of churn is unreadable. */
 const READOUT_INTERVAL_MS = 250;
 
-const isSpike = (): boolean =>
+/** The largest step a frame is allowed to advance the world, in seconds. */
+const MAX_STEP = 0.05;
+
+const searchHas = (flag: string): boolean =>
   typeof location !== "undefined" &&
-  new URLSearchParams(location.search).has("spike");
+  new URLSearchParams(location.search).has(flag);
+
+const isSpike = (): boolean => searchHas("spike");
+const isEdit = (): boolean => searchHas("edit");
+const isGame = (): boolean => !isSpike() && !isEdit();
+
+/** Whether this device points with something coarse, so the touch UI shows. */
+const isCoarsePointer = (): boolean =>
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(any-pointer: coarse)").matches;
 
 /**
  * The level-of-detail bands to run with, overridable from the query string.
@@ -52,8 +73,7 @@ const isSpike = (): boolean =>
  * The reason this is reachable at runtime rather than only in a test is that it is the
  * one experiment that separates the two possible causes of a crack: with every chunk at
  * full resolution there are no level transitions, so any crack that survives is not one,
- * and any that disappears was one. Reading it from the query string rather than from a
- * control keeps it a build-time-free switch that survives into a build somebody else runs.
+ * and any that disappears was one.
  */
 const lodBandsFromSearch = (): LodBands | undefined => {
   if (typeof location === "undefined") return undefined;
@@ -79,16 +99,22 @@ export default function App() {
     SpikeScene["counts"] | undefined
   >();
   const [spike] = createSignal(isSpike());
+  const [edit] = createSignal(isEdit());
   const [bands] = createSignal(lodBandsFromSearch());
   const [history, setHistory] = createSignal({ undo: 0, redo: 0 });
+  const [locked, setLocked] = createSignal(false);
+  const [underwater, setUnderwater] = createSignal(false);
+  const [coarse] = createSignal(isCoarsePointer());
+
+  // Created here rather than in the settled effect so the touch UI can bind to it
+  // and the effect can attach it to the canvas. It listens to nothing until it is
+  // attached, so an editor or spike session simply leaves it inert.
+  const input = createInput();
 
   // A memo rather than a `<Show>` with a narrowed child, because `<Show>` calls its children
   // function with tracking switched off. Reading the narrowed accessor *in the return
-  // position* — `{(probe) => describePrecision(probe())}` — therefore reads the signal
-  // untracked: a dev-mode STRICT_READ_UNTRACKED warning, and a row that would silently
-  // never update if the probe landed after the first render. Every other read of a narrowed
-  // accessor here is inside JSX, which compiles to a deferred insert and is tracked; this one
-  // was the exception, and the compiler output is what showed it.
+  // position* reads the signal untracked: a dev-mode STRICT_READ_UNTRACKED warning, and a row
+  // that would silently never update if the probe landed after the first render.
   const precisionText = createMemo(() => {
     const measured = precision();
     return measured === undefined
@@ -104,92 +130,73 @@ export default function App() {
   onSettled(() => {
     const measured = detectFragmentPrecision();
     setPrecision(measured);
-    // The console too, because "the probe failed" is the answer to a question this
-    // application was partly built to settle, and a readout in the corner of a canvas is
-    // easy to miss and impossible to copy out of a screenshot.
     if (!measured.ok)
       console.warn("fragment precision probe:", measured.reason);
 
-    let viewport: Viewport;
-    let orbit: OrbitController;
-    let disposeScene: () => void;
-    let follow: () => void;
-    /**
-     * Streams whatever the stroke in progress has grown, once per frame.
-     *
-     * A no-op for the spike, which has no model to stream. Separate from `follow` because
-     * the two answer different questions — where the window is, and what the model is — and
-     * lumping them together would hide a per-frame cost inside a function named for a
-     * scroll.
-     */
-    let streamStroke: () => void = () => {};
-    let session: Session | undefined;
-    let detachPointer: () => void = () => {};
-
+    // ---- Phase 0 spike ----
     if (spike()) {
       const scene = buildSpikeScene(canvas, measured);
-      viewport = scene.viewport;
-      orbit = scene.orbit;
       setSpikeCounts(scene.counts);
-      disposeScene = () => scene.dispose();
-      follow = () => {};
-    } else {
-      const sessionViewport: Viewport = createViewport(canvas, {
-        ...(measured.ok ? { precision: measured.precision } : {}),
-      });
-      sessionViewport.setBackground(new Color(0.07, 0.07, 0.09));
+      const detach = scene.orbit.attach(canvas);
+      scene.orbit.apply();
 
-      const material = new SurfaceMaterial();
-      // The preview is its own material rather than the surface's, so it reads as a tool
-      // and not as part of the model: unlit, and unaffected by anything in the field.
-      const previewMaterial = new MeshBasicMaterial({
-        color: new Color(1, 0.85, 0.4),
+      scene.viewport.renderer.setAnimationLoop(() => {
+        scene.orbit.apply();
+        scene.viewport.render();
       });
 
-      const chosen = bands();
-      session = new Session({
-        scene: sessionViewport.scene,
-        material,
-        operations: starterOperations(),
-        // The world the operations are carved out of. Passing it to the session and reading
-        // it back off `session.terrain` for the picker is deliberate: one source for the
-        // four numbers, so the field the brush traces and the field the workers mesh cannot
-        // disagree about where the ground is (ADR 0009).
-        terrain: DEFAULT_TERRAIN,
-        ...(chosen !== undefined ? { bands: chosen } : {}),
-      });
+      return () => {
+        detach();
+        scene.dispose();
+      };
+    }
 
-      // Seeded from the session's own operations rather than calling `starterOperations`
-      // again: the picker traces a field, and a field built from anything other than the
-      // model on screen is the exact disagreement this design exists to make impossible.
-      const sculpt = new SculptSession({
-        session,
-        camera: sessionViewport.camera,
-        operations: session.operations,
-        terrain: session.terrain,
-      });
+    // ---- The shared streamed scene ----
+    const viewport: Viewport = createViewport(canvas, {
+      ...(measured.ok ? { precision: measured.precision } : {}),
+    });
+    viewport.setBackground(new Color(0.07, 0.07, 0.09));
 
+    const material = new SurfaceMaterial();
+    const previewMaterial = new MeshBasicMaterial({
+      color: new Color(1, 0.85, 0.4),
+    });
+
+    const chosen = bands();
+    // The game starts on bare terrain. The editor's starter primitives sit
+    // around the origin, and a body spawned into a ninety-unit sphere is a body
+    // spawned inside the ground.
+    const initialOperations = isGame() ? [] : starterOperations();
+    const session = new Session({
+      scene: viewport.scene,
+      material,
+      operations: initialOperations,
+      terrain: DEFAULT_TERRAIN,
+      // A flatter window than the editor's: a walking player wants ground ahead
+      // and a little above, not a ball of sky.
+      ...(isGame() ? { radius: 5, yRadius: 2 } : {}),
+      ...(chosen !== undefined ? { bands: chosen } : {}),
+    });
+
+    const sculpt = new SculptSession({
+      session,
+      camera: viewport.camera,
+      operations: session.operations,
+      terrain: session.terrain,
+    });
+
+    // ---- The editor: orbit and sculpt by pointer ----
+    if (edit()) {
+      const orbit = new OrbitController(viewport.camera, { radius: 900 });
       const preview = new Mesh(
         new SphereGeometry(DEFAULT_BRUSH.radius, 24, 16),
         previewMaterial,
       );
       preview.visible = false;
-      sessionViewport.scene.add(preview);
+      viewport.scene.add(preview);
 
-      viewport = sessionViewport;
-      orbit = new OrbitController(sessionViewport.camera, { radius: 900 });
-
-      // Read through `live` because the animation loop below outlives this block's
-      // narrowing: `session` is declared as possibly undefined for the spike branch, and
-      // a closure over the narrowed local is the only way both branches can share the
-      // loop's shape.
-      const live = session;
-      follow = () => {
-        // The window follows what the camera looks at, not where the camera is: panning is
-        // how a user moves around a model, and a window that tracked the eye would scroll
-        // the whole world sideways on every dolly.
-        live.follow(orbit.state.target);
-
+      const follow = (): void => {
+        session.follow(orbit.state.target);
         const where = sculpt.preview;
         preview.visible = where.visible;
         if (where.visible) {
@@ -199,43 +206,21 @@ export default function App() {
             where.position.z,
           );
         }
-        // One sphere of unit radius scaled to the brush, so changing the size costs no
-        // geometry and no rebuild.
         preview.scale.setScalar(sculpt.settings.radius / DEFAULT_BRUSH.radius);
       };
-      // On the frame rather than on the pointer, so a fast drag's worth of dabs becomes one
-      // model send instead of one per dab. Sending a model cancels every mesh in flight, so
-      // the difference is not only cost: a per-dab send can cancel a chunk faster than it
-      // meshes and leave it blank for as long as the pointer is down.
-      streamStroke = () => sculpt.flushPreview();
-      disposeScene = () => {
-        live.dispose();
-        preview.geometry.dispose();
-        sessionViewport.dispose();
-      };
+      const streamStroke = (): void => sculpt.flushPreview();
 
-      // Left drags sculpt. Right-drag, shift-drag and the middle button navigate, so a
-      // drag can never do two things at once — and the orbit controller is told that a tool
-      // has the left button, since it listens on the same element.
       const pointerOptions = () => ({
         width: canvas.clientWidth,
         height: canvas.clientHeight,
       });
-
-      // Every pointer currently down, so a second finger can be recognised as navigation
-      // rather than as a second brush. On a touch screen it arrives as `button === 0`, the
-      // same as the first, so nothing about the event itself distinguishes the two.
       const down = new Set<number>();
-      /** The pointer whose press began the stroke, and so whose release ends it. */
       let sculptPointer: number | undefined;
 
       const onPointerDown = (event: PointerEvent): void => {
         if (event.button !== 0 || event.shiftKey) return;
         down.add(event.pointerId);
-        // The first finger owns the stroke. Later ones are navigation.
         sculptPointer ??= event.pointerId;
-        // Every finger is offered to the tool, which ignores a press while a stroke is
-        // already down — that invariant is its own, not something to re-derive here.
         sculpt.tool.pointerDown(
           event,
           pointerOptions().width,
@@ -251,19 +236,6 @@ export default function App() {
           pointerOptions().height,
         );
       };
-
-      /**
-       * A pointer is no longer down, one way or another.
-       *
-       * `abandon` covers the two ways a gesture can end without having been finished: the
-       * pointer leaving the canvas still held, and the browser cancelling it to do something
-       * of its own. Both throw the stroke away, because half a gesture is not what the user
-       * meant. An ordinary release commits it.
-       *
-       * Only the pointer that *began* the stroke can end it. A second finger lifting on its
-       * own is the user going back to painting, not finishing — treating that as the end
-       * would commit half of what they drew and silently drop the rest.
-       */
       const release = (pointerId: number, abandon: boolean): void => {
         down.delete(pointerId);
         if (pointerId !== sculptPointer) {
@@ -277,29 +249,15 @@ export default function App() {
         orbit.setToolOwnsLeft(false);
         setHistory({ undo: sculpt.undoDepth, redo: sculpt.redoDepth });
       };
-
-      const onPointerUp = (event: PointerEvent): void => {
+      const onPointerUp = (event: PointerEvent): void =>
         release(event.pointerId, false);
-      };
-      const onPointerCancel = (event: PointerEvent): void => {
-        // The browser has taken the pointer for something else — a scroll, a system gesture
-        // — so this gesture is not going to finish and must not be committed as though it
-        // had. Without this the pointer stays in `down` for ever and no later stroke can
-        // ever end.
+      const onPointerCancel = (event: PointerEvent): void =>
         release(event.pointerId, true);
-      };
       const onPointerLeave = (event: PointerEvent): void => {
-        // **Touch fires this as part of lifting a finger**, immediately after that finger's
-        // own `pointerup`. A pointer that is no longer down has already finished, and
-        // treating the leave as an abandonment throws away a stroke the user completed —
-        // which is why touch sculpting committed nothing at all until this was noticed. A
-        // mouse dragged off the canvas is still down, and that gesture really was abandoned.
         if (!down.has(event.pointerId)) return;
         release(event.pointerId, true);
       };
       const onKeyDown = (event: KeyboardEvent): void => {
-        // Ctrl or cmd, so the same keys work on either platform and so the shortcut a user
-        // reaches for first is the one their browser also uses for undo.
         if (!event.ctrlKey && !event.metaKey) return;
         const shift = event.shiftKey;
         if (event.key === "z" && !shift) sculpt.tool.undo();
@@ -313,55 +271,178 @@ export default function App() {
       canvas.addEventListener("pointerdown", onPointerDown);
       canvas.addEventListener("pointermove", onPointerMove);
       window.addEventListener("pointerup", onPointerUp);
-      // Bubbles, so it is on the window with the release rather than on the canvas with the
-      // leave — a cancelled pointer never reaches the element it was captured on.
       window.addEventListener("pointercancel", onPointerCancel);
       canvas.addEventListener("pointerleave", onPointerLeave);
       window.addEventListener("keydown", onKeyDown);
-      detachPointer = () => {
+
+      const detachOrbit = orbit.attach(canvas);
+      orbit.apply();
+
+      let lastReadout = 0;
+      viewport.renderer.setAnimationLoop((time: number) => {
+        orbit.apply();
+        follow();
+        streamStroke();
+        viewport.render();
+
+        if (time - lastReadout > READOUT_INTERVAL_MS) {
+          lastReadout = time;
+          setStats(session.stats());
+        }
+      });
+
+      return () => {
         canvas.removeEventListener("pointerdown", onPointerDown);
         canvas.removeEventListener("pointermove", onPointerMove);
         window.removeEventListener("pointerup", onPointerUp);
         window.removeEventListener("pointercancel", onPointerCancel);
         canvas.removeEventListener("pointerleave", onPointerLeave);
         window.removeEventListener("keydown", onKeyDown);
+        detachOrbit();
+        preview.geometry.dispose();
+        session.dispose();
+        viewport.dispose();
       };
     }
 
-    const detach = orbit.attach(canvas);
-    orbit.apply();
+    // ---- The game: a first-person player over the terrain ----
+    // A sky colour rather than the editor's near-black, so water and cloud meet
+    // the horizon rather than a void.
+    viewport.setBackground(new Color(0.45, 0.62, 0.9));
+    const game = new Game({
+      session,
+      sculpt,
+      viewport,
+      input,
+      seaLevel: SEA_LEVEL,
+    });
+    const water = createWater(viewport.scene, SEA_LEVEL);
+    const clouds = createClouds(viewport.scene, DEFAULT_TERRAIN.seed);
+    const detachInput = input.attach(canvas);
+    const stopLock = input.onPointerLockChange(setLocked);
 
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      const shift = event.shiftKey;
+      if (event.key === "z" && !shift) sculpt.tool.undo();
+      else if ((event.key === "z" && shift) || event.key === "y")
+        sculpt.tool.redo();
+      else return;
+      event.preventDefault();
+      setHistory({ undo: sculpt.undoDepth, redo: sculpt.redoDepth });
+    };
+    window.addEventListener("keydown", onKeyDown);
+
+    let lastTime = 0;
     let lastReadout = 0;
     viewport.renderer.setAnimationLoop((time: number) => {
-      orbit.apply();
-      follow();
-      // Before the draw, so a frame shows everything the last frame of pointer movement
-      // asked for rather than the frame before it.
-      streamStroke();
+      const dt =
+        lastTime === 0 ? 1 / 60 : Math.min((time - lastTime) / 1000, MAX_STEP);
+      lastTime = time;
+      game.tick(dt);
+      water.update(game.player.position);
+      clouds.update(game.player.position, time / 1000);
+      if (game.underwater !== underwater()) setUnderwater(game.underwater);
       viewport.render();
 
-      if (!spike() && time - lastReadout > READOUT_INTERVAL_MS) {
+      if (time - lastReadout > READOUT_INTERVAL_MS) {
         lastReadout = time;
-        setStats(session?.stats());
+        setStats(session.stats());
+        setHistory({ undo: sculpt.undoDepth, redo: sculpt.redoDepth });
       }
     });
 
     return () => {
-      detachPointer();
-      detach();
-      disposeScene();
+      window.removeEventListener("keydown", onKeyDown);
+      stopLock();
+      detachInput();
+      water.dispose();
+      clouds.dispose();
+      session.dispose();
+      viewport.dispose();
     };
   });
 
   return (
     <div class={styles.root}>
       <canvas ref={canvas} class={styles.canvas} />
+      <Show when={isGame() && !coarse() && !locked()}>
+        <div
+          style={{
+            position: "absolute",
+            inset: "0",
+            display: "flex",
+            "align-items": "center",
+            "justify-content": "center",
+            color: "rgba(255,255,255,0.85)",
+            "font-size": "18px",
+            "pointer-events": "none",
+            "text-shadow": "0 1px 4px rgba(0,0,0,0.8)",
+          }}
+        >
+          Click to play — left digs, right places
+        </div>
+      </Show>
+      <Show when={isGame()}>
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            width: "14px",
+            height: "14px",
+            margin: "-7px 0 0 -7px",
+            "pointer-events": "none",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: "6px",
+              top: "0",
+              width: "2px",
+              height: "14px",
+              background: "rgba(255,255,255,0.8)",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              left: "0",
+              top: "6px",
+              width: "14px",
+              height: "2px",
+              background: "rgba(255,255,255,0.8)",
+            }}
+          />
+        </div>
+        <Show when={underwater()}>
+          <div
+            style={{
+              position: "absolute",
+              inset: "0",
+              background: "rgba(26, 89, 140, 0.45)",
+              "pointer-events": "none",
+            }}
+          />
+        </Show>
+        <Show when={coarse()}>
+          <TouchControls input={input} />
+        </Show>
+      </Show>
       <header class={styles.header}>
         <h1 class={styles.title}>bm-sculpt</h1>
         <p class={styles.subtitle}>
           <Show
             when={spike()}
-            fallback="Phase 4 — chunked surface nets, streamed in workers"
+            fallback={
+              <Show
+                when={edit()}
+                fallback="Game — first-person mountains, dig and place"
+              >
+                Phase 4 — chunked surface nets, streamed in workers
+              </Show>
+            }
           >
             Phase 0 spike — renderer, packed vertices, sampler3D
           </Show>
@@ -404,12 +485,6 @@ export default function App() {
                     redoable
                   </div>
                 </Show>
-                <Show when={value().staleRefusals > 0 || value().failures > 0}>
-                  <div class={styles.row}>
-                    refused {value().staleRefusals} stale, {value().failures}{" "}
-                    failed
-                  </div>
-                </Show>
               </>
             )}
           </Show>
@@ -420,12 +495,23 @@ export default function App() {
             fallback={
               <>
                 drag or right-drag to orbit · shift-drag or middle-drag to pan ·
-                wheel or pinch to dolly · <a href="?spike">phase 0 spike</a>
+                wheel or pinch to dolly · <a href="?">game</a>
               </>
             }
           >
-            drag to sculpt · right-drag to orbit · shift-drag to pan · ctrl-z
-            undo · ctrl-shift-z redo
+            <Show
+              when={edit()}
+              fallback={
+                <>
+                  WASD move · mouse look · space jump · left digs · right places
+                  · ctrl-z undo · <a href="?edit">editor</a> ·{" "}
+                  <a href="?spike">spike</a>
+                </>
+              }
+            >
+              drag to sculpt · right-drag to orbit · shift-drag to pan · ctrl-z
+              undo · <a href="?">game</a> · <a href="?spike">spike</a>
+            </Show>
           </Show>
         </p>
       </header>
