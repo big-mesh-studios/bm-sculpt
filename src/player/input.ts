@@ -69,8 +69,16 @@ const MOVE_KEYS: Record<string, readonly [number, number]> = {
   KeyD: [1, 0],
 };
 
-/** Whether the event target is a field a player is typing into, which must keep its keys. */
-const isEditableTarget = (event: Event): boolean => {
+/**
+ * Whether the event target is a field a player is typing into, which must keep
+ * its keys — the console's own command input above all.
+ *
+ * Exported because two listeners need it and one definition is the only way to
+ * be sure they agree: the console's `/` shortcut must not open the console on a
+ * slash typed into the console, and the movement keys must not move the player
+ * while one is being typed into it.
+ */
+export const isEditableTarget = (event: Event): boolean => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
@@ -110,6 +118,25 @@ export interface InputController {
   pointerLocked(): boolean;
   /** Subscribes to pointer-lock changes; returns a function that removes it. */
   onPointerLockChange(listener: (locked: boolean) => void): () => void;
+  /**
+   * Gives up the pointer lock while something else wants the cursor — the
+   * console, above all, since a locked pointer swallows every keystroke aimed
+   * anywhere but the crosshair.
+   *
+   * Counted rather than a boolean, because two things can want the cursor at
+   * once and the lock must not be handed back to the first one to finish. The
+   * returned function releases this one hold, is safe to call twice, and
+   * deliberately does **not** re-take the lock: the canvas re-takes it on the
+   * next click, and taking it back unasked would fight the "click to play"
+   * prompt that appears alongside it. See ADR 0010.
+   */
+  suspendPointerLock(): () => void;
+  /** Whether something is currently holding the pointer lock released. */
+  pointerLockSuspended(): boolean;
+  /** Subscribes to suspension changes; returns a function that removes it. */
+  onPointerLockSuspensionChange(
+    listener: (suspended: boolean) => void,
+  ): () => void;
 }
 
 /** Radians of look per pixel is small, so deltas are scaled by the physics, not here. */
@@ -143,6 +170,10 @@ export const createInput = (): InputController => {
   let lookPointerLastY = 0;
   let locked = false;
   const lockListeners = new Set<(locked: boolean) => void>();
+  /** The holders keeping the pointer lock released, one entry each. */
+  const holders = new Set<symbol>();
+  let suspended = false;
+  const suspensionListeners = new Set<(suspended: boolean) => void>();
 
   const markMove = (x: number, y: number): void => {
     lookDx += x;
@@ -154,6 +185,43 @@ export const createInput = (): InputController => {
     if (next === locked) return;
     locked = next;
     for (const listener of lockListeners) listener(locked);
+  };
+
+  const syncSuspension = (): void => {
+    const next = holders.size > 0;
+    if (next === suspended) return;
+    suspended = next;
+    for (const listener of suspensionListeners) listener(suspended);
+  };
+
+  /**
+   * Holds are a set of tokens rather than a count, which settles two ways a
+   * count gets wrong at once: a disposer called twice deletes one entry and
+   * stops, and a disposer called after a teardown — the holders having already
+   * been cleared — finds nothing of its own to delete and stops. Either way the
+   * first holder's disposal can never take the lock back from the rest.
+   *
+   * The lock is only let go when the first holder asks, and nothing here ever
+   * re-takes it. A browser that refused the lock, or a canvas that has since
+   * been replaced, would both end up granted one the player never asked for
+   * again.
+   */
+  const suspendPointerLock = (): (() => void) => {
+    const token = Symbol();
+    holders.add(token);
+    if (holders.size === 1) {
+      if (locked) {
+        void document.exitPointerLock?.();
+      }
+      syncSuspension();
+    }
+
+    return () => {
+      if (!holders.delete(token)) return;
+      if (holders.size === 0) {
+        syncSuspension();
+      }
+    };
   };
 
   const install = (): void => {
@@ -292,34 +360,36 @@ export const createInput = (): InputController => {
     }
   }
 
+  /**
+   * Forgets the listeners and everything they were gathering, including the holds
+   * the console keeps on the lock — a teardown that left them would have the next
+   * suspension read as a second one, and the lock would never be let go again.
+   */
+  function teardown(): void {
+    detachCanvas();
+    controller?.abort();
+    controller = null;
+    canvas = undefined;
+    lookPointer = undefined;
+    locked = false;
+    holders.clear();
+    syncSuspension();
+  }
+
   return {
     attach(element) {
-      dispose();
+      teardown();
       canvas = element;
       element.addEventListener("pointerdown", onCanvasPointerDown);
       element.addEventListener("pointermove", onCanvasPointerMove);
       element.addEventListener("pointerup", onCanvasPointerUp);
       element.addEventListener("pointercancel", onCanvasPointerUp);
       install();
-      return dispose;
-
-      function dispose(): void {
-        detachCanvas();
-        controller?.abort();
-        controller = null;
-        canvas = undefined;
-        lookPointer = undefined;
-        locked = false;
-      }
+      return teardown;
     },
 
     dispose() {
-      detachCanvas();
-      controller?.abort();
-      controller = null;
-      canvas = undefined;
-      lookPointer = undefined;
-      locked = false;
+      teardown();
     },
 
     setEnabled(value) {
@@ -397,6 +467,19 @@ export const createInput = (): InputController => {
       lockListeners.add(listener);
       return () => {
         lockListeners.delete(listener);
+      };
+    },
+
+    suspendPointerLock,
+
+    pointerLockSuspended() {
+      return suspended;
+    },
+
+    onPointerLockSuspensionChange(listener) {
+      suspensionListeners.add(listener);
+      return () => {
+        suspensionListeners.delete(listener);
       };
     },
   };

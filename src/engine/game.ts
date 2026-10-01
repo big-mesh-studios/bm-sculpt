@@ -142,6 +142,42 @@ export class Game {
     );
   }
 
+  /**
+   * Turns flight on or off, toggling when `flying` is omitted: no gravity, and
+   * forward/back follows the full look direction.
+   *
+   * Turning it **on** discards the fall the player was in. Their velocity
+   * ramps toward the flight target from wherever the last walk left it, and a
+   * hundred units a second downward would carry them through the floor they
+   * were aiming at before the ramp could act on it.
+   */
+  setFlying(flying?: boolean): string {
+    const next = flying ?? !this.player.flying;
+    this.player.flying = next;
+    if (next) {
+      this.player.vy = 0;
+      this.player.onGround = false;
+    }
+    return next ? "flying" : "walking";
+  }
+
+  /**
+   * Turns no-clip on or off, toggling when `noclip` is omitted: flight control
+   * with collision off, so the player passes through solid voxels.
+   *
+   * The fall is discarded on the way on for the same reason as `setFlying` —
+   * no-clip's integrator never settles a velocity itself.
+   */
+  setNoClip(noclip?: boolean): string {
+    const next = noclip ?? !this.player.noclip;
+    this.player.noclip = next;
+    if (next) {
+      this.player.vy = 0;
+      this.player.onGround = false;
+    }
+    return next ? "no-clip" : "collisions on";
+  }
+
   /** The camera as the picker and the aim tool need it. */
   private camera(): PickCamera {
     return this.viewport.camera;

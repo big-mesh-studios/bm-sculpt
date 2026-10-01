@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createInput, type InputController } from "./input";
 
@@ -101,5 +101,154 @@ describe("touch", () => {
     expect(snap.lookDx).toBe(5);
     expect(snap.lookDy).toBe(-2);
     expect(input.consume().lookDx).toBe(0);
+  });
+});
+
+/**
+ * The pointer lock, and the console's hold on it.
+ *
+ * jsdom implements neither the lock nor its events, so the lock is stubbed here
+ * and driven the way a browser drives it: `exitPointerLock` clears
+ * `pointerLockElement` and dispatches the change, which is the whole of what the
+ * controller observes.
+ */
+describe("pointer lock suspension", () => {
+  let exitPointerLock: ReturnType<typeof vi.fn>;
+
+  /** Attaches an input and takes the pointer lock the way a click would. */
+  const locking = (): InputController => {
+    const element = document.createElement("canvas");
+    document.body.append(element);
+    const input = createInput();
+    input.attach(element);
+    Object.defineProperty(document, "pointerLockElement", {
+      configurable: true,
+      value: element,
+    });
+    document.dispatchEvent(new Event("pointerlockchange"));
+    expect(input.pointerLocked()).toBe(true);
+    return input;
+  };
+
+  beforeEach(() => {
+    exitPointerLock = vi.fn(() => {
+      Object.defineProperty(document, "pointerLockElement", {
+        configurable: true,
+        value: null,
+      });
+      document.dispatchEvent(new Event("pointerlockchange"));
+    });
+    document.exitPointerLock = exitPointerLock as unknown as () => void;
+  });
+
+  it("reports itself suspended for as long as it is held", () => {
+    const input = attach();
+    const release = input.suspendPointerLock();
+    expect(input.pointerLockSuspended()).toBe(true);
+    release();
+    expect(input.pointerLockSuspended()).toBe(false);
+  });
+
+  it("does not ask for a lock to be let go that was never taken", () => {
+    const input = attach();
+    input.suspendPointerLock();
+    expect(exitPointerLock).not.toHaveBeenCalled();
+  });
+
+  it("lets the lock go rather than only reporting that it has", () => {
+    const input = locking();
+    const release = input.suspendPointerLock();
+    expect(exitPointerLock).toHaveBeenCalledOnce();
+    expect(input.pointerLocked()).toBe(false);
+
+    release();
+    // Deliberately not re-taken: the canvas asks for it again on the next
+    // click, which is the same prompt the game already shows. See ADR 0010.
+    expect(input.pointerLocked()).toBe(false);
+  });
+
+  it("waits for the last of several holders before letting the lock go", () => {
+    const input = attach();
+    const first = input.suspendPointerLock();
+    const second = input.suspendPointerLock();
+    expect(exitPointerLock).not.toHaveBeenCalled();
+
+    first();
+    expect(input.pointerLockSuspended()).toBe(true);
+    second();
+    expect(input.pointerLockSuspended()).toBe(false);
+  });
+
+  it("ignores a holder that has already let go", () => {
+    const input = attach();
+    const release = input.suspendPointerLock();
+    release();
+    release();
+    // A double release must not corrupt the holds, or every later suspension
+    // would read as a second one and never let the lock go again.
+    expect(input.pointerLockSuspended()).toBe(false);
+    const again = input.suspendPointerLock();
+    expect(input.pointerLockSuspended()).toBe(true);
+    again();
+    expect(input.pointerLockSuspended()).toBe(false);
+  });
+
+  it("does not let a disposer running after a teardown take the lock back", () => {
+    // The console holds the lock open, something tears the controller down under
+    // it, and the console's own disposer then runs. Its hold is already gone, so
+    // it must find nothing of its own to release — and the next suspension must
+    // be read as the first one again.
+    const input = attach();
+    const release = input.suspendPointerLock();
+    input.dispose();
+    expect(input.pointerLockSuspended()).toBe(false);
+    release();
+
+    const again = input.suspendPointerLock();
+    expect(input.pointerLockSuspended()).toBe(true);
+    again();
+    expect(input.pointerLockSuspended()).toBe(false);
+  });
+
+  it("reports each edge once", () => {
+    const input = attach();
+    const listener = vi.fn();
+    const stop = input.onPointerLockSuspensionChange(listener);
+
+    const first = input.suspendPointerLock();
+    const second = input.suspendPointerLock();
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenLastCalledWith(true);
+
+    // Still a holder outstanding, so releasing either is not an edge.
+    first();
+    expect(listener).toHaveBeenCalledOnce();
+    second();
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith(false);
+
+    stop();
+  });
+
+  it("stops reporting once the holder has unsubscribed", () => {
+    const input = attach();
+    const listener = vi.fn();
+    const stop = input.onPointerLockSuspensionChange(listener);
+    stop();
+    input.suspendPointerLock();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("drops a suspension held across a teardown", () => {
+    const input = attach();
+    input.suspendPointerLock();
+    input.dispose();
+    expect(input.pointerLockSuspended()).toBe(false);
+    // And the count is back where it started, so the next suspension is read
+    // as the first one again rather than as a second.
+    const release = input.suspendPointerLock();
+    expect(input.pointerLockSuspended()).toBe(true);
+    release();
+    expect(input.pointerLockSuspended()).toBe(false);
   });
 });

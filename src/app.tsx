@@ -23,6 +23,8 @@ import {
   SphereGeometry,
 } from "@random-mesh/rmsl/scene";
 
+import { Console, createConsole, type ConsoleState } from "./console/console";
+import { createCommands, type Commander } from "./console/commands";
 import { OrbitController } from "./controls/orbit-camera";
 import {
   describePrecision,
@@ -105,11 +107,34 @@ export default function App() {
   const [locked, setLocked] = createSignal(false);
   const [underwater, setUnderwater] = createSignal(false);
   const [coarse] = createSignal(isCoarsePointer());
+  const [suspended, setSuspended] = createSignal(false);
 
   // Created here rather than in the settled effect so the touch UI can bind to it
   // and the effect can attach it to the canvas. It listens to nothing until it is
   // attached, so an editor or spike session simply leaves it inert.
   const input = createInput();
+
+  /**
+   * The command table the console runs against, held outside the settled effect
+   * because it can only be built once there is a `Game` to ask, and the console
+   * has to be able to read it — for its completions — from the component body.
+   * `null` until the game scene exists, which is also the answer the console
+   * gives for a command run before then.
+   */
+  const [commander, setCommander] = createSignal<Commander | null>(null);
+
+  /**
+   * The console's scrollback and command handling, built here rather than in the
+   * game branch so that closing and reopening the panel keeps its history. See
+   * `docs/adr/0010-suspend-the-pointer-lock-not-the-input.md` for the other
+   * thing the console has to own above the frame loop.
+   */
+  const terminal: ConsoleState = createConsole({
+    onCommand: (line) =>
+      commander()?.run(line) ??
+      "the world is still loading — try again shortly",
+    commands: () => commander()?.help() ?? [],
+  });
 
   // A memo rather than a `<Show>` with a narrowed child, because `<Show>` calls its children
   // function with tracking switched off. Reading the narrowed accessor *in the return
@@ -320,6 +345,16 @@ export default function App() {
     const clouds = createClouds(viewport.scene, DEFAULT_TERRAIN.seed);
     const detachInput = input.attach(canvas);
     const stopLock = input.onPointerLockChange(setLocked);
+    const stopSuspension = input.onPointerLockSuspensionChange(setSuspended);
+    // The console's commands are the game's own methods by another name, so the
+    // game is what they are built over. It exists here, and nowhere earlier,
+    // which is why the table can only be built now.
+    setCommander(
+      createCommands({
+        setFlying: (flying) => game.setFlying(flying),
+        setNoClip: (noclip) => game.setNoClip(noclip),
+      }),
+    );
 
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!event.ctrlKey && !event.metaKey) return;
@@ -354,7 +389,9 @@ export default function App() {
 
     return () => {
       window.removeEventListener("keydown", onKeyDown);
+      setCommander(null);
       stopLock();
+      stopSuspension();
       detachInput();
       water.dispose();
       clouds.dispose();
@@ -366,7 +403,10 @@ export default function App() {
   return (
     <div class={styles.root}>
       <canvas ref={canvas} class={styles.canvas} />
-      <Show when={isGame() && !coarse() && !locked()}>
+      {/* Not while the pointer lock is merely suspended — the console has taken
+          it, so "click to play" would be inviting a click at a moment when the
+          world is already being played. */}
+      <Show when={isGame() && !coarse() && !locked() && !suspended()}>
         <div
           style={{
             position: "absolute",
@@ -504,7 +544,7 @@ export default function App() {
               fallback={
                 <>
                   WASD move · mouse look · space jump · left digs · right places
-                  · ctrl-z undo · <a href="?edit">editor</a> ·{" "}
+                  · ctrl-z undo · / for commands · <a href="?edit">editor</a> ·{" "}
                   <a href="?spike">spike</a>
                 </>
               }
@@ -515,6 +555,13 @@ export default function App() {
           </Show>
         </p>
       </header>
+      {/* Last, so it paints over the crosshair and the click-to-play prompt
+          without either needing a z-index of its own. The game scene only: its
+          commands are the player's, and an editor with no player to fly would
+          be a console of usage errors. */}
+      <Show when={isGame()}>
+        <Console terminal={terminal} input={input} />
+      </Show>
     </div>
   );
 }

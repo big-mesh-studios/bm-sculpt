@@ -22,13 +22,14 @@ which of the two broke it.
 Remaining work, and what is left of the phases after this one, is written down in
 [`TODO.md`](TODO.md).
 
-|              |                                                                                                                                                                                                                                                                            |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Renderer** | [`@random-mesh/rmsl`](https://www.npmjs.com/package/@random-mesh/rmsl) 1.14.0 — a scene graph and a node-graph shader DSL. Not a three.js fork; see [ADR 0001](docs/adr/0001-rmsl-over-three.md).                                                                          |
-| **UI**       | Solid **2.0.0-beta.29**, `solid-js` + `@solidjs/web` + `@solidjs/signals`, coordinated at one version. The JSX transform runs through Babel rather than the native compiler, so the toolchain has no native step and builds anywhere Node does; see `pnpm-workspace.yaml`. |
-| **Build**    | Vite 8, `vite-plugin-solid@3.0.0-next.5`, TypeScript in `strict` with `noUnusedLocals` and `noUnusedParameters`.                                                                                                                                                           |
-| **Style**    | One Prettier config, no linter. Type safety is `tsc --noEmit`.                                                                                                                                                                                                             |
-| **Layout**   | One package. `pnpm-workspace.yaml` exists for the `catalog:` it holds, which every version more than one place needs is written into once.                                                                                                                                 |
+|              |                                                                                                                                                                                                                                                                                        |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Renderer** | [`@random-mesh/rmsl`](https://www.npmjs.com/package/@random-mesh/rmsl) 1.14.0 — a scene graph and a node-graph shader DSL. Not a three.js fork; see [ADR 0001](docs/adr/0001-rmsl-over-three.md).                                                                                      |
+| **UI**       | Solid **2.0.0-beta.29**, `solid-js` + `@solidjs/web` + `@solidjs/signals`, coordinated at one version. The JSX transform runs through Babel rather than the native compiler, so the toolchain has no native step and builds anywhere Node does; see `pnpm-workspace.yaml`.             |
+| **Build**    | Vite 8, `vite-plugin-solid@3.0.0-next.5`, TypeScript in `strict` with `noUnusedLocals` and `noUnusedParameters`.                                                                                                                                                                       |
+| **Style**    | One Prettier config, no linter. Type safety is `tsc --noEmit`.                                                                                                                                                                                                                         |
+| **Layout**   | One package. `pnpm-workspace.yaml` exists for the `catalog:` it holds, which every version more than one place needs is written into once.                                                                                                                                             |
+| **Console**  | `/` for a floating terminal over the game: fuzzy command completion, history, `/help`, and the fullscreen button beside its trigger. Commands are declared in one table (`src/console/commands.ts`) whose `run` closures call plain methods on `Game`; neither knows a console exists. |
 
 ## Phase 0 spikes
 
@@ -106,21 +107,64 @@ all of which are JSX-free, run without a compiler at all.
 The architecture decisions, each with its costs and its rejected alternatives,
 are in [`docs/adr/`](docs/adr/README.md):
 
-|                                                        |                                                       |
-| ------------------------------------------------------ | ----------------------------------------------------- |
-| [0001](docs/adr/0001-rmsl-over-three.md)               | Render with rmsl, not three.js                        |
-| [0002](docs/adr/0002-computed-field-never-stored.md)   | The field is computed, never stored                   |
-| [0003](docs/adr/0003-surface-nets.md)                  | Surface Nets per chunk, not marching cubes            |
-| [0004](docs/adr/0004-csg-per-chunk.md)                 | Each chunk evaluates the operations at its own LOD    |
-| [0005](docs/adr/0005-streaming-shape.md)               | Slot-indexed arrays and a coordinate map              |
-| [0006](docs/adr/0006-field-saturation.md)              | The field saturates at a fixed distance               |
-| [0007](docs/adr/0007-window-presence-and-lod-reset.md) | Invalidating a slot invalidates what a query may read |
-| [0008](docs/adr/0008-worker-pool-and-generations.md)   | One chunk per worker, and a generation per request    |
+|                                                                 |                                                       |
+| --------------------------------------------------------------- | ----------------------------------------------------- |
+| [0001](docs/adr/0001-rmsl-over-three.md)                        | Render with rmsl, not three.js                        |
+| [0002](docs/adr/0002-computed-field-never-stored.md)            | The field is computed, never stored                   |
+| [0003](docs/adr/0003-surface-nets.md)                           | Surface Nets per chunk, not marching cubes            |
+| [0004](docs/adr/0004-csg-per-chunk.md)                          | Each chunk evaluates the operations at its own LOD    |
+| [0005](docs/adr/0005-streaming-shape.md)                        | Slot-indexed arrays and a coordinate map              |
+| [0006](docs/adr/0006-field-saturation.md)                       | The field saturates at a fixed distance               |
+| [0007](docs/adr/0007-window-presence-and-lod-reset.md)          | Invalidating a slot invalidates what a query may read |
+| [0008](docs/adr/0008-worker-pool-and-generations.md)            | One chunk per worker, and a generation per request    |
+| [0009](docs/adr/0009-picking-and-history.md)                    | Edits land where the field says, and are undoable     |
+| [0010](docs/adr/0010-suspend-the-pointer-lock-not-the-input.md) | Suspend the pointer lock, not the input               |
 
 Phases 1 to 8, in order, are in the project plan. Phases 0 to 5 are the sculpting
 application and are independently shippable; 6 to 8 are an infinite streaming
 world, and because the field is never stored they add no changes to the CSG or the
 mesher — only a `baseField` binding and a camera.
+
+## The game and its console
+
+The application grew a third scene, the default one: a first-person player over the
+terrain who digs and places with the same stroke machinery the sculptor uses. `src/player/`
+is that player's physics — arithmetic over the field, testable without a browser —
+and `src/engine/game.ts` is the seam where the player, the input, the camera and the
+streamed world meet once a frame.
+
+Press `/` and a floating terminal opens. It completes command names as they are typed,
+ranks the fuzzy matches so the arrow keys walk the good ones first, ghosts the rest of a
+name behind the caret, walks back through what has been run, and answers `/help` with the
+whole vocabulary. Escape closes it; a click outside it closes it. The scrollback and the
+history outlive the panel, so reopening shows the same session.
+
+Two things had to be settled for that, and both are decisions rather than details.
+
+**A locked pointer delivers no key events at all**, so a terminal opened over a locked
+canvas cannot be typed into — and the cursor cannot be aimed at anything. The input
+controller grows `suspendPointerLock()`, and the console holds it for exactly as long as
+its panel is showing. The lock is deliberately _not_ re-taken on release: the canvas
+already asks for it on the next click, which is the same "click to play" prompt the
+application shows anyway. [ADR 0010](docs/adr/0010-suspend-the-pointer-lock-not-the-input.md)
+records the cost — one click to resume — and what else was rejected.
+
+**Commands are declared in one table and call plain methods on `Game`.**
+`src/console/commands.ts` holds a `Commander` over a literal of `{ description, args,
+run }`, where each `run` does its own argument parsing and validation and then asks the
+game to do something typed. `Game.setFlying` and `Game.setNoClip` know nothing about
+where they were called from; `Player.flying` and `Player.noclip` know nothing either.
+That is the shape `big-mesh-studios`'s voxelscape uses for its own console, kept for the
+same reason: a command that reaches into a player's fields directly ends up owning
+physics behaviour — the reason a fall in progress is discarded on the way into flight
+belongs next to the integrator that would have carried it, not in a parse closure.
+
+The fullscreen button beside the `>_` trigger runs `/fullscreen` rather than a second
+path to the same place, so the button and the command are one thing that can only be
+tested once. It asks for fullscreen, asks for `screen.orientation.lock("landscape")` —
+the button exists because a phone held sideways is the ordinary way to play this — and
+reports what it asked for rather than waiting to find out what it got, which keeps
+`Commander.run` synchronous and every command in the table a `string` to print.
 
 ## Phase 5 — sculpting on it
 

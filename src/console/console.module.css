@@ -1,0 +1,216 @@
+/*
+ * The console panel, and the two round buttons that open it and go fullscreen.
+ *
+ * `--margin` is declared here rather than in `index.css` because everything
+ * else in that file is a global reset, and a console-specific custom property
+ * in a global reset is the kind of thing nobody can later find. It is set on
+ * `.underlay`, so it inherits to the whole subtree and reaches nothing else.
+ */
+
+.underlay {
+  --margin: 12px;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* The fullscreen and console toggles, sharing the top-right corner. The panel
+   anchors to the console button's right edge, so it stays put as the row grows
+   leftward. */
+.controls {
+  position: absolute;
+  right: var(--margin);
+  top: var(--margin);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.anchor,
+.fullscreen {
+  width: 30px;
+  height: 30px;
+  border-radius: 15px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+  touch-action: none;
+}
+
+.anchor {
+  font: bold 12px monospace;
+  anchor-name: --console;
+}
+
+.fullscreen svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* The floating terminal. CSS-anchored to the trigger button rather than given
+   its own offsets, because the button's right edge is what the panel hangs
+   from: it is the one edge that stays put while the row above it grows
+   leftward, and it moves with the panel's own margin rather than restating it. */
+.panel {
+  position: absolute;
+  position-anchor: --console;
+  top: anchor(bottom);
+  right: anchor(inside);
+  left: auto;
+  margin-top: calc(var(--margin) / 2);
+  width: min(360px, calc(100vw - 24px));
+  /* Tall enough for a few lines of scrollback and the input row, and short
+     enough to leave the horizon visible above it — the point of a floating
+     console is that the world keeps playing behind it. */
+  height: 260px;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 12, 16, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  pointer-events: auto;
+  overflow: hidden;
+  z-index: 3;
+}
+
+.terminal {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  font: 12px monospace;
+  color: #c8d6e5;
+}
+
+.output {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+  white-space: pre-wrap;
+  /* long words wrap where they must rather than everywhere they can, so a
+     description reads as prose and only an unbroken token is cut */
+  overflow-wrap: anywhere;
+}
+
+.help {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 10px;
+  row-gap: 2px;
+  margin: 2px 0;
+  white-space: normal;
+}
+
+.help dd {
+  margin: 0;
+}
+
+.name {
+  color: #6fcf97;
+}
+
+.args {
+  color: #f2c94c;
+}
+
+.prompt {
+  color: #6b7c8c;
+}
+
+.input-container {
+  display: flex;
+  align-items: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.prefix {
+  padding: 6px 4px 6px 8px;
+  color: #6fcf97;
+}
+
+.field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  anchor-name: --console-suggestions;
+}
+
+.input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #fff;
+  font: 12px monospace;
+  padding: 6px 8px 6px 0;
+  min-width: 0;
+}
+
+/* the rest of the command being typed, laid over the input on the same grid as
+   the text in it, so it reads as unwritten characters after the caret */
+.completion {
+  position: absolute;
+  inset: 0;
+  padding: 6px 8px 6px 0;
+  font: 12px monospace;
+  color: #6b7c8c;
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* holds the completion's place behind the characters that are really there */
+.typed {
+  visibility: hidden;
+}
+
+/* the commands the typed name could still become, standing on top of the input
+   and reaching up over the output, with the one the arrow keys are on
+   highlighted */
+.suggestions {
+  position-anchor: --console-suggestions;
+  /* the anchor's edges, in place of the `inset: 0`, `margin: auto` and
+     `width: fit-content` that would centre a popover on the viewport at the
+     width of its longest name */
+  top: auto;
+  bottom: calc(anchor(top) + 6px);
+  left: anchor(left);
+  right: calc(anchor(right) + var(--margin));
+  width: auto;
+  margin: 0;
+  /* four names, with the rest scrolled to: a row is its 14px line of text
+     between 2px of padding, and the box measured to the border takes in the 1px
+     edges as well */
+  max-height: calc(4 * 18px + 2px);
+  overflow-y: auto;
+  padding: 0;
+  list-style: none;
+  background: rgba(0, 0, 0, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+}
+
+.suggestion {
+  padding: 2px 8px;
+  line-height: 14px;
+  color: #6b7c8c;
+  cursor: pointer;
+  white-space: pre;
+}
+
+.suggestion:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.selected {
+  background: rgba(111, 207, 151, 0.16);
+  color: #6fcf97;
+}
