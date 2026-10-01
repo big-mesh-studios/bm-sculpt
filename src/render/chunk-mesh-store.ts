@@ -116,8 +116,14 @@ export class ChunkMeshStore {
   /**
    * Marks a slot stale: frees its buffers and takes it out of the scene.
    *
-   * The one way a slot becomes unfilled, which is ADR 0007's invariant. Everything that
-   * invalidates a slot routes through here, so there is no second path that forgets.
+   * **The one way a slot's geometry is ever discarded.** Everything that leaves a slot
+   * holding another cell's surface routes through here, so there is no second path that
+   * could remove a mesh and forget to move the revision — and no path that moves the
+   * revision without taking the surface out with it, which is the failure ADR 0007 records
+   * happening twice in one method.
+   *
+   * The counterpart to {@link markOutOfDate}, which also moves the revision but keeps the
+   * buffers. Between them is every way a slot stops being what the window wants.
    */
   markStale(slot: number): void {
     const entry = this.slots[slot];
@@ -128,7 +134,7 @@ export class ChunkMeshStore {
   }
 
   /**
-   * Marks a slot's mesh out of date for a *new model of the cell it already holds*.
+   * Marks a slot's mesh out of date while the slot keeps its cell.
    *
    * The mesh stays in the scene until its replacement lands, and the revision still moves,
    * so a late answer is refused exactly as before. Both halves are load-bearing: keeping
@@ -136,13 +142,16 @@ export class ChunkMeshStore {
    * mesher takes, and moving the revision is what stops the mesh that eventually arrives
    * from being one the model has already moved past.
    *
-   * Sound only because the cell has not changed. A slot re-pointed at another cell is
-   * holding the *previous* cell's geometry, and drawing that at the new cell's coordinates
-   * is the artefact the revision mechanism exists to prevent — so reposition and release
-   * go through `markStale` and drop the buffers instead. The distinction is which cell a
-   * slot holds, not how old its mesh is.
+   * Sound for one reason only, and the method exists to say it out loud: **the cell has not
+   * changed.** Everything already on the GPU for this slot is therefore a surface of the
+   * cell the slot still stands for, at the coordinates it occupies — whether it is the
+   * previous model of that cell, or the previous level of detail of it. How wrong it is
+   * does not matter; *which cell it belongs to* is the whole question, and drawing one
+   * cell's geometry at another's position is the artefact the revision mechanism exists to
+   * prevent. So reposition and release go through `markStale` and drop the buffers, and
+   * only the paths that leave the cell alone come here.
    */
-  markModelChanged(slot: number): void {
+  markOutOfDate(slot: number): void {
     if (this.slots[slot] === undefined) return;
     this.revisions[slot] = this.revisionOf(slot) + 1;
   }
@@ -256,25 +265,34 @@ export interface StoreHooks {
   onSlotReposition: (slot: number) => void;
   onSlotRelease: (slot: number) => void;
   onSlotStale: (slot: number) => void;
+  onSlotRefill: (slot: number) => void;
   onSlotCountChanged: (count: number) => void;
 }
 
 /**
  * Wires a store to a window's callbacks.
  *
- * Reposition, release and staleness all invalidate, and the effect on the store is the same
- * for all three: this cell's mesh is no longer this slot's, so its buffers go and its
- * revision moves. They differ in *why* — a released slot has gone, a repositioned one has
- * not, a stale one is still there and simply has a different model — and that distinction
- * belongs to whoever asks for a replacement, not to whoever owns the bytes.
+ * The routing is one question — *which cell does this slot hold?* — with two answers.
+ *
+ * Reposition and release change the cell, so this cell's mesh is no longer this slot's: it
+ * belongs somewhere else on the GPU entirely, its buffers go, and its revision moves.
+ * Staleness and refill do not: the slot still stands for the same cell, and what it holds
+ * is a surface of that cell — the previous model of it, or the previous level of detail —
+ * which is the right thing to draw right up until the replacement lands. Those two keep
+ * their geometry and move their revision instead.
+ *
+ * They differ in *why* — a stale one has a new model, a refilled one a new resolution —
+ * and that distinction belongs to whoever asks for a replacement, not to whoever owns the
+ * bytes. Both land on `markOutOfDate` because the store cannot act on the difference and
+ * should not have to know it exists.
  */
 export const hooksFor = (store: ChunkMeshStore): StoreHooks => ({
   onSlotReposition: (slot) => store.markStale(slot),
   onSlotRelease: (slot) => store.markStale(slot),
-  // Staleness is the one that keeps its mesh: the slot still holds this cell, so its
-  // surface is the right thing to draw until the new model replaces it. Reposition and
+  // The two that keep the mesh, because the slot still holds this cell. Reposition and
   // release are the ones where the cell itself has changed, and there the old geometry
   // belongs somewhere else on the GPU entirely.
-  onSlotStale: (slot) => store.markModelChanged(slot),
+  onSlotStale: (slot) => store.markOutOfDate(slot),
+  onSlotRefill: (slot) => store.markOutOfDate(slot),
   onSlotCountChanged: (count) => store.resize(count),
 });

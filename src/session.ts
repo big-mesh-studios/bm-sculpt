@@ -186,6 +186,13 @@ export class Session {
         hooks.onSlotReposition(slot);
         this.forgetSlot(slot);
       },
+      // The store keeps the slot's mesh here — the cell has not moved, only the resolution
+      // it is wanted at — but the request that would fill it at the *old* resolution is
+      // still superseded, so it is forgotten exactly as a release would forget it.
+      onSlotRefill: (slot) => {
+        hooks.onSlotRefill(slot);
+        this.forgetSlot(slot);
+      },
     });
 
     this.pool = new WorldWorkerPool({
@@ -309,11 +316,11 @@ export class Session {
       // because it is the one most likely to have an answer in flight.
       const slot = this.window.claimedSlotOf(cell);
       if (slot === undefined) continue;
-      // `markModelChanged` and not `markStale`: this is the same cell with a different
+      // `markOutOfDate` and not `markStale`: this is the same cell with a different
       // model, so its current mesh is still the right thing to draw until the replacement
       // lands. Dropping it here would open a hole in the model for as long as the mesher
       // takes, once per edit.
-      this.store.markModelChanged(slot);
+      this.store.markOutOfDate(slot);
       this.window.markStale(slot);
       this.forgetSlot(slot);
       this.requestSlot(slot);

@@ -67,6 +67,32 @@ or two, so the stale window is short — but it is exactly long enough to put a 
 the wrong place, which is the worst class of bug a sculpting tool can have. A dab
 cannot be undone by the user noticing; it has to be undone by undo.
 
+> **Superseded in part.** The reasoning above is sound and the flag it protects is
+> still protected — a refilled slot is marked unfilled, so nothing reads it as
+> answered. But the record conflated two questions it should have kept apart: _may a
+> query read this slot?_ and _should the screen be showing it?_ The picker traces the
+> field rather than the mesh (ADR 0009), so after this record was written the stale
+> window stopped being reachable by a query at all — which removed the stated reason
+> for the alternative, and nothing revisited the decision it had been holding up.
+>
+> A rebuild at a new level of detail was also firing `onSlotRelease`, which
+> `ChunkMeshStore` mapped to `markStale` — taking the mesh out of the scene and
+> freeing its buffers, for a cell that had not moved. That is a hole in the model for
+> the length of one chunk mesh, and a band boundary crosses a whole ring of cells at
+> once, so it presented as a flicker sweeping the horizon on every step rather than a
+> gap somewhere. The store already had the answer in the method now called
+> `markOutOfDate`: a mesh belonging to the cell the slot still holds is the right thing
+> to draw right up until its replacement lands, whether it is out of date in its model
+> or in its resolution.
+>
+> So a refill is now its own event, `onSlotRefill`, alongside reposition, release and
+> staleness, and routes to the store's keep-the-mesh path. `markModelChanged` was
+> renamed `markOutOfDate` at the same time, because a name that says "the model moved"
+> is a name that will be read as excluding the case that was just wired to it. The
+> lesson worth keeping is narrower than the decision it came from: **an alternative
+> rejected for reason A is not thereby rejected for every reason**, and this one was
+> left in place long after reason A had quietly stopped applying.
+
 **Rebuild synchronously on band change.** Rejected: a band change can touch dozens of
 slots at once, and blocking the frame for all of them is the stall this whole
 design is arranged to avoid. The mesher is in a worker precisely so this is

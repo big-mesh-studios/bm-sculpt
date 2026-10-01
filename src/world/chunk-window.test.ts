@@ -15,6 +15,7 @@ const recordingWindow = (params: Partial<ChunkWindowParams> = {}) => {
   const events = {
     repositioned: [] as Array<{ slot: number; cell: CellCoord }>,
     released: [] as number[],
+    refilled: [] as number[],
     counts: [] as number[],
     changed: [] as number[][],
     wanted: [] as number[][],
@@ -25,6 +26,7 @@ const recordingWindow = (params: Partial<ChunkWindowParams> = {}) => {
     ...params,
     onSlotReposition: (slot, cell) => events.repositioned.push({ slot, cell }),
     onSlotRelease: (slot) => events.released.push(slot),
+    onSlotRefill: (slot) => events.refilled.push(slot),
     onSlotCountChanged: (count) => events.counts.push(count),
     onSlotsChanged: (slots) => events.changed.push([...slots]),
     onSlotsWanted: (slots) => events.wanted.push([...slots]),
@@ -36,6 +38,7 @@ const recordingWindow = (params: Partial<ChunkWindowParams> = {}) => {
   const reset = (): void => {
     events.repositioned.length = 0;
     events.released.length = 0;
+    events.refilled.length = 0;
     events.counts.length = 0;
     events.changed.length = 0;
     events.wanted.length = 0;
@@ -260,6 +263,37 @@ describe("scrolling", () => {
     for (const slot of rebuilt) expect(window.slots[slot].filled).toBe(false);
   });
 
+  it("refills a cell whose band moved, rather than releasing it", () => {
+    // The two events look identical from here — a slot is queued for a rebuild either way —
+    // and the difference is entirely in what the renderer is told. Releasing here would
+    // free a slot's buffers and take its mesh out of the scene for a cell that has not
+    // moved, which puts a hole in the model for as long as the mesher takes. And a band
+    // boundary crosses a whole ring of cells at once, so that is a flicker sweeping the
+    // horizon on every step rather than a gap somewhere.
+    const { window, events, reset } = recordingWindow({
+      radius: 3,
+      yRadius: 3,
+    });
+    fillEverything(window);
+    reset();
+
+    window.scrollTo({ x: 900, y: 0, z: 0 });
+
+    expect(events.refilled.length).toBeGreaterThan(0);
+    // Nothing that merely changed resolution was taken out of the window's bookkeeping as
+    // a departure — and the two sets are disjoint, because a slot is either arriving or
+    // changing resolution, never both.
+    expect(events.refilled).not.toContain(0);
+    for (const slot of events.refilled) {
+      expect(events.released, `slot ${slot}`).not.toContain(slot);
+      expect(window.covers(window.slots[slot].cell)).toBe(true);
+    }
+    // It is still unfilled, so nothing reads it as answered and it is asked for again.
+    for (const slot of events.refilled) {
+      expect(window.slots[slot].filled, `slot ${slot}`).toBe(false);
+    }
+  });
+
   it("keeps every claimed cell claimed, across many scrolls", () => {
     // The invariant that catches a broken eviction: if a cell is left in the index
     // after its slot has been recycled, two slots answer for it, and if it is dropped
@@ -438,7 +472,7 @@ describe("skirt masks", () => {
     expect(window.slots[slot].cell).toEqual({ x: 0, y: 0, z: 0 });
     expect(window.lodOf(slot)).toBe(0);
     expect(window.skirtOf(slot)).not.toBe(0);
-    expect(events.released).toContain(slot);
+    expect(events.refilled).toContain(slot);
   });
 });
 

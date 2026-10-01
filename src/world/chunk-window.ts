@@ -114,6 +114,21 @@ export interface ChunkWindowParams {
    */
   onSlotStale?: (slot: number) => void;
   /**
+   * Told a slot's *resolution* is out of date while the slot itself stays put.
+   *
+   * The fourth event, and the one that used to be folded into `onSlotRelease`. A cell
+   * whose level-of-detail band has moved is still that cell, at the same coordinates, and
+   * the mesh already on the GPU is a surface of that cell — built at a resolution the
+   * window no longer wants, and nothing else wrong with it. So the right response is to
+   * keep it drawn and replace it, not to take it out of the scene and put a hole where it
+   * was for as long as the mesher takes.
+   *
+   * That is the whole difference from a release, and it is worth a callback of its own
+   * because the two are otherwise indistinguishable from outside: both queue the slot for
+   * a rebuild, and only one of them may throw away what is already there.
+   */
+  onSlotRefill?: (slot: number) => void;
+  /**
    * Called once per arriving or refilled slot, in the order they should be worked.
    * The client uses it to request meshes, nearest first.
    */
@@ -296,13 +311,22 @@ export class ChunkWindow {
       const wanted = lodAt(entry.cell, centre, this.bands);
       const wantedSkirt = skirtMaskAt(entry.cell, centre, this.bands);
       if (wanted !== entry.targetLod || wantedSkirt !== entry.targetSkirt) {
-        this.params.onSlotRelease?.(slot);
-        // Marked stale as well as queued. It still holds geometry — at the level it
-        // was built for, which is no longer the level it is being asked for — and a
-        // query answered from it would hand the picker a surface at one resolution
-        // while the rest of the model is at another. The reference implementation
-        // makes the same distinction between "arriving" and "refilled"; both have to
-        // stop answering until their rebuild lands.
+        // Refill, not release. The cell has not changed — only the resolution it is to be
+        // built at — so the geometry on the GPU is still this cell's own surface, sitting
+        // at the coordinates it has always sat at, and is merely the wrong one to look at
+        // for a few hundred milliseconds. Releasing it would open a hole for exactly as
+        // long as the mesher takes, and a band boundary crosses a whole ring of cells at
+        // once, so that is not a gap somewhere in the model but a flicker sweeping the
+        // horizon on every step. `onSlotRelease` is left to the two events where the cell
+        // itself moves, because there the old geometry really does belong elsewhere.
+        this.params.onSlotRefill?.(slot);
+        // Unfilled as well as queued, so nothing reads this slot as answered: the window
+        // keeps asking for it, and a query about it is refused rather than answered from
+        // geometry at a resolution the window has stopped asking for. Keeping the surface
+        // drawn and refusing to answer from it are not in tension — the picker traces the
+        // field rather than the mesh (ADR 0009), so what is on screen and what a query may
+        // read have been separate concerns since then, and this is where the window settles
+        // its own half of the question.
         entry.filled = false;
         refilling.push(slot);
         entry.targetLod = wanted;

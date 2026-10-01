@@ -141,7 +141,7 @@ describe("refusing a mesh that has been overtaken", () => {
     store.apply(0, meshOf(12, 4), revision);
     const good = meshFor(store, 0);
 
-    store.markModelChanged(0);
+    store.markOutOfDate(0);
 
     const outcome = store.apply(0, meshOf(99, 33), revision);
     expect(outcome).toEqual({ accepted: false, refusal: "staleRevision" });
@@ -153,14 +153,15 @@ describe("refusing a mesh that has been overtaken", () => {
   });
 });
 
-describe("a model change is not a cell change", () => {
+describe("an out-of-date mesh is not a cell change", () => {
   // The distinction the whole of the above turns on. Which cell a slot holds decides
-  // whether its geometry is the right thing to draw; how old that geometry is does not.
+  // whether its geometry is the right thing to draw; how wrong that geometry is does not.
 
   it("keeps drawing the old mesh until the replacement lands", () => {
     // This is the flicker. A hole in the model for as long as the mesher takes, opened once
     // per edit, is a strobe at the brush — and while it is open the rest of the model is the
-    // *old* model, which is why an edit can look like it did nothing at all.
+    // *old* model, which is why an edit can look like it did nothing at all. The same hole,
+    // opened once per level-of-detail band crossed, is the same flicker along the horizon.
     const store = newStore();
     store.apply(0, meshOf(12, 4), store.revisionOf(0));
     const mesh = meshFor(store, 0);
@@ -168,7 +169,7 @@ describe("a model change is not a cell change", () => {
       .spyOn(mesh!.geometry, "dispose")
       .mockImplementation(() => {});
 
-    store.markModelChanged(0);
+    store.markOutOfDate(0);
 
     expect(spy).not.toHaveBeenCalled();
     expect(meshFor(store, 0)).toBe(mesh);
@@ -182,7 +183,7 @@ describe("a model change is not a cell change", () => {
     store.apply(0, meshOf(12, 4), store.revisionOf(0));
     const before = store.revisionOf(0);
 
-    store.markModelChanged(0);
+    store.markOutOfDate(0);
     expect(store.revisionOf(0)).toBeGreaterThan(before);
 
     store.apply(0, meshOf(24, 8), store.revisionOf(0));
@@ -196,7 +197,7 @@ describe("a model change is not a cell change", () => {
     // asking and the chunk would keep the old surface for ever.
     const store = newStore();
     store.apply(0, meshOf(12, 4), store.revisionOf(0));
-    store.markModelChanged(0);
+    store.markOutOfDate(0);
     expect(store.isStale(0, store.revisionOf(0))).toBe(false);
   });
 
@@ -218,15 +219,21 @@ describe("a model change is not a cell change", () => {
     expect(store.drawnCount).toBe(0);
   });
 
-  it("routes the window's three reasons to the right one of the two", () => {
+  it("routes the window's four reasons to the right one of the two", () => {
     // The hook bundle is the only place that knows *why* a slot is being invalidated, so it
     // is the only place that can tell these apart. Getting it wrong is invisible in a unit
-    // test of either method and visible only as a chunk drawn at the wrong coordinates.
+    // test of either method and visible only as a chunk drawn at the wrong coordinates —
+    // or, in the other direction, as a hole where the model should be.
     const store = newStore();
     const hooks = hooksFor(store);
     store.apply(0, meshOf(12, 4), store.revisionOf(0));
 
     hooks.onSlotStale?.(0);
+    expect(store.draws(0)).toBe(true);
+
+    // A level-of-detail change is the same cell at a different resolution, so it belongs
+    // with staleness rather than with the events that move a slot to another cell.
+    hooks.onSlotRefill(0);
     expect(store.draws(0)).toBe(true);
 
     store.apply(0, meshOf(12, 4), store.revisionOf(0));
@@ -236,8 +243,8 @@ describe("a model change is not a cell change", () => {
 
   it("is safe on a slot with no mesh, and on one it does not have", () => {
     const store = newStore(2);
-    expect(() => store.markModelChanged(0)).not.toThrow();
-    expect(() => store.markModelChanged(9)).not.toThrow();
+    expect(() => store.markOutOfDate(0)).not.toThrow();
+    expect(() => store.markOutOfDate(9)).not.toThrow();
   });
 });
 
@@ -405,6 +412,31 @@ describe("the window hooks", () => {
     hooks.onSlotRelease(0);
     expect(store.draws(0)).toBe(false);
     expect(store.drawnCount).toBe(0);
+  });
+
+  it("keeps the mesh of a slot that only changed resolution", () => {
+    // The flicker, at the level it is decided. A refill is a cell that stayed put and was
+    // rebuilt at another level of detail, so the surface already on the GPU is that cell's
+    // own — at the coordinates it occupies — and the right thing to draw right up until the
+    // replacement lands. Releasing instead drops it and leaves a hole for the length of one
+    // chunk mesh, which at a band boundary is every cell on the ring at once.
+    const store = newStore();
+    const hooks = hooksFor(store);
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    const mesh = meshFor(store, 0);
+    const spy = vi
+      .spyOn(mesh!.geometry, "dispose")
+      .mockImplementation(() => {});
+
+    hooks.onSlotRefill(0);
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(meshFor(store, 0)).toBe(mesh);
+    expect(store.draws(0)).toBe(true);
+    // The revision still moves, so the mesh for the *old* level cannot land over it.
+    const stale = store.revisionOf(0) - 1;
+    expect(store.apply(0, meshOf(24, 8), stale).refusal).toBe("staleRevision");
+    expect(store.trianglesAt(0)).toBe(4);
   });
 
   it("resizes when the window's slot count changes", () => {
