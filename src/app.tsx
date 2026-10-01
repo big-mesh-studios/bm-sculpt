@@ -31,6 +31,7 @@ import { createViewport, type Viewport } from "./render/viewport";
 import { VERTEX_BYTES } from "./render/spike-geometry";
 import { Session, starterOperations, type SessionStats } from "./session";
 import { DEFAULT_TERRAIN } from "./csg";
+import { LOD_OFF, lodIsOff, type LodBands } from "./world";
 import { SculptSession } from "./sculpt";
 import { DEFAULT_BRUSH } from "./edit/brush";
 import { buildSpikeScene, type SpikeScene } from "./spike-scene";
@@ -44,6 +45,32 @@ const isSpike = (): boolean =>
   typeof location !== "undefined" &&
   new URLSearchParams(location.search).has("spike");
 
+/**
+ * The level-of-detail bands to run with, overridable from the query string.
+ *
+ * `?lod=off` switches level of detail off, and `?lod=FULL:COARSE` sets the two bands.
+ * The reason this is reachable at runtime rather than only in a test is that it is the
+ * one experiment that separates the two possible causes of a crack: with every chunk at
+ * full resolution there are no level transitions, so any crack that survives is not one,
+ * and any that disappears was one. Reading it from the query string rather than from a
+ * control keeps it a build-time-free switch that survives into a build somebody else runs.
+ */
+const lodBandsFromSearch = (): LodBands | undefined => {
+  if (typeof location === "undefined") return undefined;
+  const mode = new URLSearchParams(location.search).get("lod");
+  if (mode === null) return undefined;
+  if (mode === "off") return LOD_OFF;
+  const [full, coarse] = mode.split(":").map(Number);
+  if (!Number.isFinite(full) || !Number.isFinite(coarse)) return undefined;
+  return { full, coarse };
+};
+
+/** What the header says about level of detail, so the mode is never a guess. */
+const describeBands = (bands: LodBands): string =>
+  lodIsOff(bands)
+    ? "off (every chunk full resolution)"
+    : `full within ${bands.full} chunks, coarse within ${bands.coarse}`;
+
 export default function App() {
   let canvas!: HTMLCanvasElement;
   const [precision, setPrecision] = createSignal<PrecisionProbe | undefined>();
@@ -52,6 +79,7 @@ export default function App() {
     SpikeScene["counts"] | undefined
   >();
   const [spike] = createSignal(isSpike());
+  const [bands] = createSignal(lodBandsFromSearch());
   const [history, setHistory] = createSignal({ undo: 0, redo: 0 });
 
   // A memo rather than a `<Show>` with a narrowed child, because `<Show>` calls its children
@@ -118,6 +146,7 @@ export default function App() {
         color: new Color(1, 0.85, 0.4),
       });
 
+      const chosen = bands();
       session = new Session({
         scene: sessionViewport.scene,
         material,
@@ -127,6 +156,7 @@ export default function App() {
         // four numbers, so the field the brush traces and the field the workers mesh cannot
         // disagree about where the ground is (ADR 0009).
         terrain: DEFAULT_TERRAIN,
+        ...(chosen !== undefined ? { bands: chosen } : {}),
       });
 
       // Seeded from the session's own operations rather than calling `starterOperations`
@@ -340,6 +370,12 @@ export default function App() {
           <div class={styles.row}>fragment precision: {precisionText()}</div>
           <div class={styles.row}>
             vertex layout: float32x3 + snorm16x2 + unorm8x4 = {VERTEX_BYTES} B
+          </div>
+          <div class={styles.row}>
+            level of detail:{" "}
+            {bands() === undefined
+              ? "default (full within 1 chunk, coarse within 2)"
+              : describeBands(bands() as LodBands)}
           </div>
 
           <Show when={spikeCounts()}>
