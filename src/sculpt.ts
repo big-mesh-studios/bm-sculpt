@@ -170,15 +170,16 @@ export class SculptSession {
    *
    * Only the new dabs' own box is invalidated. The whole stroke's box would re-mesh every
    * chunk it has already visited, once the mesher is next free, for as long as the pointer
-   * is down.
+   * is down — and a chunk needs re-meshing only where the surface actually changed, which
+   * is where the newest dabs are.
    */
   flushPreview(): void {
     const stroke = this.drawing;
     if (stroke === undefined) return;
 
-    const fresh = stroke.operationsSince(this.streamedDabs);
-    if (fresh.length === 0) return;
-    const bounds = boundsOf(fresh);
+    const undelivered = stroke.operationsSince(this.streamedDabs);
+    if (undelivered.length === 0) return;
+    const bounds = boundsOf(undelivered);
     if (bounds === undefined) return;
 
     if (!this.options.session.idle) return;
@@ -187,8 +188,14 @@ export class SculptSession {
     this.streamedDabs = stroke.dabCount;
     this.streamedBounds = unionOf(this.streamedBounds, bounds);
 
+    // The whole stroke, not just this frame's dabs. A dab streamed by an earlier flush lives
+    // in the stroke rather than in the document until the stroke is committed, so a model
+    // built from the new ones alone silently drops the rest: the live mesh then shows the
+    // tail of the stroke rather than the path drawn so far, and only looks right because
+    // the commit finally puts every dab in the document at once. The invalidation box stays
+    // the new dabs' own, so a chunk the stroke has already passed is not re-meshed again.
     this.options.session.setOperations(
-      [...this.document.list, ...fresh],
+      [...this.document.list, ...stroke.operationsSince(0)],
       bounds,
     );
   }

@@ -272,6 +272,57 @@ describe("a stroke while the pointer is still down", () => {
     expect(streamed).toEqual(held);
   });
 
+  it("keeps the whole stroke in the live model, not just the newest dabs", () => {
+    // A dab streamed by an earlier flush lives in the stroke, not in the document, until
+    // the stroke is committed. A model built from only the newest ones therefore drops the
+    // rest, and the live mesh shows the tail of the stroke rather than the path drawn so
+    // far. It looks nearly right — the first flush is correct, and the commit is correct
+    // because it finally puts every dab in the document at once — which is what makes it
+    // worth pinning: every fold has to extend the one before it.
+    const operations = starterOperations();
+    const { session, folds } = sessionOver(operations);
+
+    session.tool.pointerDown(
+      { button: 0, shiftKey: false, ...CENTRE },
+      WIDTH,
+      HEIGHT,
+    );
+    const dragTo = (step: number) => {
+      for (let i = 1; i <= step; i++) {
+        session.tool.pointerMove(
+          {
+            clientX: CENTRE.clientX + i * 6,
+            clientY: CENTRE.clientY + i * 2,
+          },
+          WIDTH,
+          HEIGHT,
+        );
+      }
+      session.flushPreview();
+      return folds[folds.length - 1];
+    };
+
+    const dabsLaid = () => session.tool.state.stroke?.dabCount ?? 0;
+    const dabsIn = (fold: readonly Operation[]) =>
+      fold.slice(operations.length);
+
+    const first = dragTo(4);
+    const firstDabs = dabsLaid();
+    const second = dragTo(8);
+    const secondDabs = dabsLaid();
+    expect(folds).toHaveLength(2);
+    expect(secondDabs).toBeGreaterThan(firstDabs);
+
+    // Each fold is the committed model plus every dab the stroke has laid by then — so the
+    // count is not "the newest few" but the stroke's whole dab count.
+    expect(first.length).toBe(operations.length + firstDabs);
+    expect(second.length).toBe(operations.length + secondDabs);
+
+    // And the dabs of the second fold begin with exactly the dabs of the first, so nothing
+    // the live mesh was already showing can be taken away by a later frame.
+    expect(dabsIn(second).slice(0, firstDabs)).toEqual(dabsIn(first));
+  });
+
   it("waits for the mesher rather than interrupting it", () => {
     // Sending a model cancels every mesh in flight, so a send per frame would cancel the
     // very mesh that would show the dab: the chunk under the brush would never land, and
