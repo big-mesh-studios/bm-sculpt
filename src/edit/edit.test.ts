@@ -433,8 +433,14 @@ const ON_SURFACE: Hit = {
 };
 
 /** `null` rather than `undefined` for "no surface", because passing `undefined` to a
- * parameter with a default gets the default. */
-const toolBed = (hit: Hit | null = ON_SURFACE) => {
+ * parameter with a default gets the default. A function picks by position, for the tests
+ * that need a stroke to *travel* rather than to land on the same point repeatedly. */
+const toolBed = (
+  hit:
+    | Hit
+    | null
+    | ((clientX: number, clientY: number) => Hit | null) = ON_SURFACE,
+) => {
   const commits: BrushStroke[] = [];
   const strokes: BrushStroke[] = [];
   const previews: BrushStroke[] = [];
@@ -443,7 +449,8 @@ const toolBed = (hit: Hit | null = ON_SURFACE) => {
   let redoCalls = 0;
 
   const target: SculptTarget = {
-    pick: () => hit ?? undefined,
+    pick: (_camera, clientX, clientY) =>
+      (typeof hit === "function" ? hit(clientX, clientY) : hit) ?? undefined,
     beginStroke: () => {
       const stroke = beginStroke(new SculptDocument(), DEFAULT_BRUSH);
       strokes.push(stroke);
@@ -624,6 +631,84 @@ describe("what a pointer drag means", () => {
     expect(tool.state.sculpting).toBe(false);
     expect(commits).toHaveLength(0);
     expect(strokes[0].end()).toBe(false);
+  });
+
+  it("begins no second stroke when a second pointer goes down", () => {
+    // On a touch screen the second finger arrives as `button === 0` — identical to the
+    // first — so a caller forwarding every press would replace the stroke in progress with
+    // a new one and lose it. One stroke at a time is this class's own invariant precisely
+    // because the event cannot be trusted to say which finger it is.
+    const { tool, strokes, commits } = toolBed();
+    tool.pointerDown(down(), 800, 600);
+    tool.pointerMove({ clientX: 200, clientY: 100 }, 800, 600);
+
+    const kind = tool.pointerDown(down(), 800, 600);
+
+    expect(kind).toBe("sculpt");
+    expect(strokes).toHaveLength(1);
+    // The stroke in progress is the one that started it, not a replacement.
+    expect(tool.state.stroke).toBe(strokes[0]);
+    tool.pointerUp();
+    expect(commits).toHaveLength(1);
+  });
+
+  it("stops laying dabs while suspended, and picks up where it left off after", () => {
+    // A second finger means the user has stopped painting and started navigating. Painting
+    // through it would put every dab after the interruption somewhere they were not
+    // pointing, because the camera is moving underneath the brush.
+    //
+    // The pick travels with the pointer, so "no dabs were laid" is a statement about the
+    // suspension rather than about the brush having nothing to do.
+    const along = (clientX: number) => ({
+      ...ON_SURFACE,
+      point: { x: clientX / 10, y: 0, z: 0 },
+    });
+    const { tool, strokes } = toolBed((clientX) => along(clientX));
+
+    tool.pointerDown(down(), 800, 600);
+    tool.pointerMove({ clientX: 200, clientY: 100 }, 800, 600);
+    const laid = strokes[0].dabCount;
+    expect(laid).toBeGreaterThan(0);
+
+    tool.setSuspended(true);
+    for (let step = 0; step < 5; step++) {
+      tool.pointerMove({ clientX: 400 + step * 40, clientY: 300 }, 800, 600);
+    }
+    // A long way from where the stroke was, so resuming could not be a rounding error.
+    expect(strokes[0].dabCount).toBe(laid);
+
+    tool.setSuspended(false);
+    tool.pointerMove({ clientX: 600, clientY: 300 }, 800, 600);
+    expect(strokes[0].dabCount).toBeGreaterThan(laid);
+  });
+
+  it("keeps the suspended stroke, so releasing still commits what was laid", () => {
+    // Suspended is not "no stroke". Throwing the work away on a pinch the user made by
+    // accident is worse than a slightly odd stroke, and the dabs are already paid for.
+    const { tool, strokes, commits } = toolBed();
+    tool.pointerDown(down(), 800, 600);
+    tool.pointerMove({ clientX: 200, clientY: 100 }, 800, 600);
+    tool.setSuspended(true);
+    tool.pointerMove({ clientX: 500, clientY: 300 }, 800, 600);
+
+    tool.pointerUp();
+
+    expect(commits).toHaveLength(1);
+    expect(commits[0]).toBe(strokes[0]);
+  });
+
+  it("does not even hover while suspended", () => {
+    // A preview that chases a finger the user is using to pan is worse than no preview, and
+    // the hover is a pick, and a pick under a moving camera is a hit in the wrong place.
+    const { tool } = toolBed();
+
+    // First the control: an ordinary move does hover, or the assertion below is vacuous.
+    tool.pointerMove({ clientX: 200, clientY: 100 }, 800, 600);
+    expect(tool.state.hover).toBeDefined();
+
+    tool.setSuspended(true);
+    tool.pointerMove({ clientX: 500, clientY: 300 }, 800, 600);
+    expect(tool.state.hover).toBeUndefined();
   });
 
   it("previews the surface under a hovering pointer", () => {

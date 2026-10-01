@@ -178,21 +178,34 @@ export default function App() {
       };
 
       // Left drags sculpt. Right-drag, shift-drag and the middle button navigate, so a
-      // drag can never do two things at once — and the orbit controller is told to stand
-      // down while the tool has a gesture, since it listens on the same element.
+      // drag can never do two things at once — and the orbit controller is told that a tool
+      // has the left button, since it listens on the same element.
       const pointerOptions = () => ({
         width: canvas.clientWidth,
         height: canvas.clientHeight,
       });
 
+      // Every pointer currently down, so a second finger can be recognised as navigation
+      // rather than as a second brush. On a touch screen it arrives as `button === 0`, the
+      // same as the first, so nothing about the event itself distinguishes the two.
+      const down = new Set<number>();
+      /** The pointer whose press began the stroke, and so whose release ends it. */
+      let sculptPointer: number | undefined;
+
       const onPointerDown = (event: PointerEvent): void => {
         if (event.button !== 0 || event.shiftKey) return;
+        down.add(event.pointerId);
+        // The first finger owns the stroke. Later ones are navigation.
+        sculptPointer ??= event.pointerId;
+        // Every finger is offered to the tool, which ignores a press while a stroke is
+        // already down — that invariant is its own, not something to re-derive here.
         sculpt.tool.pointerDown(
           event,
           pointerOptions().width,
           pointerOptions().height,
         );
-        orbit.setEnabled(false);
+        sculpt.tool.setSuspended(down.size > 1);
+        orbit.setToolOwnsLeft(true);
       };
       const onPointerMove = (event: PointerEvent): void => {
         sculpt.tool.pointerMove(
@@ -201,14 +214,51 @@ export default function App() {
           pointerOptions().height,
         );
       };
-      const onPointerUp = (): void => {
-        sculpt.tool.pointerUp();
-        orbit.setEnabled(true);
+
+      /**
+       * A pointer is no longer down, one way or another.
+       *
+       * `abandon` covers the two ways a gesture can end without having been finished: the
+       * pointer leaving the canvas still held, and the browser cancelling it to do something
+       * of its own. Both throw the stroke away, because half a gesture is not what the user
+       * meant. An ordinary release commits it.
+       *
+       * Only the pointer that *began* the stroke can end it. A second finger lifting on its
+       * own is the user going back to painting, not finishing — treating that as the end
+       * would commit half of what they drew and silently drop the rest.
+       */
+      const release = (pointerId: number, abandon: boolean): void => {
+        down.delete(pointerId);
+        if (pointerId !== sculptPointer) {
+          sculpt.tool.setSuspended(down.size > 1);
+          return;
+        }
+        sculptPointer = undefined;
+        sculpt.tool.setSuspended(false);
+        if (abandon) sculpt.tool.pointerLeave();
+        else sculpt.tool.pointerUp();
+        orbit.setToolOwnsLeft(false);
         setHistory({ undo: sculpt.undoDepth, redo: sculpt.redoDepth });
       };
-      const onPointerLeave = (): void => {
-        sculpt.tool.pointerLeave();
-        orbit.setEnabled(true);
+
+      const onPointerUp = (event: PointerEvent): void => {
+        release(event.pointerId, false);
+      };
+      const onPointerCancel = (event: PointerEvent): void => {
+        // The browser has taken the pointer for something else — a scroll, a system gesture
+        // — so this gesture is not going to finish and must not be committed as though it
+        // had. Without this the pointer stays in `down` for ever and no later stroke can
+        // ever end.
+        release(event.pointerId, true);
+      };
+      const onPointerLeave = (event: PointerEvent): void => {
+        // **Touch fires this as part of lifting a finger**, immediately after that finger's
+        // own `pointerup`. A pointer that is no longer down has already finished, and
+        // treating the leave as an abandonment throws away a stroke the user completed —
+        // which is why touch sculpting committed nothing at all until this was noticed. A
+        // mouse dragged off the canvas is still down, and that gesture really was abandoned.
+        if (!down.has(event.pointerId)) return;
+        release(event.pointerId, true);
       };
       const onKeyDown = (event: KeyboardEvent): void => {
         // Ctrl or cmd, so the same keys work on either platform and so the shortcut a user
@@ -226,12 +276,16 @@ export default function App() {
       canvas.addEventListener("pointerdown", onPointerDown);
       canvas.addEventListener("pointermove", onPointerMove);
       window.addEventListener("pointerup", onPointerUp);
+      // Bubbles, so it is on the window with the release rather than on the canvas with the
+      // leave — a cancelled pointer never reaches the element it was captured on.
+      window.addEventListener("pointercancel", onPointerCancel);
       canvas.addEventListener("pointerleave", onPointerLeave);
       window.addEventListener("keydown", onKeyDown);
       detachPointer = () => {
         canvas.removeEventListener("pointerdown", onPointerDown);
         canvas.removeEventListener("pointermove", onPointerMove);
         window.removeEventListener("pointerup", onPointerUp);
+        window.removeEventListener("pointercancel", onPointerCancel);
         canvas.removeEventListener("pointerleave", onPointerLeave);
         window.removeEventListener("keydown", onKeyDown);
       };

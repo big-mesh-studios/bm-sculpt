@@ -188,6 +188,151 @@ describe("which gesture a drag means", () => {
   });
 });
 
+describe("a tool that has the left button", () => {
+  // Both halves of the same arrangement. The tool and the controller listen on the same
+  // canvas, so one of them has to stand down for a left drag — and the one that stands down
+  // must still be *watching*, or a second finger is invisible and pinch cannot happen at all.
+
+  it("leaves a left drag to the tool, rather than orbiting as well", () => {
+    // Both acting at once draws the stroke along the path the camera went, which reads as
+    // the brush being wildly inaccurate rather than as two things both happening.
+    const { orbit, harness } = controller();
+    orbit.setToolOwnsLeft(true);
+    const before = { ...orbit.state, target: { ...orbit.state.target } };
+
+    harness.drag(60, 40, { button: 0 });
+
+    expect(orbit.state).toEqual(before);
+  });
+
+  it("still pinches with a second finger, which is the whole point", () => {
+    // The regression. A blanket "stand down" has to stop the controller seeing any pointer,
+    // so the second finger never arrives and the gesture is impossible while a brush is
+    // down — which is exactly when a user reaches for it.
+    const { orbit, harness } = controller();
+    orbit.setToolOwnsLeft(true);
+    const start = orbit.state.radius;
+
+    harness.fire("pointerdown", {
+      pointerId: 1,
+      clientX: 300,
+      clientY: 300,
+      button: 0,
+      shiftKey: false,
+    });
+    harness.pinch(100, 200);
+
+    expect(orbit.state.radius).toBeLessThan(start);
+  });
+
+  it("does not orbit for the finger that is holding the brush", () => {
+    // The two-pointer branch above has to leave the camera's angles alone: a pinch is a
+    // dolly, and letting the first finger's drag through as well would turn the view *and*
+    // zoom it at once.
+    const { orbit, harness } = controller();
+    orbit.setToolOwnsLeft(true);
+    const before = { ...orbit.state, target: { ...orbit.state.target } };
+
+    harness.fire("pointerdown", {
+      pointerId: 1,
+      clientX: 300,
+      clientY: 300,
+      button: 0,
+      shiftKey: false,
+    });
+    harness.fire("pointerdown", {
+      pointerId: 2,
+      clientX: 100,
+      clientY: 300,
+      button: 0,
+      shiftKey: false,
+    });
+    harness.fire("pointermove", {
+      pointerId: 1,
+      clientX: 400,
+      clientY: 300,
+      button: -1,
+      shiftKey: false,
+    });
+
+    expect(orbit.state.theta).toBe(before.theta);
+    expect(orbit.state.phi).toBe(before.phi);
+  });
+
+  it("declines the wheel too, so a zoom cannot move the surface out from under the brush", () => {
+    const { orbit, harness } = controller();
+    orbit.setToolOwnsLeft(true);
+    const start = orbit.state.radius;
+
+    harness.wheel(-100);
+
+    expect(orbit.state.radius).toBe(start);
+  });
+
+  it("gives the camera back when the tool lets go", () => {
+    const { orbit, harness } = controller();
+    orbit.setToolOwnsLeft(true);
+    const held = { ...orbit.state, target: { ...orbit.state.target } };
+
+    orbit.setToolOwnsLeft(false);
+    harness.drag(60, 40, { button: 0 });
+
+    expect(orbit.state.theta).not.toBe(held.theta);
+  });
+
+  it("declines a pan too, so a shift held mid-stroke cannot slide the model away", () => {
+    // A blanket stand-down for single-pointer gestures, not just the left orbit. A pan moves
+    // the target, the window follows it, and every dab after it lands on a different part
+    // of the model than the pointer is over — a stroke that wanders off on its own is a
+    // worse bug than a pan that needs the pointer up first.
+    const { orbit, harness } = controller();
+    orbit.setToolOwnsLeft(true);
+    const before = { ...orbit.state, target: { ...orbit.state.target } };
+
+    harness.drag(60, 40, { button: 0, shiftKey: true });
+
+    expect(orbit.state).toEqual(before);
+  });
+
+  it("declines every single-pointer gesture, and acts only on a second pointer", () => {
+    // The arrangement in one statement: a tool holding the button means the camera waits for
+    // company. Whichever button or modifier the single pointer brought, the answer is the
+    // same, and the only thing that moves the camera is a second finger. Enumerated rather
+    // than asserted one at a time, because the failure this guards against is a *gap* in
+    // that set — a combination nobody thought to switch off.
+    const movesCamera = (
+      gesture: (harness: ReturnType<typeof fakeElement>) => void,
+    ): boolean => {
+      const { orbit, harness } = controller();
+      orbit.setToolOwnsLeft(true);
+      const before = JSON.stringify({
+        ...orbit.state,
+        target: { ...orbit.state.target },
+      });
+
+      gesture(harness);
+
+      return (
+        JSON.stringify({
+          ...orbit.state,
+          target: { ...orbit.state.target },
+        }) !== before
+      );
+    };
+
+    for (const button of [0, 1, 2]) {
+      for (const shiftKey of [false, true]) {
+        expect(
+          movesCamera((harness) => harness.drag(60, 40, { button, shiftKey })),
+          `button ${button}, shift ${shiftKey}`,
+        ).toBe(false);
+      }
+    }
+    // And the one gesture that is supposed to get through.
+    expect(movesCamera((harness) => harness.pinch(100, 200))).toBe(true);
+  });
+});
+
 describe("orbiting angles", () => {
   it("holds phi inside the limits however far a flick overshoots", () => {
     expect(clampPhi(0, limits)).toBe(limits.minPhi);

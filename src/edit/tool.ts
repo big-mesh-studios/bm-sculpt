@@ -116,8 +116,34 @@ export class SculptTool {
   private stroke: BrushStroke | undefined;
   private hover: ToolState["hover"];
   private drag: DragKind = "none";
+  /**
+   * Whether another pointer has taken the gesture, so this one stands still.
+   *
+   * Not the same as having no stroke: a suspended stroke is intact and commits normally.
+   */
+  private suspended = false;
 
   constructor(private readonly options: SculptOptions) {}
+
+  /**
+   * Stops the tool responding, without ending its gesture.
+   *
+   * For a second finger landing mid-stroke. The user has stopped painting and started
+   * navigating, and the two must not happen at once — a pick taken under a moving camera
+   * lands the dab somewhere they were not looking, which is the one error a brush cannot
+   * be wrong about. The stroke and its dabs are kept, so lifting the extra pointer resumes
+   * exactly where it stopped, and releasing the pointer that owns the stroke still commits
+   * what was laid before the interruption.
+   */
+  setSuspended(suspended: boolean): void {
+    if (this.suspended === suspended) return;
+    this.suspended = suspended;
+    // A preview left sitting where it was is now pointing at nothing the user can see: the
+    // camera is about to move and the preview will not move with it. Cleared here rather
+    // than on the next move, so it goes the moment the second finger lands rather than
+    // whenever the pointer next happens to move.
+    if (suspended) this.setHover(undefined);
+  }
 
   /** What the tool is doing, for a readout. */
   get state(): ToolState {
@@ -139,6 +165,13 @@ export class SculptTool {
     width: number,
     height: number,
   ): DragKind {
+    // A second pointer is not a second brush. On a touch screen it arrives as
+    // `button === 0`, the same as the first, so a caller that forwards every press would
+    // otherwise begin a second stroke over the first and silently throw the first away.
+    // One stroke at a time is this class's invariant; *which* pointer is allowed to own it
+    // is the caller's problem, and answering it here would be answering it twice.
+    if (this.stroke !== undefined) return this.drag;
+
     // A bare left drag sculpts. Everything else is navigation, whatever else is true, so a
     // drag can never do two things at once.
     if (event.button === 0 && !event.shiftKey) {
@@ -163,6 +196,11 @@ export class SculptTool {
     width: number,
     height: number,
   ): void {
+    // Suspended means another pointer owns the gesture. Not even the hover moves: a preview
+    // that chases a finger the user is using to pan is worse than no preview at all, and a
+    // hover is a pick, and a pick under a moving camera is a dab in the wrong place.
+    if (this.suspended) return;
+
     const hit = this.pickNow(event.clientX, event.clientY, width, height);
 
     if (this.drag === "sculpt") {

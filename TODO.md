@@ -21,7 +21,7 @@ pnpm dev                           # http://127.0.0.1:5173
 
 | Command             | What it does                                    |
 | ------------------- | ----------------------------------------------- |
-| `pnpm test`         | 481 tests across 23 files                       |
+| `pnpm test`         | 519 tests across 24 files                       |
 | `pnpm check-types`  | `tsc --noEmit`, strict, no linter               |
 | `pnpm format:check` | Prettier — **CI fails on this**                 |
 | `pnpm build`        | Production build; emits a separate worker chunk |
@@ -55,9 +55,14 @@ src/session.ts  window ↔ pool ↔ store wiring                   (phase 4)
 src/sculpt.ts   document + field + tool                         (phase 5)
 ```
 
-Phases 0–5 are complete. What works, verified in a browser: a streamed model meshed in
-four workers, left-drag sculpting, ctrl-z undo, orbit/pan/pinch, and `?spike` for the
-phase 0 diagnostic.
+Phases 0–5 are complete. What works, verified in a real browser: a streamed model meshed
+in four workers, left-drag sculpting that re-meshes while the pointer is still down,
+ctrl-z undo, right-drag orbit, shift-drag pan, and `?spike` for the phase 0 diagnostic.
+
+**Touch pinch is not verified.** The gesture is meant to work — the orbit controller has
+always had the two-pointer branch — but nothing has been run on a touch device, and the
+arbitration that would deliver a second finger to it did not exist until after this list
+was written. Treat it as untested rather than as working.
 
 ---
 
@@ -124,9 +129,23 @@ that says "phase 6" is about the terrain; nothing anywhere describes 7 or 8.
 
 Ordered by how much they matter.
 
-### 1. No test has run a real `Worker` against a real GPU
+### 1. The worker path has run, but only against a software rasteriser
 
-The worker path is verified two ways that are both weaker than they look:
+Closed as far as this machine could take it. The application has been driven in a real
+browser with real module workers, a real WebGL 2 context and real synthetic pointer input:
+chunks mesh in four workers, a stroke re-meshes while the pointer is down, and undo and
+orbit behave. Two caveats, both worth keeping:
+
+- **The GL context was SwiftShader**, not hardware. That exercises every line of the
+  upload and draw path and would have caught a shader that does not compile or a buffer
+  that is laid out wrongly, which is most of what could have been wrong. It says nothing
+  about frame time on a real GPU.
+- **Only the happy path ran.** Every failure branch — a worker that fails to load, a chunk
+  that meshes to an error, `onFailed` leaving a slot unfilled — is covered by
+  `src/session.test.ts` against fakes and has never been provoked for real.
+
+The two original checks are still worth keeping as the regression net, because they are
+cheap and they cover what a browser run does not:
 
 - **Structurally.** A build with `--minify false`, then read the emitted worker chunk:
   it contains `surfaceNets`, `handleMeshMessage`, `mesherFor`, `writeOctahedralNormal`,
@@ -136,45 +155,51 @@ The worker path is verified two ways that are both weaker than they look:
   loop with workers that answer when told to. Every staleness rule is covered — but
   against a fake, and `handleMeshMessage` never touches a `Field`.
 
-A desktop with a real browser is where that closes. If a chunk fails to appear, the
-likely culprits in order: the `new Worker(new URL(...))` URL resolving oddly under the dev
-server; the worker's module failing to load (check the console); and `couldHoldSurface`,
-which returns `true` unconditionally today and so cannot be skipping anything yet.
+If a chunk fails to appear, the likely culprits in order: the `new Worker(new URL(...))`
+URL resolving oddly under the dev server; the worker's module failing to load (check the
+console); and `couldHoldSurface`, which returns `true` unconditionally today and so cannot
+be skipping anything yet.
 
-### 2. Fragment precision is still unanswered
+### 2. Fragment precision: answered, and the probe can now shrink
 
-You will see `fragment precision: <something>` in the header. On the machine this was
-written on it read "not probed", which is why `src/render/precision.ts` was changed to
-return a _reason_ instead of a bare `undefined` — a silent `catch` made "this device
-cannot run the renderer" and "this probe is broken" look identical.
+**It reads `highp`.** Measured in a real browser, with the probe working — which is the
+part that was open, since the machine this was written on read "not probed" and that is
+why `src/render/precision.ts` was changed to return a _reason_ instead of a bare
+`undefined`.
 
-**Read that line and write it down here.** If it says `highp`, the question is answered
-and the probe can shrink to a boot-time constant. If it says anything else, the reason is
-in the line.
+So the remaining work is the follow-through, and it is small: the answer is a property of
+the device, not of the frame, so `detectFragmentPrecision` can become a boot-time constant
+and the probe can go. **Read the line in the header before deleting anything** — a device
+that reports `mediump` or fails to probe is exactly the case the reason-returning shape
+was built for, and throwing that away to save a probe that now always says `highp` trades
+a real diagnosis for tidiness.
 
-### 3. Superchunk membership — deferred from phase 4, needs a measurement
+### 3. Superchunk membership — measured, and the answer is "not yet"
 
 ADR 0007 named it; rmsl has the mechanism (`Mesh.drawRange` — several meshes sharing one
-uploaded geometry, each drawing its own run of indices). It was not built because nothing
-was on screen yet, so there was no count of draw calls to reduce, and merging costs a
-second code path (merged and per-chunk) that doubles what has to stay correct.
+uploaded geometry, each drawing its own run of indices).
 
-Now it can be measured. Two things to know before you try:
+**Measured: the starter model draws 5 chunks.** The header's `N drawn` is the draw-call
+count (every drawn chunk is exactly one `Mesh` with the whole geometry), and it reads 5.
+The window holds 257 slots at the default radius 4, so the other 252 are filled with air
+and draw nothing. Five draw calls is not a number worth reducing, and merging is a second
+code path — merged and per-chunk — that doubles what has to stay correct.
+
+**The question is deferred, not closed.** In a terrain world the same window will have far
+more of its slots filled, and that is the measurement to take before building anything.
+Two things to know when you do:
 
 - **There is no `renderer.info`.** rmsl exposes no draw-call counter and no render
   statistics of any kind — grep the `.d.ts` files, there is nothing. If you want a real
   GPU time figure, `EXT_disjoint_timer_query_webgl2` on the context is the route.
-- **But you may already have the number.** Every drawn chunk is exactly one `Mesh` with
-  the whole geometry, so draw calls equal `stats().drawn` — which is _already in the
-  header_ as `N drawn`. Orbit and watch it. If it sits in the tens, merging will not
-  save you anything and the whole question closes.
 - **There is no merge helper in rmsl.** Merging is hand-written concatenation of the
   four typed arrays with index offsetting, which is mechanical but not free.
 
-Also worth knowing before optimising anything: **rmsl does not frustum-cull.** There is
-no `frustumCulled` on `Object3D` and nothing in the renderer looks for one, so every
-drawn chunk is submitted every frame whether or not it is on screen. That may matter more
-than merging does, and it is a smaller change.
+**The cheaper half is frustum culling, and it is probably the better one.** rmsl does not
+frustum-cull: there is no `frustumCulled` on `Object3D` and nothing in the renderer looks
+for one, so every drawn chunk is submitted every frame whether or not it is on screen. At
+5 drawn chunks that is free; at 200 it is the whole frame. Culling needs no second code
+path and no index arithmetic, so it is the thing to reach for first.
 
 ### 4. Brush settings have no UI
 
@@ -200,6 +225,27 @@ currently warrants, but it collapses both the cost and the undo granularity at o
 - Primitive tools (the gizmo shape the picker already anticipates: `SculptTarget.beginStroke`
   takes a normal it does not yet use).
 
+### 7. The spike scene attaches the orbit controller twice
+
+`src/spike-scene.tsx` attaches its own `OrbitController` when it builds the scene, and
+`src/app.tsx` attaches the same controller again for both branches. The spike therefore has
+two complete sets of listeners on one canvas.
+
+It is nearly invisible, which is why it has survived: the handlers share one `pointers` map
+and one `button`, so the second set sees a zero delta and does nothing. The exception is the
+**wheel**, which every handler applies, so zooming on `?spike` runs at double speed — the
+one gesture with no shared state to deduplicate it.
+
+The fix is to stop one of them attaching. The spike does not need to: `app.tsx` attaches
+uniformly and takes the returned disposer.
+
+### 8. `OrbitController.dragging` is dead
+
+The getter's comment says "the UI uses this to hide its own hints". Nothing reads it —
+grep finds no call sites, and the hints text in `app.tsx` is static. Either wire it up or
+delete it; a getter that documents a consumer who does not exist is a small lie that costs
+a reader a minute every time.
+
 ---
 
 ## Things that will bite you
@@ -211,11 +257,32 @@ Each of these cost real time and is now recorded somewhere. Read the record.
   slots must use `claimedSlotOf` instead. Using the wrong one fails quietly: every
   unfilled chunk looks like it is not in the window at all.
 - **A renderer's buffers are keyed by geometry object**, so a dropped geometry is held for
-  the renderer's whole life. `dispose` belongs to _replacing_ a mesh, not to shutting
-  down — including when a sculpt deletes a chunk's surface.
+  the renderer's whole life. `dispose` belongs to _replacing_ a mesh, to shutting down, and
+  to a chunk changing **cell** — not to a chunk changing **model**.
+
+  Those last two look alike and are opposites. A slot re-pointed at another cell is holding
+  the previous cell's geometry, and that must go: drawing it at the new cell's coordinates
+  is the artefact the revision mechanism exists to prevent. But a slot whose _model_
+  changed is still the same cell, so its current surface is the right thing to draw until
+  the replacement lands — dropping it opens a chunk-sized hole for as long as the mesher
+  takes, once per edit, which is a strobe at the brush. That is why
+  `ChunkMeshStore` has `markStale` and `markModelChanged` rather than one method, and why
+  `hooksFor` routes the window's three reasons to two different ones. **If you are here
+  trying to "fix" a double dispose or a missing one, check which of the two you are in.**
+
 - **Sending a model cancels every mesh in flight.** Correct, and it means every edit must
   re-request everything unfinished or chunks stay blank until something unrelated scrolls
   the window. It looks like a hanging mesher.
+
+  It also means a send is not something to do per frame. Anything that re-sends the model
+  while the user is still drawing has to **wait for `Session.idle` first**, or it cancels
+  the very mesh that would have shown the edit: the chunk under the brush never lands, and
+  the symptom is not a stutter but an edit that appears to do nothing at all until the
+  pointer stops. The dabs are not lost while waiting — they accumulate and go out together
+  — which is what makes the update rate the mesher's real throughput rather than a number
+  someone hoped for. Note this is a _coarse_ gate on the whole pool, not on the chunks the
+  edit touches, because a send throws away everything outstanding and not just its own.
+
 - **Chunks are centred on multiples of `BLOCK_WORLD`**, not on their low corner, so world
   319 is in cell 1.
 - **An operation's index is its position in the fold** and must increase monotonically.

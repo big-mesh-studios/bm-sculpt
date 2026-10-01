@@ -184,14 +184,15 @@ export class OrbitController {
   /** Set while a pointer is down, to keep a release from ending a drag early. */
   private button = -1;
   /**
-   * Whether this controller responds at all.
+   * Whether a tool has the left button, so a left drag is not also a camera move.
    *
-   * Set false by a tool that is using the same element for a gesture of its own. Both
-   * listen on the canvas, so without it a left drag orbits *and* sculpts — and the result
-   * is a stroke drawn along the path the camera went, which reads as the brush being wildly
-   * inaccurate rather than as two things both happening.
+   * Narrower than a blanket "stand down", and deliberately so. A blanket switch has to stop
+   * this controller seeing *any* pointer, which makes a second finger invisible to it — and
+   * a second finger is how a pinch is spelled, so the gesture could not work at all. This
+   * one keeps tracking pointers and only declines to act on a single-pointer gesture, so
+   * the two-pointer branch stays reachable while a brush is down.
    */
-  private enabled = true;
+  private toolOwnsLeft = false;
   private detachers: Array<() => void> = [];
 
   constructor(
@@ -203,17 +204,17 @@ export class OrbitController {
   }
 
   /**
-   * Stops or resumes responding, without detaching.
+   * Says a tool is using the left button, so this controller leaves single-pointer gestures
+   * to it.
    *
-   * Detaching would work too and is worse: the listeners would have to come back, and
-   * whatever re-added them would have to know about the tool.
+   * Stops and resumes without detaching, and without forgetting the pointers: detaching
+   * would work too and is worse, since the listeners would have to come back and whatever
+   * re-added them would have to know about the tool. Two pointers still pinch, which is the
+   * whole point — a user with one finger on the brush and two on the screen is navigating,
+   * and the two must be able to be true at once.
    */
-  setEnabled(enabled: boolean): void {
-    this.enabled = enabled;
-    if (enabled) {
-      this.pointers.clear();
-      this.button = -1;
-    }
+  setToolOwnsLeft(owns: boolean): void {
+    this.toolOwnsLeft = owns;
   }
 
   /** Starts listening. Returns a function that stops, and is safe twice. */
@@ -235,7 +236,6 @@ export class OrbitController {
     };
 
     on("pointerdown", (event) => {
-      if (!this.enabled) return;
       element.setPointerCapture(event.pointerId);
       this.pointers.set(event.pointerId, local(event));
       // A second finger turns the gesture into a pinch whatever button it
@@ -245,7 +245,6 @@ export class OrbitController {
     });
 
     on("pointermove", (event) => {
-      if (!this.enabled) return;
       const previous = this.pointers.get(event.pointerId);
       if (previous === undefined) return;
       const current = local(event);
@@ -267,6 +266,12 @@ export class OrbitController {
         this.pinchDistance = spread;
         return;
       }
+
+      // A tool has the left button, so the camera waits. Deliberately *after* the pinch
+      // branch above: one finger on the brush and two on the screen is a navigation
+      // gesture, and the pointer bookkeeping above has to keep running either way so the
+      // deltas are right the moment the tool lets go.
+      if (this.toolOwnsLeft) return;
 
       const dx = current.x - previous.x;
       const dy = current.y - previous.y;
@@ -305,7 +310,10 @@ export class OrbitController {
     on(
       "wheel",
       (event) => {
-        if (!this.enabled) return;
+        // Dolly is the one camera move a tool cannot have: a zoom mid-stroke moves the
+        // surface out from under the brush, and every dab after it lands somewhere the user
+        // was not pointing. Two fingers still pinch, because that is a different branch.
+        if (this.toolOwnsLeft) return;
         // Not passive, so the gesture can be claimed: a wheel over a model that
         // also scrolls the page is a page that scrolls while the user is trying
         // to zoom.
