@@ -32,10 +32,12 @@ import {
   DEFAULT_LOD_BANDS,
   lodAt,
   lodIsOff,
+  skirtMaskAt,
   sphereCells,
   type CellCoord,
   type Lod,
   type LodBands,
+  type SkirtMask,
 } from "./level-data";
 
 /** One resident chunk. What a slot holds. */
@@ -55,6 +57,14 @@ export interface ChunkSlot {
    * every frame until it arrived.
    */
   targetLod: Lod;
+  /**
+   * Faces of the cell whose neighbour is at a different level of detail.
+   *
+   * Held beside `targetLod` because it is chosen the same way and changes with it: a face
+   * where the level steps is the only place a chunk needs a skirt, and a slot whose target
+   * skirt moved is a slot that has to be rebuilt exactly as one whose level moved.
+   */
+  targetSkirt: SkirtMask;
   /**
    * Whether anything has been built for this slot's current cell.
    *
@@ -284,7 +294,8 @@ export class ChunkWindow {
       }
 
       const wanted = lodAt(entry.cell, centre, this.bands);
-      if (wanted !== this.lodOf(slot) && wanted !== entry.targetLod) {
+      const wantedSkirt = skirtMaskAt(entry.cell, centre, this.bands);
+      if (wanted !== entry.targetLod || wantedSkirt !== entry.targetSkirt) {
         this.params.onSlotRelease?.(slot);
         // Marked stale as well as queued. It still holds geometry — at the level it
         // was built for, which is no longer the level it is being asked for — and a
@@ -295,6 +306,7 @@ export class ChunkWindow {
         entry.filled = false;
         refilling.push(slot);
         entry.targetLod = wanted;
+        entry.targetSkirt = wantedSkirt;
       }
     }
 
@@ -316,6 +328,7 @@ export class ChunkWindow {
       entry.cell = cell;
       entry.centre = cellCentre(cell);
       entry.targetLod = lodAt(cell, centre, this.bands);
+      entry.targetSkirt = skirtMaskAt(cell, centre, this.bands);
       // The slot still holds the cell it left behind and now stands for this one.
       // Until the rebuild lands it answers for neither.
       entry.filled = false;
@@ -375,6 +388,11 @@ export class ChunkWindow {
         cell: { x: 0, y: 0, z: 0 },
         centre: { x: 0, y: 0, z: 0 },
         targetLod: lodAt({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, bands),
+        targetSkirt: skirtMaskAt(
+          { x: 0, y: 0, z: 0 },
+          { x: 0, y: 0, z: 0 },
+          bands,
+        ),
         filled: false,
       };
     }
@@ -410,6 +428,7 @@ export class ChunkWindow {
       entry.cell = cell;
       entry.centre = cellCentre(cell);
       entry.targetLod = lodAt(cell, centre, this.bands);
+      entry.targetSkirt = skirtMaskAt(cell, centre, this.bands);
       entry.filled = false;
       taken.push(slot);
     }
@@ -453,6 +472,12 @@ export class ChunkWindow {
     return entry.targetLod;
   }
 
+  /** The faces a slot's mesh must skirt, because a neighbour is at another level. */
+  skirtOf(slot: number): SkirtMask {
+    const entry = this.slots[slot];
+    return entry.targetSkirt;
+  }
+
   /** Whether the window's level of detail is switched off. */
   get levelOfDetailOff(): boolean {
     return lodIsOff(this.bands);
@@ -484,6 +509,11 @@ export class ChunkWindow {
         cell: { x: 0, y: 0, z: 0 },
         centre: { x: 0, y: 0, z: 0 },
         targetLod: lodAt(
+          { x: 0, y: 0, z: 0 },
+          { x: 0, y: 0, z: 0 },
+          this.bands,
+        ),
+        targetSkirt: skirtMaskAt(
           { x: 0, y: 0, z: 0 },
           { x: 0, y: 0, z: 0 },
           this.bands,

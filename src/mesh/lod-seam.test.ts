@@ -25,6 +25,14 @@
  * test becomes an ordinary one. So a fix cannot land unnoticed, and the bug stays
  * documented in the meantime. The same-level test above is a plain `it`: it is the
  * control, and it must keep passing for the mixed-level ones to mean anything.
+ *
+ * ## A skirt covers the visible crack without fixing this
+ *
+ * `skirt.ts` drops a short flap from the finer chunk's open boundary at a level step, which
+ * hides the hairline slit from the camera — the terrain gets no visible crack. It does *not*
+ * make the two meshes share vertices, which is what these tests assert, so they stay
+ * `it.fails`. An exact fix still means evaluating the coarse boundary strip at the fine
+ * stride (ADR 0004); until then the visible symptom is covered and this stays pinned.
  */
 
 import { describe, expect, it } from "vitest";

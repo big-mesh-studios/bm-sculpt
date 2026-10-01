@@ -15,10 +15,11 @@
 
 import type { Bounds, Rgb8, Vec3 } from "../constants";
 import { BLOCK_WORLD, VOXEL_SIZE } from "../constants";
-import type { CellCoord, Lod } from "../world";
+import type { CellCoord, Lod, SkirtMask } from "../world";
 import { lodSampleSize, lodSamples } from "../world";
 
 import { ChunkMeshBuilder, type ChunkMesh } from "./chunk-mesh";
+import { addSkirts } from "./skirt";
 import {
   scratchFor,
   surfaceNets,
@@ -35,6 +36,16 @@ import {
 export interface MeshRequest {
   readonly cell: CellCoord;
   readonly lod: Lod;
+  /**
+   * Faces of this chunk whose neighbour is at a different level of detail, as a
+   * `SkirtMask`.
+   *
+   * Optional, and absent means "no skirt", because a mesher that cannot be told about its
+   * neighbours must still produce a mesh — just one with the hairline crack at a level
+   * boundary that a skirt exists to cover. The window supplies it from the same `lodAt`
+   * that chose this chunk's level.
+   */
+  readonly skirt?: SkirtMask;
 }
 
 /** Builds the mesh for a chunk. */
@@ -213,6 +224,13 @@ export class SurfaceNetsChunkMesher implements ChunkMesher {
       // threw, because a worker that kept a stale region would silently mesh every
       // chunk after a failure with the wrong candidates.
       endRegion();
+    }
+
+    // After the surface and before `finish`, because a skirt is appended geometry that has
+    // to leave in the same buffers. A level-of-detail neighbour is the only reason to add
+    // one, so a chunk with no such neighbour pays a single mask test.
+    if (request.skirt !== undefined) {
+      addSkirts(this.builder, request.skirt, region.bounds, region.sampleSize);
     }
 
     // `finish` copies to exact length, which is what leaves the thread by transfer.

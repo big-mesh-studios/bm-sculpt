@@ -24,7 +24,7 @@
  * a per-cell counter, incremented on every request, and one equality test.
  */
 
-import type { CellCoord, Lod } from "../world";
+import type { CellCoord, Lod, SkirtMask } from "../world";
 import { sameCell } from "../world";
 
 import type { ChunkMesh } from "./chunk-mesh";
@@ -174,7 +174,7 @@ export class WorldWorkerPool {
     // so a chunk that spends its budget is not permanently unaskable.
     if (attempts > DECLINE_BUDGET_PER_WORKER * this.slots.length) return;
     this.declinedFor.set(key, attempts);
-    this.issue(wanted.cell, wanted.lod);
+    this.issue(wanted.cell, wanted.lod, wanted.skirt);
   }
 
   /**
@@ -184,11 +184,12 @@ export class WorldWorkerPool {
    * queue entry — without also clearing the decline history, which is what a call from
    * outside means.
    */
-  private issue(cell: CellCoord, lod: number): Wanted {
+  private issue(cell: CellCoord, lod: number, skirt?: SkirtMask): Wanted {
     const wanted: Wanted = {
       cell: { ...cell },
       lod,
       generation: this.nextGeneration++,
+      ...(skirt !== undefined ? { skirt } : {}),
     };
     this.wantedByCell.set(this.key(cell), wanted);
     this.dropQueued(cell);
@@ -210,9 +211,9 @@ export class WorldWorkerPool {
    * mesh has not arrived yet, and the answer to the earlier request is then built from a
    * model that no longer exists.
    */
-  request(cell: CellCoord, lod: Lod): Wanted {
+  request(cell: CellCoord, lod: Lod, skirt?: SkirtMask): Wanted {
     this.forgetDeclines(cell);
-    return this.issue(cell, lod);
+    return this.issue(cell, lod, skirt);
   }
 
   /** Gives up on a chunk: it has left the window. */
@@ -382,6 +383,7 @@ export class WorldWorkerPool {
         cell: wanted.cell,
         lod: wanted.lod,
         generation: wanted.generation,
+        ...(wanted.skirt !== undefined ? { skirt: wanted.skirt } : {}),
       });
     }
 

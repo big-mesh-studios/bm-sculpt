@@ -24,7 +24,7 @@
  * cannot repeat.
  */
 
-import type { CellCoord, Lod } from "../world";
+import type { CellCoord, Lod, SkirtMask } from "../world";
 
 import type { ChunkMesh } from "./chunk-mesh";
 
@@ -33,6 +33,14 @@ export interface ChunkRequestMessage {
   readonly kind: "meshChunk";
   readonly cell: CellCoord;
   readonly lod: Lod;
+  /**
+   * Faces whose neighbour is at a different level, as a `SkirtMask`.
+   *
+   * Optional, so a message from an older bundle — which has no skirts at all — is still a
+   * valid request. A worker given one without it simply meshes without a skirt, which is the
+   * behaviour before this field existed.
+   */
+  readonly skirt?: SkirtMask;
   /**
    * The main thread's count of how many times it has asked for this chunk.
    *

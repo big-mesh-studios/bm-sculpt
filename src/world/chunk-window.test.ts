@@ -406,6 +406,42 @@ describe("level of detail", () => {
   });
 });
 
+describe("skirt masks", () => {
+  it("skirts a cell whose neighbour steps, and not the level's own centre", () => {
+    // With the default bands the origin cell and its six face neighbours are all level 0,
+    // so the centre is watertight with them and needs no skirt. One cell out, the diagonal
+    // neighbours drop to level 1, so the face-neighbour cell has a step to cover.
+    const { window } = recordingWindow({ radius: 2, yRadius: 1 });
+    const centre = window.claimedSlotOf({ x: 0, y: 0, z: 0 });
+    const edge = window.claimedSlotOf({ x: 1, y: 0, z: 0 });
+    expect(centre).toBeDefined();
+    expect(edge).toBeDefined();
+    expect(window.skirtOf(centre as number)).toBe(0);
+    expect(window.skirtOf(edge as number)).not.toBe(0);
+  });
+
+  it("rebuilds a cell whose neighbour's level moved, even when its own did not", () => {
+    // The gap a level change opens is on the *neighbour's* side of the boundary, so a cell
+    // whose own level is unchanged can still need a different skirt. Leaving it alone here
+    // would put the crack back exactly along the band the scroll just moved.
+    const { window, events, reset } = recordingWindow({
+      radius: 2,
+      yRadius: 1,
+    });
+    fillEverything(window);
+    const slot = window.claimedSlotOf({ x: 0, y: 0, z: 0 }) as number;
+    expect(window.lodOf(slot)).toBe(0);
+    expect(window.skirtOf(slot)).toBe(0);
+
+    reset();
+    window.scrollTo({ x: 320, y: 0, z: 0 });
+    expect(window.slots[slot].cell).toEqual({ x: 0, y: 0, z: 0 });
+    expect(window.lodOf(slot)).toBe(0);
+    expect(window.skirtOf(slot)).not.toBe(0);
+    expect(events.released).toContain(slot);
+  });
+});
+
 describe("marking slots", () => {
   it("ignores a slot number that does not exist", () => {
     const { window } = recordingWindow({ radius: 1, yRadius: 1 });

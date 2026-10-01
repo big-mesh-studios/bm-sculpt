@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChunkMesh } from "./chunk-mesh";
+import type { MeshRequest } from "./chunk-mesher";
 import { isFromWorker, isToWorker, meshTransferables } from "./protocol";
 import type { FromWorker, ModelMessage, ToWorker } from "./protocol";
 import {
@@ -191,6 +192,25 @@ describe("a worker handling messages", () => {
     expect(asked.gate).toBe(1);
     expect(asked.mesh).toBe(1);
     expect(handled.reply).toMatchObject({ kind: "meshReady", empty: false });
+  });
+
+  it("passes a request's skirt mask through to the mesher", () => {
+    // The mask has to survive the message boundary, or a chunk at a level boundary is
+    // meshed flat and the crack it was meant to cover is back — with nothing else to show
+    // for it, because the geometry is still a perfectly valid mesh of the chunk.
+    const seen: MeshRequest[] = [];
+    const factory: MesherFactory = () => ({
+      mesh: (request) => {
+        seen.push(request);
+        return meshOf(9);
+      },
+    });
+    handleMeshMessage(
+      { ...emptyWorkerState(), model: model() },
+      { kind: "meshChunk", cell: cell(0), lod: 0, generation: 1, skirt: 5 },
+      factory,
+    );
+    expect(seen[0]?.skirt).toBe(5);
   });
 
   it("answers a chunk the mesher rules out, without meshing it", () => {

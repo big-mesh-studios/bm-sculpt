@@ -13,7 +13,7 @@
  * half-updated by a message arriving while a chunk is being built.
  */
 
-import type { CellCoord, Lod } from "../world";
+import type { CellCoord, Lod, SkirtMask } from "../world";
 import { sameCell } from "../world";
 
 import type { ChunkMesher } from "./chunk-mesher";
@@ -155,7 +155,12 @@ const setModel = (state: WorkerState, model: ModelMessage): Handled => {
  */
 const meshChunk = (
   state: WorkerState,
-  request: { cell: CellCoord; lod: Lod; generation: number },
+  request: {
+    cell: CellCoord;
+    lod: Lod;
+    generation: number;
+    skirt?: SkirtMask;
+  },
   build: MesherFactory,
 ): Handled => {
   const model = state.model;
@@ -190,7 +195,11 @@ const meshChunk = (
       };
     }
 
-    const mesh = mesher.mesh({ cell: request.cell, lod: request.lod });
+    const mesh = mesher.mesh({
+      cell: request.cell,
+      lod: request.lod,
+      ...(request.skirt !== undefined ? { skirt: request.skirt } : {}),
+    });
     const empty = mesh.vertexCount === 0;
     return {
       state: { ...pending, pending: undefined, meshed: pending.meshed + 1 },
@@ -248,6 +257,8 @@ export interface Wanted {
   readonly cell: CellCoord;
   readonly lod: Lod;
   readonly generation: number;
+  /** Faces whose neighbour is at a different level, for the skirt. Absent means none. */
+  readonly skirt?: SkirtMask;
 }
 
 /**

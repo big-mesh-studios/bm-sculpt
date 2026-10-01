@@ -9,6 +9,8 @@ import {
   chunkCellOf,
   lodSampleSize,
   lodSamples,
+  SKIRT_X_POS,
+  SKIRT_Z_POS,
 } from "../world";
 
 import { type ChunkMesh } from "./chunk-mesh";
@@ -410,6 +412,48 @@ describe("meshing a chunk through the field", () => {
         );
       }
     }
+  });
+});
+
+describe("skirts at a level-of-detail face", () => {
+  /**
+   * A horizontal plane at `y = 0`, so the surface is a sheet that runs out of the chunk's
+   * four vertical faces. The mesher leaves that sheet open at each face, which is exactly
+   * the edge set a skirt extrudes — a closed surface inside the chunk would have none.
+   */
+  const plane: MeshField = {
+    distance: (_x, y) => y,
+    distanceForStepping: (_x, y) => y,
+    gradient: () => ({ x: 0, y: 1, z: 0 }),
+    colourAt: () => ({ r: 1, g: 2, b: 3 }),
+    couldHoldSurface: () => true,
+  };
+  const mesher = new SurfaceNetsChunkMesher(plane);
+  const request = (skirt?: number): MeshRequest =>
+    skirt === undefined
+      ? { cell: { x: 0, y: 0, z: 0 }, lod: LOD0 }
+      : { cell: { x: 0, y: 0, z: 0 }, lod: LOD0, skirt };
+
+  it("adds one wall (two triangles) per open boundary edge on a skirted face", () => {
+    const plain = mesher.mesh(request());
+    const skirted = mesher.mesh(request(SKIRT_X_POS | SKIRT_Z_POS));
+    expect(plain.triangleCount).toBeGreaterThan(0);
+    // Two new vertices and two new triangles per skirted open edge, so the two counts rise
+    // together — a skirt that added vertices without faces, or faces without vertices,
+    // would fail this.
+    expect(skirted.triangleCount).toBeGreaterThan(plain.triangleCount);
+    expect(skirted.vertexCount - plain.vertexCount).toBe(
+      skirted.triangleCount - plain.triangleCount,
+    );
+  });
+
+  it("adds nothing when no face has a level step", () => {
+    // The common case: a chunk whose neighbours are all at its level pays nothing, which is
+    // what keeps a skirt off every same-level seam in the world.
+    const plain = mesher.mesh(request());
+    const zero = mesher.mesh(request(0));
+    expect(zero.vertexCount).toBe(plain.vertexCount);
+    expect(zero.triangleCount).toBe(plain.triangleCount);
   });
 });
 

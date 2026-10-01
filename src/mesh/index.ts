@@ -28,6 +28,8 @@ export {
 
 export { Growable } from "./growable";
 
+export { addSkirts } from "./skirt";
+
 export type {
   ChunkMesher,
   ChunkRegion,

@@ -25,10 +25,17 @@ export {
   lodWorld,
 } from "../constants";
 
-export type { CellCoord, Lod, LodBands } from "./level-data";
+export type { CellCoord, Lod, LodBands, SkirtMask } from "./level-data";
 export {
   DEFAULT_LOD_BANDS,
   LOD_OFF,
+  SKIRT_DIRECTIONS,
+  SKIRT_X_NEG,
+  SKIRT_X_POS,
+  SKIRT_Y_NEG,
+  SKIRT_Y_POS,
+  SKIRT_Z_NEG,
+  SKIRT_Z_POS,
   cellCentre,
   cellDistance,
   cellInSphere,
@@ -43,6 +50,7 @@ export {
   sameCell,
   sampleIndexIn,
   sampleWorld,
+  skirtMaskAt,
   sphereCells,
 } from "./level-data";
 

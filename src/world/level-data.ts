@@ -105,6 +105,59 @@ export const lodAt = (
 };
 
 /**
+ * Which of a chunk's six faces border a chunk at a different level of detail.
+ *
+ * A `SkirtMask` is a bit set, one bit per face, in the order `-x, +x, -y, +y, -z, +z`.
+ * A set bit says the neighbouring cell is meshed at a different level, so the two
+ * surfaces meet across a resolution change and can leave a hairline crack — the case a
+ * skirt exists to cover.
+ *
+ * The mask is derived from the same `lodAt` the window schedules with, one cell out, so
+ * it cannot disagree with the level a neighbour is actually built at. A face outside the
+ * window still answers, because `lodAt` is defined for every cell: the neighbour simply
+ * may not exist yet, which changes nothing about where the discontinuity is.
+ */
+export type SkirtMask = number;
+
+export const SKIRT_X_NEG = 1 << 0;
+export const SKIRT_X_POS = 1 << 1;
+export const SKIRT_Y_NEG = 1 << 2;
+export const SKIRT_Y_POS = 1 << 3;
+export const SKIRT_Z_NEG = 1 << 4;
+export const SKIRT_Z_POS = 1 << 5;
+
+/** The six face neighbours, in `SkirtMask` bit order. */
+export const SKIRT_DIRECTIONS: readonly (readonly [number, number, number])[] =
+  [
+    [-1, 0, 0],
+    [1, 0, 0],
+    [0, -1, 0],
+    [0, 1, 0],
+    [0, 0, -1],
+    [0, 0, 1],
+  ];
+
+/** The faces of a cell whose neighbour is at a different level of detail. */
+export const skirtMaskAt = (
+  cell: CellCoord,
+  focus: CellCoord,
+  bands: LodBands = DEFAULT_LOD_BANDS,
+): SkirtMask => {
+  const self = lodAt(cell, focus, bands);
+  let mask = 0;
+  for (let face = 0; face < SKIRT_DIRECTIONS.length; face++) {
+    const [dx, dy, dz] = SKIRT_DIRECTIONS[face];
+    const neighbour = lodAt(
+      { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz },
+      focus,
+      bands,
+    );
+    if (neighbour !== self) mask |= 1 << face;
+  }
+  return mask;
+};
+
+/**
  * The chunk cell containing a world point.
  *
  * `Math.floor` on all three axes with no clamping, so cells are unbounded in both

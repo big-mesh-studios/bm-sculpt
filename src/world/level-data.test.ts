@@ -16,6 +16,10 @@ import {
   lodSamples,
   sampleIndexIn,
   sampleWorld,
+  SKIRT_X_NEG,
+  SKIRT_Z_NEG,
+  SKIRT_Z_POS,
+  skirtMaskAt,
   sphereCells,
   type CellCoord,
 } from "./level-data";
@@ -280,5 +284,41 @@ describe("the window", () => {
   it("holds the centre cell of the origin window, which is where a model is", () => {
     const cells = sphereCells({ x: 0, y: 0, z: 0 }, 1, 1);
     expect(cells.map((c) => `${c.x},${c.y},${c.z}`)).toContain("0,0,0");
+  });
+});
+
+describe("skirt masks", () => {
+  const focus: CellCoord = { x: 0, y: 0, z: 0 };
+
+  it("is empty where every neighbour is at the same level", () => {
+    // A same-level seam is watertight, so a skirt there would be geometry nobody needs.
+    expect(skirtMaskAt({ x: 0, y: 5, z: 0 }, focus)).toBe(0);
+  });
+
+  it("sets the face whose neighbour is one band finer", () => {
+    // Cell (2,0,0) has distance squared 4 — level 1 — and its inner neighbour (1,0,0) is
+    // level 0, so the -x face steps up in detail and only that face is skirted from the
+    // neighbours the level changes towards.
+    const mask = skirtMaskAt({ x: 2, y: 0, z: 0 }, focus);
+    expect(mask & SKIRT_X_NEG).toBe(SKIRT_X_NEG);
+  });
+
+  it("sets every face that steps, including the outer z side", () => {
+    const mask = skirtMaskAt({ x: 0, y: 0, z: 0 }, focus, {
+      full: 0,
+      coarse: 1,
+    });
+    // With a single full chunk at the focus, only the origin cell is level 0 and all six
+    // faces step down in detail.
+    expect(mask).not.toBe(0);
+    expect(mask & SKIRT_Z_POS).toBe(SKIRT_Z_POS);
+    expect(mask & SKIRT_Z_NEG).toBe(SKIRT_Z_NEG);
+  });
+
+  it("does not skirt a face where the level matches, only where it steps", () => {
+    const mask = skirtMaskAt({ x: 0, y: 6, z: 0 }, focus);
+    // (0,5,0) is level 2 at distance 5, so is its neighbour above; (0,4,0) is also level 2,
+    // so no face reports a change.
+    expect(mask).toBe(0);
   });
 });
