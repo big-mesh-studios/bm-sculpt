@@ -165,13 +165,39 @@ describe("level of detail", () => {
 
   it("is chosen by euclidean distance in chunk cells", () => {
     const focus: CellCoord = { x: 0, y: 0, z: 0 };
-    const bands = DEFAULT_LOD_BANDS;
-    expect(lodAt({ x: 0, y: 0, z: 0 }, focus, bands)).toBe(0);
-    expect(lodAt({ x: 1, y: 0, z: 0 }, focus, bands)).toBe(0);
-    expect(lodAt({ x: 2, y: 0, z: 0 }, focus, bands)).toBe(1);
-    expect(lodAt({ x: 0, y: 0, z: 3 }, focus, bands)).toBe(2);
-    // Measured diagonally, so (2,2,2) is further than three chunks along one axis.
-    expect(lodAt({ x: 2, y: 2, z: 2 }, focus, bands)).toBe(2);
+    const { full, coarse } = DEFAULT_LOD_BANDS;
+    // Probing the band boundaries themselves, which is what a comparison against has to
+    // decide. Derived from the bands rather than written out, so a retune does not quietly
+    // turn this into a test of the old numbers.
+    expect(lodAt({ x: 0, y: 0, z: 0 }, focus)).toBe(0);
+    expect(lodAt({ x: full, y: 0, z: 0 }, focus)).toBe(0);
+    expect(lodAt({ x: coarse, y: 0, z: 0 }, focus)).toBe(1);
+    expect(lodAt({ x: coarse + 1, y: 0, z: 0 }, focus)).toBe(2);
+    // Measured diagonally, so the same per-axis coordinate is further away when it is
+    // taken on three axes at once — the distance is euclidean, not per-axis.
+    expect(lodAt({ x: coarse, y: coarse, z: coarse }, focus)).toBe(2);
+  });
+
+  it("leaves no lower-detail chunk touching the cell the player stands in", () => {
+    // The reason `full` is two rather than one, and the whole point of the band. Distance
+    // is measured from the focus *cell*, and the player is anywhere inside it — so at
+    // `full: 1` the first coarser chunk is a diagonal neighbour at √2, whose corner is the
+    // corner of the cell the player is standing in, and standing on that seam means looking
+    // at two levels at once.
+    const focus: CellCoord = { x: 0, y: 0, z: 0 };
+    // Every face and diagonal neighbour of the focus cell, all of which are within reach of
+    // the player standing anywhere in it.
+    for (const cell of [
+      { x: 1, y: 0, z: 0 },
+      { x: 0, y: 1, z: 0 },
+      { x: 0, y: 0, z: 1 },
+      { x: 1, y: 1, z: 0 },
+      { x: 1, y: 0, z: 1 },
+      { x: 0, y: 1, z: 1 },
+      { x: 1, y: 1, z: 1 },
+    ]) {
+      expect(lodAt(cell, focus), `cell ${JSON.stringify(cell)}`).toBe(0);
+    }
   });
 
   it("is the same everywhere at equal distance", () => {
@@ -214,21 +240,31 @@ describe("level of detail", () => {
     // its own centre as one at the origin does. A comparison against the origin
     // would make everything beyond the bands coarsest, permanently.
     const bands = DEFAULT_LOD_BANDS;
-    // Bands of one and two chunks, so the focus and its immediate neighbours are
-    // full resolution and anything three or more chunks out is the coarsest.
-    const focus: CellCoord = { x: 5000, y: 0, z: 0 };
+    const edge = 5000;
+    // The focus and its immediate neighbours are full resolution, the next band is one
+    // step coarser, and anything past that is the coarsest.
+    const focus: CellCoord = { x: edge, y: 0, z: 0 };
     expect(lodAt(focus, focus, bands)).toBe(0);
-    expect(lodAt({ x: 5001, y: 0, z: 0 }, focus, bands)).toBe(0);
-    expect(lodAt({ x: 5002, y: 0, z: 0 }, focus, bands)).toBe(1);
-    expect(lodAt({ x: 5003, y: 0, z: 0 }, focus, bands)).toBe(2);
+    expect(lodAt({ x: edge + bands.full, y: 0, z: 0 }, focus, bands)).toBe(0);
+    expect(lodAt({ x: edge + bands.coarse, y: 0, z: 0 }, focus, bands)).toBe(1);
+    expect(
+      lodAt({ x: edge + bands.coarse + 1, y: 0, z: 0 }, focus, bands),
+    ).toBe(2);
     // And the same cell, measured from the origin instead, is very far away — which
     // is what "follows the focus" is protecting against.
-    expect(lodAt({ x: 5003, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, bands)).toBe(2);
+    expect(
+      lodAt(
+        { x: edge + bands.coarse + 1, y: 0, z: 0 },
+        { x: 0, y: 0, z: 0 },
+        bands,
+      ),
+    ).toBe(2);
     expect(lodAt({ x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, bands)).toBe(0);
   });
 
   it("measures distance the same way cellDistance does", () => {
     const focus: CellCoord = { x: 0, y: 0, z: 0 };
+    const { full, coarse } = DEFAULT_LOD_BANDS;
     for (const cell of [
       { x: 2, y: 0, z: 0 },
       { x: 1, y: 1, z: 1 },
@@ -236,7 +272,7 @@ describe("level of detail", () => {
     ]) {
       const distance = cellDistance(cell, focus);
       expect(lodAt(cell, focus)).toBe(
-        distance <= 1 ? 0 : distance <= 2 ? 1 : 2,
+        distance <= full ? 0 : distance <= coarse ? 1 : 2,
       );
     }
   });
@@ -296,10 +332,13 @@ describe("skirt masks", () => {
   });
 
   it("sets the face whose neighbour is one band finer", () => {
-    // Cell (2,0,0) has distance squared 4 — level 1 — and its inner neighbour (1,0,0) is
-    // level 0, so the -x face steps up in detail and only that face is skirted from the
-    // neighbours the level changes towards.
-    const mask = skirtMaskAt({ x: 2, y: 0, z: 0 }, focus);
+    // The outermost chunk of a band is one step coarser than the neighbour behind it, so
+    // the face towards that neighbour is the one that steps up in detail. Written against
+    // `coarse` rather than a literal, since which chunk that is depends on the bands.
+    const { coarse } = DEFAULT_LOD_BANDS;
+    const mask = skirtMaskAt({ x: coarse, y: 0, z: 0 }, focus);
+    expect(lodAt({ x: coarse, y: 0, z: 0 }, focus)).toBe(1);
+    expect(lodAt({ x: coarse - 1, y: 0, z: 0 }, focus)).toBe(0);
     expect(mask & SKIRT_X_NEG).toBe(SKIRT_X_NEG);
   });
 

@@ -46,7 +46,28 @@ export interface LodBands {
   coarse: number;
 }
 
-export const DEFAULT_LOD_BANDS: LodBands = { full: 1, coarse: 2 };
+/**
+ * Full detail within two chunks, one step coarser to three, coarsest beyond that.
+ *
+ * **`full` is two rather than one because of where the player stands, not where the
+ * chunk grid does.** The distance is measured from the focus *cell*, and the player is
+ * anywhere inside that cell — so at `full: 1` the full-detail region is the focus cell
+ * and its six face neighbours, and the first lower-detail chunk is a diagonal neighbour
+ * at distance √2. Its corner is the corner of the chunk the player is standing in. You
+ * could stand on the seam and be looking at two levels at once, which is the thing this
+ * number exists to prevent. At two, the nearest lower-detail chunk is one whole chunk
+ * away from wherever in your own cell you happen to be.
+ *
+ * `coarse` is three rather than two for a mechanical reason and only that one: it must
+ * exceed `full` or the middle level is never reached, and a chunk can be full detail or
+ * coarsest with nothing in between. That makes LOD1 the thin shell it is here, which
+ * suits it — it exists to be the step between the two, not a region of its own.
+ *
+ * The cost is real and worth stating plainly: LOD0 grows from 7 cells to 33, so a window
+ * carries about 1.3× the samples it did. It buys a resolution change you have to walk a
+ * chunk to reach.
+ */
+export const DEFAULT_LOD_BANDS: LodBands = { full: 2, coarse: 3 };
 
 /** Whether level of detail is switched off, so every chunk is full resolution. */
 export const LOD_OFF: LodBands = {
