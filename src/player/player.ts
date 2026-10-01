@@ -193,8 +193,16 @@ const moveTowards = (
 
 /**
  * Where the ground is sampled, as unit offsets from the player's centre: the
- * centre itself plus the four sides of the collision box, so what holds them up
- * is read across their whole footprint rather than at one point.
+ * centre itself plus the four sides **and the four corners** of the collision
+ * box, so what holds them up is read across the same x/z extent the box itself
+ * collides over.
+ *
+ * The corners are not optional. The box tests its eight corners against solid,
+ * and on a slope the *diagonal* one is often the highest ground under the body.
+ * Sampled only at the centre and the four sides, that corner is invisible to the
+ * step-up, which then lifts the player to a height where the diagonal corner is
+ * still buried — so every step up a slope is refused, and a settled player is
+ * blocked in every direction because the position they are already in collides.
  */
 const FOOTPRINT_OFFSETS: ReadonlyArray<readonly [number, number]> = [
   [0, 0],
@@ -202,6 +210,10 @@ const FOOTPRINT_OFFSETS: ReadonlyArray<readonly [number, number]> = [
   [-1, 0],
   [0, 1],
   [0, -1],
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
 ];
 
 /**

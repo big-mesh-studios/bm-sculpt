@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_TERRAIN, Field, OperationBVH, terrainField } from "../csg";
 import type { PickField } from "../pick";
+import { neutralInput } from "../player/input";
+import { createPlayer, updatePlayer } from "../player/player";
 import { GameWorld } from "./game-world";
 
 /**
@@ -66,6 +69,64 @@ describe("terrain height", () => {
       heightAt: (x, z) => x + z,
     });
     expect(world.getHeightAt(3, 4)).toBe(7);
+  });
+});
+
+describe("walking on a slope", () => {
+  it("keeps its speed up a grade and stands on the surface", () => {
+    // The regression this pins: the ground query used to stop a fraction below
+    // the surface on a climb, and the collision then read the player's own front
+    // corner as buried, so every step up a slope was refused and the player
+    // crawled or stopped. Full speed and feet on the surface is the whole check.
+    const grade = 0.3;
+    const world = new GameWorld({
+      field: () => heightField((_x, z) => z * grade),
+    });
+    const player = createPlayer(0, 6, 0);
+    player.yaw = 0; // faces uphill, +Z
+    const input = { ...neutralInput(), moveY: 1 };
+    for (let i = 0; i < 300; i++) updatePlayer(player, 1 / 60, input, world);
+
+    expect(player.position.z).toBeGreaterThan(200);
+    // The footprint samples a collision radius either side, so on a slope the
+    // player rests on the highest of those, up to a collision radius of rise.
+    const onSurface = player.position.z * grade + player.config.halfSize;
+    expect(player.position.y).toBeGreaterThanOrEqual(onSurface - 0.1);
+    expect(player.position.y).toBeLessThanOrEqual(
+      onSurface + player.config.collisionRadius * grade + 0.5,
+    );
+    expect(player.onGround).toBe(true);
+  });
+});
+
+describe("walking on the real terrain", () => {
+  it("moves at full speed in every direction from the spawn", () => {
+    // The synthetic ramp above models one axis cleanly; this is the landscape the
+    // game actually draws, where the ground rises diagonally under the body. The
+    // bug this catches is a settled player blocked in *every* direction because
+    // their own position already intersects, which no straight-axis ramp shows.
+    const terrain = terrainField(DEFAULT_TERRAIN);
+    const field = new Field(new OperationBVH([]), {
+      base: terrain,
+      extent: terrain,
+      lipschitz: terrain.lipschitz,
+    });
+    const world = new GameWorld({
+      field: () => field,
+      heightAt: terrain.heightAt,
+    });
+
+    for (const yaw of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+      const player = createPlayer(0, terrain.heightAt(0, 0) + 6, 0);
+      player.yaw = yaw;
+      const input = { ...neutralInput(), moveY: 1 };
+      for (let i = 0; i < 300; i++) updatePlayer(player, 1 / 60, input, world);
+
+      const travelled =
+        player.position.x * Math.sin(yaw) + player.position.z * Math.cos(yaw);
+      expect(travelled).toBeGreaterThan(250);
+      expect(player.onGround).toBe(true);
+    }
   });
 });
 

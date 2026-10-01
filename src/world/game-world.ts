@@ -83,9 +83,18 @@ export class GameWorld implements PlayerWorld {
    *
    * Walks to the material's boundary: upward when the sample is inside it, so a
    * step's top is reported and the player can climb rather than be buried; downward
-   * when it is over it, so the first surface below is the ground. The step is the
-   * field's own conservative distance, which cannot overshoot the boundary, and the
-   * search is bounded so a column with no surface costs a fixed budget.
+   * when it is over it, so the first surface below is the ground. The search is
+   * bounded so a column with no surface costs a fixed budget.
+   *
+   * **The raw distance, not the stepping one.** `distanceForStepping` is scaled
+   * down by the field's Lipschitz bound so a *ray* cannot step through a slope it
+   * crosses obliquely. A vertical march does not need that, and the scaling is
+   * actively wrong here: it makes the search stop at a fraction of a unit *below*
+   * the surface on a climb, which the player's collision then reads as a corner
+   * still buried in the ground, so a walk up any slope is refused as a step into a
+   * wall. On a height field the raw distance is the exact vertical distance, so
+   * the surface is reached in one step and returned on it; on operations it is the
+   * Euclidean distance, which is a lower bound and cannot overshoot.
    */
   readonly getGroundHeightAt = (x: number, y: number, z: number): number => {
     const field = this.field();
@@ -94,14 +103,11 @@ export class GameWorld implements PlayerWorld {
     let yy = y;
 
     for (let step = 0; step < SURFACE_MAX_STEPS; step++) {
-      const d =
-        field.distanceForStepping !== undefined
-          ? field.distanceForStepping(x, yy, z)
-          : field.distance(x, yy, z);
+      const d = field.distance(x, yy, z);
       // A non-finite distance is a column with no surface in either direction.
       if (!Number.isFinite(d)) return -Infinity;
       // Inside the material on the way up, or at/through it on the way down.
-      if (inside ? d >= -SURFACE_EPSILON : d <= SURFACE_EPSILON) return yy;
+      if (inside ? d >= 0 : d <= 0) return yy;
       yy += direction * Math.max(Math.abs(d), SURFACE_EPSILON);
     }
     return -Infinity;
