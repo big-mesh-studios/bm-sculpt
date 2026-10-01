@@ -228,6 +228,26 @@ export class Session {
   }
 
   /**
+   * Whether every worker is free and nothing is outstanding.
+   *
+   * The question an edit that re-sends the model has to ask *first*, because sending
+   * cancels every mesh in flight. A send per frame does not merely cost a frame: it cancels
+   * the very mesh that would have shown the edit, over and over, so the chunk under the
+   * brush never lands. The symptom is not a stutter — it is an edit that appears to do
+   * nothing until the pointer stops moving, and chunks whose geometry goes missing and
+   * comes back.
+   *
+   * Deliberately coarse: it asks about the whole pool rather than only the chunks this edit
+   * touches, because a send throws away *everything* outstanding and not just its own, so
+   * a finer question would still let each send cancel the world's streaming. Waiting on the
+   * mesher's real throughput is also what sets the update rate, and that is what makes a
+   * live preview affordable rather than merely possible.
+   */
+  get idle(): boolean {
+    return this.inFlight.size === 0 && this.pool.busy === 0;
+  }
+
+  /**
    * Invalidates every resident chunk a world-space box touches, and re-requests them.
    *
    * Derived from the edit's own bounds rather than from a list of chunks the brush
@@ -243,7 +263,11 @@ export class Session {
       // because it is the one most likely to have an answer in flight.
       const slot = this.window.claimedSlotOf(cell);
       if (slot === undefined) continue;
-      this.store.markStale(slot);
+      // `markModelChanged` and not `markStale`: this is the same cell with a different
+      // model, so its current mesh is still the right thing to draw until the replacement
+      // lands. Dropping it here would open a hole in the model for as long as the mesher
+      // takes, once per edit.
+      this.store.markModelChanged(slot);
       this.window.markStale(slot);
       this.forgetSlot(slot);
       this.requestSlot(slot);

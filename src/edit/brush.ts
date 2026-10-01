@@ -112,6 +112,18 @@ export class BrushStroke {
     };
   }
 
+  /**
+   * The operations added after the first `count` of them.
+   *
+   * For a caller streaming the stroke while it is still being drawn, which needs the
+   * operations to send *and* the box they touch — the box of the whole stroke would
+   * re-mesh every chunk the stroke has already visited, once per frame, for as long as the
+   * pointer is down.
+   */
+  operationsSince(count: number): readonly Operation[] {
+    return count >= this.operations.length ? [] : this.operations.slice(count);
+  }
+
   /** Changes the brush mid-stroke, which a tool palette makes easy to do by accident. */
   configure(settings: BrushSettings): void {
     this.settings = settings;

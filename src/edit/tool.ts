@@ -63,8 +63,25 @@ export interface SculptTarget {
   ): PickHit | undefined;
   /** Begins a stroke at a point the pick found. */
   beginStroke(point: Vec3, normal: Vec3): BrushStroke;
+  /**
+   * The stroke has grown, so whatever shows the model can follow the pointer.
+   *
+   * Called once per dab rather than once per pointer move, and required to be cheap: it is
+   * on the pointer path, and the work of re-sending a model belongs in a frame tick where
+   * it can be coalesced. See ADR 0009 for why a dab lands on the surface the stroke began
+   * on rather than on the dabs before it.
+   */
+  preview(stroke: BrushStroke): void;
   /** Applies a finished stroke, and re-meshes whatever it touched. */
   commit(stroke: BrushStroke): void;
+  /**
+   * A stroke was thrown away without being committed.
+   *
+   * Takes no stroke, because a caller that has already previewed one knows what it
+   * streamed and does not need to be told — and cannot be made to say so reliably, since
+   * the order in which a stroke is emptied and reported is the caller's business.
+   */
+  discardStroke(): void;
   undo(): boolean;
   redo(): boolean;
 }
@@ -154,7 +171,11 @@ export class SculptTool {
       // open rather than ended, so coming back onto the surface continues the same stroke
       // — which is what a user dragging across a gap expects.
       if (hit === undefined) return;
-      this.stroke.extendTo(hit.point);
+      // Only when a dab actually landed. A move that adds nothing has nothing new to
+      // stream, and saying so anyway would dirty the model on every frame of a slow drag.
+      if (this.stroke.extendTo(hit.point) > 0) {
+        this.options.target.preview(this.stroke);
+      }
       return;
     }
 
@@ -174,8 +195,11 @@ export class SculptTool {
     this.options.onStrokeState?.(false);
 
     // A stroke that never landed — pressed on nothing, released on nothing — is discarded
-    // rather than committed, so the undo stack does not fill with empty commands.
+    // rather than committed, so the undo stack does not fill with empty commands. Discarded
+    // rather than simply dropped, because a stroke that was previewed has already been
+    // streamed and something has to take it back.
     if (stroke.dabCount === 0) {
+      this.options.target.discardStroke();
       stroke.discard();
       return;
     }
@@ -185,8 +209,12 @@ export class SculptTool {
   /** The pointer left the canvas entirely. */
   pointerLeave(): void {
     this.drag = "none";
-    this.stroke?.discard();
+    const stroke = this.stroke;
     this.stroke = undefined;
+    if (stroke !== undefined) {
+      this.options.target.discardStroke();
+      stroke.discard();
+    }
     this.options.onStrokeState?.(false);
     this.setHover(undefined);
   }

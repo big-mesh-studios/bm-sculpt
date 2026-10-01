@@ -127,6 +127,26 @@ export class ChunkMeshStore {
     this.revisions[slot] = this.revisionOf(slot) + 1;
   }
 
+  /**
+   * Marks a slot's mesh out of date for a *new model of the cell it already holds*.
+   *
+   * The mesh stays in the scene until its replacement lands, and the revision still moves,
+   * so a late answer is refused exactly as before. Both halves are load-bearing: keeping
+   * the mesh is what stops an edit from punching a hole in the model for as long as the
+   * mesher takes, and moving the revision is what stops the mesh that eventually arrives
+   * from being one the model has already moved past.
+   *
+   * Sound only because the cell has not changed. A slot re-pointed at another cell is
+   * holding the *previous* cell's geometry, and drawing that at the new cell's coordinates
+   * is the artefact the revision mechanism exists to prevent — so reposition and release
+   * go through `markStale` and drop the buffers instead. The distinction is which cell a
+   * slot holds, not how old its mesh is.
+   */
+  markModelChanged(slot: number): void {
+    if (this.slots[slot] === undefined) return;
+    this.revisions[slot] = this.revisionOf(slot) + 1;
+  }
+
   /** Whether a slot currently has something to draw. */
   draws(slot: number): boolean {
     return slotDraws(this.slots[slot] ?? emptySlotGeometry());
@@ -249,8 +269,12 @@ export interface StoreHooks {
  * belongs to whoever asks for a replacement, not to whoever owns the bytes.
  */
 export const hooksFor = (store: ChunkMeshStore): StoreHooks => ({
-  onSlotReposition: (slot: number) => store.markStale(slot),
-  onSlotRelease: (slot: number) => store.markStale(slot),
-  onSlotStale: (slot: number) => store.markStale(slot),
-  onSlotCountChanged: (count: number) => store.resize(count),
+  onSlotReposition: (slot) => store.markStale(slot),
+  onSlotRelease: (slot) => store.markStale(slot),
+  // Staleness is the one that keeps its mesh: the slot still holds this cell, so its
+  // surface is the right thing to draw until the new model replaces it. Reposition and
+  // release are the ones where the cell itself has changed, and there the old geometry
+  // belongs somewhere else on the GPU entirely.
+  onSlotStale: (slot) => store.markModelChanged(slot),
+  onSlotCountChanged: (count) => store.resize(count),
 });

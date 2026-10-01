@@ -85,6 +85,15 @@ export default function App() {
     let orbit: OrbitController;
     let disposeScene: () => void;
     let follow: () => void;
+    /**
+     * Streams whatever the stroke in progress has grown, once per frame.
+     *
+     * A no-op for the spike, which has no model to stream. Separate from `follow` because
+     * the two answer different questions — where the window is, and what the model is — and
+     * lumping them together would hide a per-frame cost inside a function named for a
+     * scroll.
+     */
+    let streamStroke: () => void = () => {};
     let session: Session | undefined;
     let detachPointer: () => void = () => {};
 
@@ -157,6 +166,11 @@ export default function App() {
         // geometry and no rebuild.
         preview.scale.setScalar(sculpt.settings.radius / DEFAULT_BRUSH.radius);
       };
+      // On the frame rather than on the pointer, so a fast drag's worth of dabs becomes one
+      // model send instead of one per dab. Sending a model cancels every mesh in flight, so
+      // the difference is not only cost: a per-dab send can cancel a chunk faster than it
+      // meshes and leave it blank for as long as the pointer is down.
+      streamStroke = () => sculpt.flushPreview();
       disposeScene = () => {
         live.dispose();
         preview.geometry.dispose();
@@ -230,6 +244,9 @@ export default function App() {
     viewport.renderer.setAnimationLoop((time: number) => {
       orbit.apply();
       follow();
+      // Before the draw, so a frame shows everything the last frame of pointer movement
+      // asked for rather than the frame before it.
+      streamStroke();
       viewport.render();
 
       if (!spike() && time - lastReadout > READOUT_INTERVAL_MS) {

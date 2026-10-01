@@ -437,6 +437,8 @@ const ON_SURFACE: Hit = {
 const toolBed = (hit: Hit | null = ON_SURFACE) => {
   const commits: BrushStroke[] = [];
   const strokes: BrushStroke[] = [];
+  const previews: BrushStroke[] = [];
+  let discards = 0;
   let undoCalls = 0;
   let redoCalls = 0;
 
@@ -447,7 +449,11 @@ const toolBed = (hit: Hit | null = ON_SURFACE) => {
       strokes.push(stroke);
       return stroke;
     },
+    preview: (stroke) => previews.push(stroke),
     commit: (stroke) => commits.push(stroke),
+    discardStroke: () => {
+      discards++;
+    },
     undo: () => {
       undoCalls++;
       return true;
@@ -471,6 +477,8 @@ const toolBed = (hit: Hit | null = ON_SURFACE) => {
     tool,
     commits,
     strokes,
+    previews,
+    discards: () => discards,
     undoCalls: () => undoCalls,
     redoCalls: () => redoCalls,
   };
@@ -562,7 +570,9 @@ describe("what a pointer drag means", () => {
           strokes.push(stroke);
           return stroke;
         },
+        preview: () => {},
         commit: (stroke) => commits.push(stroke),
+        discardStroke: () => {},
         undo: () => false,
         redo: () => false,
       },
@@ -661,7 +671,9 @@ describe("history keys", () => {
       target: {
         pick: () => undefined,
         beginStroke: () => beginStroke(new SculptDocument()),
+        preview: () => {},
         commit: () => {},
+        discardStroke: () => {},
         undo: () => false,
         redo: () => false,
       },

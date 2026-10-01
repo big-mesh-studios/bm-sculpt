@@ -131,6 +131,114 @@ describe("refusing a mesh that has been overtaken", () => {
     for (let i = 0; i < 3; i++) store.apply(0, meshOf(12, 4), revision);
     expect(store.staleRefusals).toBe(3);
   });
+
+  it("refuses a mesh captured before a model change, keeping the old one drawn", () => {
+    // The same race as above, reached the way an edit reaches it. The refusal is what makes
+    // keeping the mesh safe: without it, the surface on screen would be one the model has
+    // already moved past.
+    const store = newStore();
+    const revision = store.revisionOf(0);
+    store.apply(0, meshOf(12, 4), revision);
+    const good = meshFor(store, 0);
+
+    store.markModelChanged(0);
+
+    const outcome = store.apply(0, meshOf(99, 33), revision);
+    expect(outcome).toEqual({ accepted: false, refusal: "staleRevision" });
+    expect(store.staleRefusals).toBe(1);
+    // The slot is still showing the surface it had, and still counts as drawn.
+    expect(meshFor(store, 0)).toBe(good);
+    expect(store.draws(0)).toBe(true);
+    expect(store.triangleCount).toBe(4);
+  });
+});
+
+describe("a model change is not a cell change", () => {
+  // The distinction the whole of the above turns on. Which cell a slot holds decides
+  // whether its geometry is the right thing to draw; how old that geometry is does not.
+
+  it("keeps drawing the old mesh until the replacement lands", () => {
+    // This is the flicker. A hole in the model for as long as the mesher takes, opened once
+    // per edit, is a strobe at the brush — and while it is open the rest of the model is the
+    // *old* model, which is why an edit can look like it did nothing at all.
+    const store = newStore();
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    const mesh = meshFor(store, 0);
+    const spy = vi
+      .spyOn(mesh!.geometry, "dispose")
+      .mockImplementation(() => {});
+
+    store.markModelChanged(0);
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(meshFor(store, 0)).toBe(mesh);
+    expect(store.draws(0)).toBe(true);
+    expect(store.drawnCount).toBe(1);
+    expect(store.triangleCount).toBe(4);
+  });
+
+  it("moves the revision, so the replacement is what finally lands", () => {
+    const store = newStore();
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    const before = store.revisionOf(0);
+
+    store.markModelChanged(0);
+    expect(store.revisionOf(0)).toBeGreaterThan(before);
+
+    store.apply(0, meshOf(24, 8), store.revisionOf(0));
+    expect(store.triangleCount).toBe(8);
+    expect(store.staleRefusals).toBe(0);
+  });
+
+  it("does not leave the slot looking freshly answered", () => {
+    // The mesh is still there, but it is not an answer to the model as it now stands, so
+    // the slot has to read as outstanding. A caller that trusted `draws` alone would stop
+    // asking and the chunk would keep the old surface for ever.
+    const store = newStore();
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    store.markModelChanged(0);
+    expect(store.isStale(0, store.revisionOf(0))).toBe(false);
+  });
+
+  it("still drops the mesh when the cell changes", () => {
+    // The safety half. A slot re-pointed at another cell is holding the previous cell's
+    // geometry, and drawing that at the new cell's coordinates is the artefact the revision
+    // mechanism was built to rule out. So reposition and release must *not* keep it.
+    const store = newStore();
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    const mesh = meshFor(store, 0);
+    const spy = vi
+      .spyOn(mesh!.geometry, "dispose")
+      .mockImplementation(() => {});
+
+    store.markStale(0);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(store.draws(0)).toBe(false);
+    expect(store.drawnCount).toBe(0);
+  });
+
+  it("routes the window's three reasons to the right one of the two", () => {
+    // The hook bundle is the only place that knows *why* a slot is being invalidated, so it
+    // is the only place that can tell these apart. Getting it wrong is invisible in a unit
+    // test of either method and visible only as a chunk drawn at the wrong coordinates.
+    const store = newStore();
+    const hooks = hooksFor(store);
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+
+    hooks.onSlotStale?.(0);
+    expect(store.draws(0)).toBe(true);
+
+    store.apply(0, meshOf(12, 4), store.revisionOf(0));
+    hooks.onSlotReposition?.(0);
+    expect(store.draws(0)).toBe(false);
+  });
+
+  it("is safe on a slot with no mesh, and on one it does not have", () => {
+    const store = newStore(2);
+    expect(() => store.markModelChanged(0)).not.toThrow();
+    expect(() => store.markModelChanged(9)).not.toThrow();
+  });
 });
 
 describe("invalidating a slot", () => {

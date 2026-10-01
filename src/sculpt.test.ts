@@ -18,15 +18,35 @@ const WIDTH = 764;
 const HEIGHT = 485;
 const CENTRE = { clientX: WIDTH / 2, clientY: HEIGHT / 2 };
 
-/** Records every fold, so a stroke can be compared against the model it should have kept. */
+/**
+ * Records every fold, so a stroke can be compared against the model it should have kept.
+ *
+ * `busy` stands in for the mesher being busy: a sink that is not idle refuses nothing by
+ * itself, it just tells the session the truth, and a test drives the waiting explicitly.
+ */
 const sink = () => {
   const folds: Array<readonly Operation[]> = [];
+  let busy = false;
   const model: SculptModelSink = {
+    get idle() {
+      return !busy;
+    },
     setOperations: (operations) => {
       folds.push([...operations]);
     },
   };
-  return { model, folds, latest: () => folds[folds.length - 1] };
+  return {
+    model,
+    folds,
+    latest: () => folds[folds.length - 1],
+    /** Makes the mesher look busy, as a real one is between a send and its answer. */
+    occupy: () => {
+      busy = true;
+    },
+    release: () => {
+      busy = false;
+    },
+  };
 };
 
 const camera = (): PickCamera => {
@@ -93,34 +113,31 @@ describe("the model a sculpting session folds", () => {
   });
 
   it("streams a model the picker and the mesher agree about", () => {
-    // The field the picker traces is rebuilt from the same list the workers are sent, so a
-    // second stroke picks against the first one. If the fold dropped the model, the second
-    // stroke would be placed against a field that is not what is on screen — the one
-    // disagreement this design exists to rule out (ADR 0009).
-    const operations = starterOperations();
-    const { session, folds } = sessionOver(operations);
-
+    // Every fold is a prefix of the next, so a chunk meshed at any point during a stroke
+    // was meshed from a model that only ever grew. A fold that dropped operations, or
+    // reordered them, would put the mesh somewhere the picker never traced.
+    const { session, folds } = sessionOver();
     sculptAcross(session);
-    const afterFirst = folds[0].length;
     sculptAcross(session);
 
-    expect(folds).toHaveLength(2);
-    // Monotonic: the second stroke only ever adds.
-    expect(folds[1].length).toBeGreaterThan(afterFirst);
-    expect(folds[1].slice(0, afterFirst)).toEqual(folds[0]);
+    for (let i = 1; i < folds.length; i++) {
+      expect(folds[i].length).toBeGreaterThanOrEqual(folds[i - 1].length);
+      expect(folds[i].slice(0, folds[i - 1].length)).toEqual(folds[i - 1]);
+    }
   });
 
   it("undoes a stroke without touching the model underneath it", () => {
     const operations = starterOperations();
     const { session, folds } = sessionOver(operations);
     sculptAcross(session);
-    const afterStroke = folds[0].length;
+    const afterStroke = folds[folds.length - 1].length;
 
     expect(session.tool.undo()).toBe(true);
 
     // Undo removes the stroke's dabs and leaves the model it was drawn on.
-    expect(folds[1].length).toBeLessThan(afterStroke);
-    expect(folds[1]).toEqual(operations);
+    const last = folds[folds.length - 1];
+    expect(last.length).toBeLessThan(afterStroke);
+    expect(last).toEqual(operations);
   });
 
   it("does not let undo at the start of a session delete the model", () => {
@@ -130,5 +147,200 @@ describe("the model a sculpting session folds", () => {
     const { session } = sessionOver();
     expect(session.undoDepth).toBe(0);
     expect(session.tool.undo()).toBe(false);
+  });
+});
+
+describe("a stroke while the pointer is still down", () => {
+  it("streams its dabs before the stroke is committed", () => {
+    // The reason `flushPreview` exists: the model on screen has to follow the pointer, and
+    // the document is not allowed to hear about it until the pointer comes up.
+    const operations = starterOperations();
+    const { session, folds } = sessionOver(operations);
+
+    session.tool.pointerDown(
+      { button: 0, shiftKey: false, ...CENTRE },
+      WIDTH,
+      HEIGHT,
+    );
+    for (let step = 1; step <= 8; step++) {
+      session.tool.pointerMove(
+        {
+          clientX: CENTRE.clientX + step * 6,
+          clientY: CENTRE.clientY + step * 2,
+        },
+        WIDTH,
+        HEIGHT,
+      );
+    }
+
+    // Nothing streamed yet: the pointer has said what it wants, and no frame has passed.
+    expect(folds).toHaveLength(0);
+
+    session.flushPreview();
+
+    // Now the model on screen has the dabs, and the document still has not.
+    expect(folds).toHaveLength(1);
+    expect(folds[0].length).toBeGreaterThan(operations.length);
+    expect(session.document.count).toBe(operations.length);
+    expect(session.undoDepth).toBe(0);
+
+    session.tool.pointerUp();
+
+    // One command for the whole stroke, however many dabs it laid down.
+    expect(session.undoDepth).toBe(1);
+    expect(session.document.count).toBe(folds[folds.length - 1].length);
+  });
+
+  it("coalesces a frame's worth of dabs into one model send", () => {
+    // Sending a model cancels every mesh in flight, so a per-dab send is not merely
+    // wasteful — on a chunk slower than a frame it would cancel the same chunk every frame
+    // and leave it blank for as long as the pointer was down. One send per frame is the
+    // bound that makes the live update affordable at all.
+    const { session, folds } = sessionOver();
+    session.tool.pointerDown(
+      { button: 0, shiftKey: false, ...CENTRE },
+      WIDTH,
+      HEIGHT,
+    );
+    for (let step = 1; step <= 8; step++) {
+      session.tool.pointerMove(
+        {
+          clientX: CENTRE.clientX + step * 6,
+          clientY: CENTRE.clientY + step * 2,
+        },
+        WIDTH,
+        HEIGHT,
+      );
+    }
+    expect(folds).toHaveLength(0);
+
+    session.flushPreview();
+    const afterFirst = folds[0].length;
+    // A second frame with nothing new to say must not send anything.
+    session.flushPreview();
+
+    expect(folds).toHaveLength(1);
+    expect(folds[0].length).toBe(afterFirst);
+  });
+
+  it("keeps the picker on the surface the stroke began on", () => {
+    // The same gesture on two sessions: one flushes its preview between every pointer
+    // move, the other never does. The dabs must come out identical, because streaming a
+    // stroke changes what the workers mesh and nothing else.
+    //
+    // This is the assertion that says a field must *not* follow the live model. If it did,
+    // this session's field would start carrying dab 1 before move 2 picked, and move 2
+    // would land on top of dab 1 rather than on the surface the stroke began on — each pick
+    // climbing the blob the last one made, so a drag would tower instead of drawing a
+    // ridge, and the two sessions would part company here.
+    const streaming = sessionOver();
+    const quiet = sessionOver();
+
+    const drag = (session: SculptSession, flushEachMove: boolean) => {
+      session.tool.pointerDown(
+        { button: 0, shiftKey: false, ...CENTRE },
+        WIDTH,
+        HEIGHT,
+      );
+      for (let step = 1; step <= 8; step++) {
+        session.tool.pointerMove(
+          {
+            clientX: CENTRE.clientX + step * 6,
+            clientY: CENTRE.clientY + step * 2,
+          },
+          WIDTH,
+          HEIGHT,
+        );
+        if (flushEachMove) session.flushPreview();
+      }
+      const stroke = session.tool.state.stroke;
+      return (
+        stroke?.operationsSince(0).map((operation) => operation.origin) ?? []
+      );
+    };
+
+    const streamed = drag(streaming.session, true);
+    const held = drag(quiet.session, false);
+
+    // Both actually did something, or the comparison below is vacuous.
+    expect(streamed.length).toBeGreaterThan(4);
+    expect(held.length).toBe(streamed.length);
+    // And the streaming one really was streaming, frame by frame.
+    expect(streaming.folds.length).toBeGreaterThan(4);
+    expect(quiet.folds).toHaveLength(0);
+
+    expect(streamed).toEqual(held);
+  });
+
+  it("waits for the mesher rather than interrupting it", () => {
+    // Sending a model cancels every mesh in flight, so a send per frame would cancel the
+    // very mesh that would show the dab: the chunk under the brush would never land, and
+    // the edit would appear to do nothing until the pointer stopped. Waiting costs nothing
+    // because the dabs are not dropped, only held — they go out together on the next frame
+    // the mesher is free.
+    const operations = starterOperations();
+    const { session, folds, occupy, release } = sessionOver(operations);
+
+    session.tool.pointerDown(
+      { button: 0, shiftKey: false, ...CENTRE },
+      WIDTH,
+      HEIGHT,
+    );
+    for (let step = 1; step <= 8; step++) {
+      session.tool.pointerMove(
+        {
+          clientX: CENTRE.clientX + step * 6,
+          clientY: CENTRE.clientY + step * 2,
+        },
+        WIDTH,
+        HEIGHT,
+      );
+    }
+
+    occupy();
+    session.flushPreview();
+    session.flushPreview();
+    expect(folds).toHaveLength(0);
+
+    release();
+    session.flushPreview();
+
+    // One send, carrying every dab the stroke laid while it waited — not one per frame,
+    // and not the last one only.
+    expect(folds).toHaveLength(1);
+    expect(folds[0].length).toBeGreaterThan(operations.length);
+    expect(session.document.count).toBe(operations.length);
+  });
+
+  it("takes back a stroke that is thrown away rather than committed", () => {
+    // The pointer leaving the canvas mid-stroke discards the stroke, and material that was
+    // streamed for it has to come back off the model — otherwise the mesh keeps a stroke
+    // that no command accounts for and no undo can remove.
+    const operations = starterOperations();
+    const { session, folds } = sessionOver(operations);
+
+    session.tool.pointerDown(
+      { button: 0, shiftKey: false, ...CENTRE },
+      WIDTH,
+      HEIGHT,
+    );
+    for (let step = 1; step <= 8; step++) {
+      session.tool.pointerMove(
+        {
+          clientX: CENTRE.clientX + step * 6,
+          clientY: CENTRE.clientY + step * 2,
+        },
+        WIDTH,
+        HEIGHT,
+      );
+    }
+    session.flushPreview();
+    expect(folds[0].length).toBeGreaterThan(operations.length);
+
+    session.tool.pointerLeave();
+
+    // The last fold is the committed model again, and the history never grew.
+    expect(folds[folds.length - 1]).toEqual(operations);
+    expect(session.undoDepth).toBe(0);
   });
 });
