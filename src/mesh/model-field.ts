@@ -22,6 +22,8 @@ import {
   OperationBVH,
   deserialiseOperations,
   type PaintSource,
+  type TerrainField,
+  terrainField,
 } from "../csg";
 import { cellCentre, chunkCellOf, sampleIndexIn, tileIndex } from "../world";
 
@@ -92,11 +94,42 @@ export class TilePaint implements PaintSource {
  */
 export const mesherFor = (model: ModelMessage): ChunkMesher => {
   const operations = deserialiseOperations(model.operations);
+  const terrain = terrainOf(model);
   const field = new Field(new OperationBVH(operations), {
-    base: baseFieldFor(model),
+    // One value in three slots, because a height field is all three at once: the distance
+    // function, the region it can answer for, and the Lipschitz bound that makes its
+    // distances safe to step by. Splitting them would allow a caller to send a terrain's
+    // distances with another terrain's bound, and the symptom would be a picker that walks
+    // through the ground.
+    base: terrain,
+    extent: terrain,
+    lipschitz: terrain?.lipschitz,
     paint: new TilePaint(paintTilesOf(model.paint)),
   });
   return new SurfaceNetsChunkMesher(field);
+};
+
+/**
+ * The terrain behind the operations, if the model has one.
+ *
+ * `undefined` for `"none"`, and a field built from the message's four parameters for
+ * `"terrain"`. Deterministic in those parameters alone, which is the whole reason the
+ * message carries numbers rather than something opaque: the main thread and every worker
+ * build the same landscape from the same four numbers, so the picker and the mesher cannot
+ * disagree about where the ground is (ADR 0009).
+ *
+ * A message that claims terrain and omits the parameters is refused rather than given a
+ * default. A default would be a landscape nobody asked for, on every worker, discovered
+ * wherever the camera happened to be looking.
+ */
+const terrainOf = (model: ModelMessage): TerrainField | undefined => {
+  if (model.base === "none") return undefined;
+  if (model.terrain === undefined) {
+    throw new Error(
+      `model says ${model.base} but carries no terrain parameters`,
+    );
+  }
+  return terrainField(model.terrain);
 };
 
 /** The model's painted chunks, keyed for lookup. */
@@ -106,22 +139,4 @@ export const paintTilesOf = (
   const tiles = new Map<string, Uint8Array>();
   for (const tile of paint) tiles.set(cellKey(tile.cell), tile.colours);
   return tiles;
-};
-
-/**
- * The infinite world behind the operations, if the model has one.
- *
- * Phase 3 has no terrain yet, so `"terrain"` is refused rather than approximated. A
- * height field guessed at here would be a second implementation of something Phase 6
- * writes properly, and every worker would reach it on every model that said `terrain`.
- * Failing loudly costs one message and says why; a plausible wrong landscape costs the
- * rest of the session.
- */
-const baseFieldFor = (model: ModelMessage): undefined => {
-  if (model.base !== "none") {
-    throw new Error(
-      `no base field for ${model.base}; terrain arrives in Phase 6`,
-    );
-  }
-  return undefined;
 };

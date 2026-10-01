@@ -155,6 +155,28 @@ const meshChunk = (
 
   try {
     const mesher = build(model);
+
+    // The gate, before any sampling. In a terrain world most chunks are entirely air or
+    // entirely solid and this is the difference between a few thousand field evaluations
+    // and thirty-four thousand of them. Answered as an empty mesh rather than skipped
+    // silently, because the main thread is waiting for an answer to this generation and an
+    // unanswered request is a chunk that stays blank until something unrelated re-asks.
+    //
+    // Optional on the interface, and absent means "mesh it" — see `ChunkMesher`. Only a
+    // mesher that answers `false` is trusted, and only it is allowed to have an opinion.
+    if (mesher.couldHaveMesh?.(request.cell, request.lod) === false) {
+      return {
+        state: { ...pending, pending: undefined, meshed: pending.meshed + 1 },
+        reply: {
+          kind: "meshReady",
+          cell: request.cell,
+          lod: request.lod,
+          generation: request.generation,
+          empty: true,
+        },
+      };
+    }
+
     const mesh = mesher.mesh({ cell: request.cell, lod: request.lod });
     const empty = mesh.vertexCount === 0;
     return {

@@ -40,6 +40,21 @@ export interface MeshRequest {
 /** Builds the mesh for a chunk. */
 export interface ChunkMesher {
   mesh(request: MeshRequest): ChunkMesh;
+  /**
+   * Whether this chunk could hold a surface, answered without sampling it.
+   *
+   * The cheap half of streaming, and in a terrain world most of it: a chunk entirely above
+   * the landscape or entirely inside it is answered with a box test instead of 34,304 field
+   * evaluations, and the answer is recorded as an empty mesh so the main thread is not left
+   * waiting on a generation that will never be replied to.
+   *
+   * **Optional, and a mesher that cannot answer must not.** The two failure directions are
+   * not symmetric: answering `false` for a chunk that does hold surface puts a hole in the
+   * world that nothing will re-mesh, while answering `true` costs one chunk's samples and
+   * nothing else. So a mesher with no answer available simply omits this, and a caller
+   * treats its absence as "mesh it".
+   */
+  couldHaveMesh?(cell: CellCoord, lod: Lod): boolean;
 }
 
 /**

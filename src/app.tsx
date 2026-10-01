@@ -30,6 +30,7 @@ import { SurfaceMaterial } from "./render/surface-material";
 import { createViewport, type Viewport } from "./render/viewport";
 import { VERTEX_BYTES } from "./render/spike-geometry";
 import { Session, starterOperations, type SessionStats } from "./session";
+import { DEFAULT_TERRAIN } from "./csg";
 import { SculptSession } from "./sculpt";
 import { DEFAULT_BRUSH } from "./edit/brush";
 import { buildSpikeScene, type SpikeScene } from "./spike-scene";
@@ -121,6 +122,11 @@ export default function App() {
         scene: sessionViewport.scene,
         material,
         operations: starterOperations(),
+        // The world the operations are carved out of. Passing it to the session and reading
+        // it back off `session.terrain` for the picker is deliberate: one source for the
+        // four numbers, so the field the brush traces and the field the workers mesh cannot
+        // disagree about where the ground is (ADR 0009).
+        terrain: DEFAULT_TERRAIN,
       });
 
       // Seeded from the session's own operations rather than calling `starterOperations`
@@ -130,6 +136,7 @@ export default function App() {
         session,
         camera: sessionViewport.camera,
         operations: session.operations,
+        terrain: session.terrain,
       });
 
       const preview = new Mesh(

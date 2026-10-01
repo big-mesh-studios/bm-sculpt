@@ -13,7 +13,14 @@
  */
 
 import type { Vec3 } from "./constants";
-import { Field, OperationBVH, type Operation } from "./csg";
+import {
+  Field,
+  OperationBVH,
+  terrainField,
+  type Operation,
+  type TerrainField,
+  type TerrainParams,
+} from "./csg";
 
 import {
   type PickHit,
@@ -47,6 +54,15 @@ export interface SculptSessionOptions {
   readonly session: SculptModelSink;
   readonly camera: PickCamera;
   readonly operations?: readonly Operation[];
+  /**
+   * The landscape the streamed model has behind it, as the session's own parameters.
+   *
+   * Taken from `session.terrain` rather than configured separately, because the field this
+   * builds is the one the picker traces and it has to be the model on screen. Two
+   * independently configured terrains would put dabs in the air above the ground the mesher
+   * drew, which is the one disagreement this whole design exists to rule out (ADR 0009).
+   */
+  readonly terrain?: TerrainParams;
 }
 
 /** The part of `Session` an edit talks to: told the model, and what it touched. */
@@ -69,6 +85,12 @@ export class SculptSession {
   readonly tool: SculptTool;
 
   private field: Field;
+  /**
+   * The landscape, held so every rebuild of the field uses the same one. Not rebuilt per
+   * edit: a terrain is four numbers and a permutation table, and rebuilding it per dab would
+   * put a 256-entry shuffle on the pointer path for no benefit.
+   */
+  private readonly terrain: TerrainField | undefined;
   private brush: BrushSettings = DEFAULT_BRUSH;
   private readonly previewState: Preview = {
     visible: false,
@@ -97,7 +119,9 @@ export class SculptSession {
     // the user did, and "undo" at the start of a session should not be able to delete it.
     this.document.add(options.operations ?? []);
     this.document.resetHistory();
-    this.field = buildField(this.document.list);
+    this.terrain =
+      options.terrain !== undefined ? terrainField(options.terrain) : undefined;
+    this.field = this.buildField();
     this.tool = new SculptTool({
       camera: options.camera,
       target: this.target(),
@@ -142,8 +166,24 @@ export class SculptSession {
    * here — see `flushPreview`.
    */
   private applyChange(change: Change | undefined): void {
-    this.field = buildField(this.document.list);
+    this.field = this.buildField();
     this.options.session.setOperations(this.document.list, change?.bounds);
+  }
+
+  /**
+   * The field this thread samples, over the committed operations and the landscape.
+   *
+   * One place, so the base field, the region it can answer for and the Lipschitz bound
+   * that makes its distances safe to step by are always the *same* terrain's. Split across
+   * call sites, a caller could pair one terrain's distances with another's bound and the
+   * picker would walk through the ground.
+   */
+  private buildField(): Field {
+    return new Field(new OperationBVH(this.document.list), {
+      base: this.terrain,
+      extent: this.terrain,
+      lipschitz: this.terrain?.lipschitz,
+    });
   }
 
   /**
@@ -239,7 +279,7 @@ export class SculptSession {
         const streamed = this.streamedBounds;
         this.forgetStroke();
         if (streamed !== undefined) {
-          this.field = buildField(this.document.list);
+          this.field = this.buildField();
           this.options.session.setOperations(this.document.list, streamed);
         }
       },
@@ -290,10 +330,6 @@ export class SculptSession {
     this.applyChange(undefined);
   }
 }
-
-/** A field over an operation list, on this thread. */
-const buildField = (operations: readonly Operation[]): Field =>
-  new Field(new OperationBVH(operations));
 
 /** The smallest box holding both, for accumulating what a stroke has streamed. */
 const unionOf = (

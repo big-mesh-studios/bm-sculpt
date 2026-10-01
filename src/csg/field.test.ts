@@ -8,7 +8,7 @@ import {
 } from "./field";
 import { OperationBVH } from "./bvh";
 import { makeOperation, type Operation } from "./operations";
-import { FAR_DISTANCE, type Vec3 } from "../constants";
+import { FAR_DISTANCE, type Bounds, type Vec3 } from "../constants";
 
 const sphereAt = (
   centre: Vec3,
@@ -259,6 +259,60 @@ describe("conservative stepping", () => {
     expect(new Field(bvh, { lipschitz: 0 }).lipschitz).toBe(1);
     expect(new Field(bvh, { lipschitz: -2 }).lipschitz).toBe(1);
     expect(new Field(bvh, { lipschitz: 0.5 }).lipschitz).toBe(0.5);
+  });
+});
+
+describe("whether a box could hold a surface", () => {
+  const box = (minY: number, maxY: number) => ({
+    min: { x: -100, y: minY, z: -100 },
+    max: { x: 100, y: maxY, z: 100 },
+  });
+  const GROUND_LEVEL = box(1000, 2000);
+  const BELOW = box(0, 100);
+  const ABOVE = box(5000, 5200);
+  const SKY = box(5900, 6100);
+  /** A base field that knows only that the ground lies between 1000 and 2000. */
+  const extent = {
+    couldHoldSurface: (b: Bounds) => b.max.y >= 1000 && b.min.y <= 2000,
+  };
+  const floating = sphereAt({ x: 0, y: 6000, z: 0 }, 50);
+  const elsewhere = sphereAt({ x: 9000, y: 9000, z: 9000 }, 50);
+
+  it("cannot answer for itself, and says so by claiming every box", () => {
+    // A field with no base field has nothing to bound, so it must not skip anything. This
+    // is the operations-only world, and the behaviour it had before any of this existed.
+    const field = new Field(new OperationBVH([]));
+    expect(field.couldHoldSurface(BELOW)).toBe(true);
+    expect(field.couldHoldSurface(ABOVE)).toBe(true);
+  });
+
+  it("believes a base field that says a box is empty", () => {
+    const field = new Field(new OperationBVH([]), { extent });
+    expect(field.couldHoldSurface(BELOW)).toBe(false);
+    expect(field.couldHoldSurface(ABOVE)).toBe(false);
+  });
+
+  it("does not consult the operation list when the base field says yes", () => {
+    // The common case, and it must stay cheap: a terrain world asks this for every chunk
+    // of every frame, and the answer is two comparisons.
+    const field = new Field(new OperationBVH([floating]), { extent });
+    expect(field.couldHoldSurface(GROUND_LEVEL)).toBe(true);
+  });
+
+  it("keeps a box the base field calls empty when it holds an operation", () => {
+    // **The failure this whole arrangement exists to prevent.** A sphere floating in the
+    // sky is in a chunk the terrain says is nothing but air. Believing the terrain alone
+    // deletes it, and nothing re-meshes it: the mesher that skipped the chunk recorded an
+    // answer, so the hole is permanent and looks like a modelling bug.
+    const field = new Field(new OperationBVH([floating]), { extent });
+    expect(field.couldHoldSurface(SKY)).toBe(true);
+  });
+
+  it("still rules out a box that holds nothing at all", () => {
+    // The other half: the answer has to be allowed to be `false`, or the gate saves nothing.
+    // An operation far outside the box must not keep it alive.
+    const field = new Field(new OperationBVH([elsewhere]), { extent });
+    expect(field.couldHoldSurface(SKY)).toBe(false);
   });
 });
 

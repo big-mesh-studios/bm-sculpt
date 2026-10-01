@@ -37,11 +37,40 @@ export interface PaintSource {
   at(x: number, y: number, z: number): Rgb8 | undefined;
 }
 
+/**
+ * What a base field can say about a region without being sampled.
+ *
+ * Separate from `BaseField` because a base field is a function and a function cannot answer
+ * anything, and because the honest answer is a property of the base field alone: a height
+ * field can bound its own column range, and an arbitrary one cannot say anything at all.
+ * The composition asks; the base field decides.
+ */
+export interface SurfaceExtent {
+  /**
+   * Whether a box could hold a surface, judged from the base field alone.
+   *
+   * Must be conservative in one direction only. Answering `false` for a box that does hold
+   * surface puts a hole in the world that nothing will re-mesh, because the mesher that
+   * skipped it recorded an answer. Answering `true` costs a chunk's worth of samples and
+   * nothing else.
+   */
+  couldHoldSurface(bounds: Bounds): boolean;
+}
+
 /** The colour a surface takes where nothing has been painted. */
 export const DEFAULT_COLOUR: Rgb8 = { r: 190, g: 186, b: 176 };
 
 export interface FieldOptions {
   base?: BaseField;
+  /**
+   * What `base` can say about a region, when it can say anything.
+   *
+   * A separate option rather than a member of `BaseField` because that is a function type
+   * and cannot carry a method, and because a caller that has a height field should not have
+   * to wrap it to ask it a question. A terrain satisfies both options with one value, which
+   * is what makes it hard to pair them wrongly.
+   */
+  extent?: SurfaceExtent;
   paint?: PaintSource;
   /**
    * The largest factor by which the base field may over-report a distance, and so
@@ -69,6 +98,8 @@ export class Field {
   readonly bvh: OperationBVH;
   readonly base: BaseField | undefined;
   readonly paint: PaintSource | undefined;
+  /** What the base field can say about a region, if it can say anything. */
+  readonly extent: SurfaceExtent | undefined;
 
   /**
    * A factor at or below one that every distance is scaled by, so that stepping
@@ -82,6 +113,7 @@ export class Field {
   constructor(bvh: OperationBVH, options: FieldOptions = {}) {
     this.bvh = bvh;
     this.base = options.base;
+    this.extent = options.extent;
     this.paint = options.paint;
 
     const bound = options.lipschitz ?? 1;
@@ -164,22 +196,27 @@ export class Field {
   /**
    * Whether a box could hold a surface at all.
    *
-   * The mesher's first gate, and the reason a terrain world can be streamed: a
-   * chunk entirely above the tallest thing the base field can produce has no sign
-   * change anywhere in it and needs no samples at all. In a height-field world
-   * most chunks are exactly that — air above the landscape, or solid below it — and
-   * skipping them is the difference between streaming at a walking pace and
-   * grinding.
+   * The mesher's first gate, and the reason a terrain world can be streamed: a chunk
+   * entirely above the tallest thing the base field can produce has no sign change
+   * anywhere in it and needs no samples at all. In a height-field world most chunks are
+   * exactly that — air above the landscape, or solid below it — and skipping them is the
+   * difference between streaming at a walking pace and grinding.
    *
-   * Deliberately absent a sound implementation. Answering it generally would mean
-   * bounding the base field over a box, which is a property of the base field and
-   * not of the composition: a height field can answer it from the extremes of its
-   * column range in constant time, and an arbitrary base field cannot answer it at
-   * all. Phase 6 adds it to the terrain, where the question has an answer, rather
-   * than guessing at it here.
+   * **The base field is only half the answer, and the half that is easy to get wrong.** A
+   * chunk with no terrain in it can still hold a primitive: a sphere floating in the sky is
+   * a chunk the base field says is nothing but air. Believing the base field alone would
+   * delete every object in the world that is not touching the ground, and nothing would
+   * re-mesh them — the mesher that skipped it has recorded an answer. So a base field that
+   * says no is only believed once the operation list has been asked too: one box query, and
+   * only on the path where the base field has already said no.
+   *
+   * `true` whenever there is nothing to ask, which is why a field with no base field is
+   * unchanged by any of this.
    */
-  couldHoldSurface(_bounds: Bounds): boolean {
-    return true;
+  couldHoldSurface(bounds: Bounds): boolean {
+    if (this.extent === undefined) return true;
+    if (this.extent.couldHoldSurface(bounds)) return true;
+    return this.bvh.query(bounds).length > 0;
   }
 
   /**

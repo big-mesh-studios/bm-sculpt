@@ -158,6 +158,74 @@ describe("a worker handling messages", () => {
     });
   };
 
+  /**
+   * A mesher that can rule a chunk out before sampling it, counting how often it was asked
+   * and how often it actually meshed.
+   *
+   * The count is the point. A gate that is consulted and then ignored is worse than no gate,
+   * because it looks like the optimisation is in place.
+   */
+  const gatedBuild = (couldHaveMesh: boolean) => {
+    const asked = { gate: 0, mesh: 0 };
+    const factory: MesherFactory = () => ({
+      couldHaveMesh: () => {
+        asked.gate++;
+        return couldHaveMesh;
+      },
+      mesh: () => {
+        asked.mesh++;
+        return meshOf(9);
+      },
+    });
+    return { factory, asked };
+  };
+
+  it("asks whether a chunk could hold a surface before meshing it", () => {
+    const { factory, asked } = gatedBuild(true);
+    const handled = handleMeshMessage(
+      { ...emptyWorkerState(), model: model() },
+      { kind: "meshChunk", cell: cell(0), lod: 0, generation: 1 },
+      factory,
+    );
+
+    expect(asked.gate).toBe(1);
+    expect(asked.mesh).toBe(1);
+    expect(handled.reply).toMatchObject({ kind: "meshReady", empty: false });
+  });
+
+  it("answers a chunk the mesher rules out, without meshing it", () => {
+    // The saving: in a terrain world most chunks are entirely air or entirely solid, and
+    // this is 34,304 field evaluations replaced by a box test.
+    const { factory, asked } = gatedBuild(false);
+    const handled = handleMeshMessage(
+      { ...emptyWorkerState(), model: model() },
+      { kind: "meshChunk", cell: cell(0), lod: 0, generation: 1 },
+      factory,
+    );
+
+    expect(asked.mesh).toBe(0);
+    // Answered, not dropped. A request the worker says nothing about is a chunk that stays
+    // blank on the main thread until something unrelated re-asks it, which looks like a
+    // mesher that has hung.
+    expect(handled.reply).toMatchObject({ kind: "meshReady", empty: true });
+    expect(
+      handled.reply?.kind === "meshReady" && handled.reply.mesh,
+    ).toBeUndefined();
+  });
+
+  it("meshes a chunk whose mesher cannot answer", () => {
+    // `couldHaveMesh` is optional, and absence has to mean "mesh it". The two failure
+    // directions are not symmetric: a mesher that cannot answer costs samples, and one that
+    // answers wrongly leaves a permanent hole.
+    const handled = handleMeshMessage(
+      { ...emptyWorkerState(), model: model() },
+      { kind: "meshChunk", cell: cell(0), lod: 0, generation: 1 },
+      build(),
+    );
+
+    expect(handled.reply).toMatchObject({ kind: "meshReady", empty: false });
+  });
+
   const run = (
     messages: unknown[],
     behaviour: Parameters<typeof build>[0] = {},

@@ -63,8 +63,23 @@ export {
 
 export { OperationBVH } from "./bvh";
 
-export type { BaseField, FieldOptions, PaintSource } from "./field";
+export type {
+  BaseField,
+  FieldOptions,
+  PaintSource,
+  SurfaceExtent,
+} from "./field";
 export { DEFAULT_COLOUR, Field } from "./field";
+
+export type { TerrainField, TerrainParams } from "./terrain";
+export {
+  DEFAULT_TERRAIN,
+  FBM_AMPLITUDE_BOUND,
+  NOISE_GRADIENT_BOUND,
+  PerlinNoise2D,
+  TERRAIN_FEATURE,
+  terrainField,
+} from "./terrain";
 
 export {
   FormatError,

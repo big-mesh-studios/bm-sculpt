@@ -45,7 +45,7 @@ warns about — two copies of a package means two classes, and they fail to meet
 ## Current state
 
 ```
-src/csg/      field, operations, BVH, shapes, serialisation   (phase 1)
+src/csg/      field, operations, BVH, shapes, serialisation, terrain (phase 1, 6)
 src/world/    coordinate map, chunk window, LOD, paint tiles   (phase 2)
 src/mesh/     Surface Nets, chunk mesher, workers, pool        (phase 3)
 src/render/   geometry upload, mesh store, surface material    (phase 4)
@@ -55,57 +55,74 @@ src/session.ts  window ↔ pool ↔ store wiring                   (phase 4)
 src/sculpt.ts   document + field + tool                         (phase 5)
 ```
 
-Phases 0–5 are complete. What works, verified in a real browser: a streamed model meshed
-in four workers, left-drag sculpting that re-meshes while the pointer is still down,
-ctrl-z undo, right-drag orbit, shift-drag pan, and `?spike` for the phase 0 diagnostic.
+Phases 0–6 are complete. What works, verified in a real browser: a streamed terrain with a
+seeded multi-octave height field behind it, meshed in four workers, left-drag sculpting that
+re-meshes while the pointer is still down, ctrl-z undo, right-drag orbit, shift-drag pan,
+and `?spike` for the phase 0 diagnostic.
 
 **Touch pinch is not verified.** The gesture is meant to work — the orbit controller has
 always had the two-pointer branch — but nothing has been run on a touch device, and the
 arbitration that would deliver a second finger to it did not exist until after this list
 was written. Treat it as untested rather than as working.
 
+**The terrain has visible cracks along level-of-detail boundaries.** Dark lines where two
+chunks either side of a `DEFAULT_LOD_BANDS` step sample the same ground at different
+strides. Confirmed by setting `bands: LOD_OFF` in `app.tsx`: the cracks vanish and the
+triangle count goes from 28k to 125k. Pre-existing and not caused by Phase 6 — the
+operations-only model was small enough to sit inside one level, so nothing ever crossed a
+boundary. A large continuous surface is the first thing to. See open item 9.
+
 ---
 
 ## Phase 6 — the terrain base field
 
-**The next phase, and the only one whose scope is written down in the code.** Four
-places say what it is, and one of them throws today.
+**Done.** The model is a height field _behind_ the operations, so a sculptor carves into
+terrain the way they carve into a primitive.
 
-The model is currently operations only. Phase 6 adds a height field _behind_ the
-operations, so a sculptor carves into terrain the way they carve into a primitive.
+### What was built
 
-### What to build
+- **`src/csg/terrain.ts`.** Seeded 2D gradient noise, fBm-summed, as a `BaseField`:
+  `y - height(x, z)`. One value fills three roles — the distance function, the region it
+  can answer for, and the Lipschitz bound — so a caller cannot pair one terrain's distances
+  with another's bound.
+- **`lipschitz`,** derived rather than measured. Each fBm octave contributes the same
+  gradient (`0.5^i · 2^i = 1`), so the bound is `1 / sqrt(1 + 2A²)` with
+  `A = octaves · G · scale / feature`. `G` is a worst-case over the interpolation
+  (`NOISE_GRADIENT_BOUND`), because a measured maximum is not a bound. It lands near 0.2
+  with the default parameters, so the picker takes about five times the steps it did over
+  operations alone and still converges in tens of steps.
+- **`couldHoldSurface`,** answered in constant time from the height range, and _only_
+  believed once the operation list has been asked too — a sphere floating in the sky is in
+  a chunk the terrain calls empty, and skipping it would delete the object permanently.
+  `src/mesh/terrain-gate.test.ts` checks the soundness against ground truth: mesh without
+  the gate, and if there was any geometry the gate must not have claimed the chunk empty.
+- **The gate is now actually used.** `ChunkMesher.couldHaveMesh` existed and was tested,
+  but the worker never called it. It does now, and answers with an empty mesh rather than
+  silence — an unanswered request is a chunk that stays blank for ever.
+- **Wiring.** `mesherFor` builds the terrain from the message's four numbers (the throw is
+  gone); `Session` carries them in `modelMessage()`; `SculptSession` reads them back off
+  `session.terrain` so the picker and the workers cannot disagree (ADR 0009).
 
-- **The field itself.** `BaseField` already exists and is just
-  `(x, y, z) => number` — a distance function, negative inside the solid. Fill it in
-  `src/csg/` as a new module. ADR 0002 expects a seeded, multi-octave height field.
-- **`lipschitz`.** `FieldOptions.lipschitz` exists and defaults to 1. A height field is
-  _not_ a distance function in any direction but the vertical one, so it must be divided
-  by its largest gradient — otherwise the picker steps through surfaces and the field
-  over-reports. The comment on the option says so; this is the first consumer.
-- **`couldHoldSurface`.** `Field.couldHoldSurface` currently returns `true` for
-  everything (`src/csg/field.ts:167`). Its own doc says the real answer belongs to the
-  terrain, not the composition: a height field can answer it in constant time from its
-  column range, and an arbitrary base field cannot answer it at all. This is the mesher's
-  first gate — in a terrain world most chunks are all air or all solid, and skipping them
-  is most of what makes streaming affordable.
-- **Wire it through.** `ModelMessage` already has `base: "none" | "terrain"` and a
-  `terrain` parameter block (`origin`, `scale`, `octaves`, `seed`).
-  `src/mesh/model-field.ts:123` currently throws
-  `no base field for terrain; terrain arrives in Phase 6` — that throw is the seam, and
-  removing it is the moment the feature exists.
-- **The main thread needs it too.** `SculptSession` builds its own `Field` from
-  operations only. If the picker does not trace the same model that is on screen, the
-  dab lands where the mesh is not — which is the one disagreement this whole design
-  exists to rule out (ADR 0009). The camera-following window already works at any
-  distance, so nothing else changes.
+### Checks, and how they were made
 
-### Checks
+- The picker still works with `lipschitz < 1` — asserted on the composed field, and the
+  terrain's factor is separately verified to _be_ a bound on its own measured gradient.
+  That second test is the load-bearing one: a factor that is too large is not a slow
+  picker, it is a picker that walks through the ground.
+- Sculpting lands on the visible surface with terrain under it — a hover picks the ground,
+  and a stroke across a landscape commits and undoes as one command.
+- Streaming did not degrade: `pending` sits at 0–3 with the landscape up, against 0 with
+  the model that had five drawn chunks. The window now draws 49 chunks and 28k triangles
+  where it drew 5 and 9k.
 
-- The picker must still work with `lipschitz < 1` — that is the entire point of it.
-- Sculpting must still land on the visible surface with terrain under it.
-- Streaming must not degrade: watch the `pending` counter in the header. It is the
-  difference between a world that streams and one that stalls.
+### Two things that are true now and were not obvious before
+
+- **A terrain world exposes the LOD cracks** — see the note under "Current state". It was
+  always there; nothing crossed a level boundary until there was a large surface.
+- **`couldHoldSurface` is a permanent answer.** The mesher that skips a chunk records an
+  answer, so a wrong `false` is a hole nothing re-meshes. That asymmetry is why the
+  composition double-checks the operation list and why the terrain's range bound is
+  deliberately pessimistic. Treat any change to either as high-risk.
 
 ---
 
@@ -245,6 +262,28 @@ The getter's comment says "the UI uses this to hide its own hints". Nothing read
 grep finds no call sites, and the hints text in `app.tsx` is static. Either wire it up or
 delete it; a getter that documents a consumer who does not exist is a small lie that costs
 a reader a minute every time.
+
+### 9. Level-of-detail transitions crack
+
+**Found and diagnosed while building Phase 6, not fixed.** The terrain shows dark lines
+where two chunks either side of a `DEFAULT_LOD_BANDS` step sample the same ground at
+different strides — `full: 1, coarse: 2` is a hard step, and a surface crossing it is
+meshed twice at two resolutions that do not agree on where the vertices are.
+
+The diagnosis is settled, which is the useful part. Setting `bands: LOD_OFF` in
+`app.tsx` makes the cracks disappear and takes the same view from 28k triangles to 125k, so
+it is the transition and not the terrain, the mesher, or the material.
+
+Two things to know before fixing it:
+
+- **It is not new.** The operations-only model was small enough to sit inside one level, so
+  nothing ever crossed a boundary. A large continuous surface is the first thing to, which
+  is why Phase 6 is when it became visible and not when it was introduced.
+- **ADR 0003's seam rule does not cover this.** Chunking a region at _one_ level is
+  seamless, and there is a test that says so. Two chunks at _different_ levels is a
+  different question and nothing in the tree asks it. Whatever answers it — geomorphing
+  across the band, a skirt, or a one-level overlap — is a real piece of work and should be
+  sized as one rather than discovered again in a bug report.
 
 ---
 

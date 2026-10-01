@@ -26,7 +26,12 @@
  */
 
 import type { Vec3 } from "./constants";
-import { makeOperation, serialiseOperations, type Operation } from "./csg";
+import {
+  makeOperation,
+  serialiseOperations,
+  type Operation,
+  type TerrainParams,
+} from "./csg";
 import type { Material, Scene } from "@random-mesh/rmsl/scene";
 
 import {
@@ -58,6 +63,15 @@ export interface SessionOptions {
   readonly scene: Scene;
   readonly material: Material;
   readonly operations: readonly Operation[];
+  /**
+   * The landscape behind those operations, if the world has one.
+   *
+   * Four numbers rather than something opaque, because the main thread and every worker
+   * build their field from them independently and have to arrive at the same one. That is
+   * the agreement ADR 0009 is about, and a base field that could only be built on one side
+   * of the thread boundary could not be checked at all.
+   */
+  readonly terrain?: TerrainParams;
   /** Chunk radius in x and z. */
   readonly radius?: number;
   /** Chunk radius in y, normally smaller — see `sphereCells`. */
@@ -114,6 +128,12 @@ export class Session {
    * this design exists to rule out.
    */
   private currentOperations: readonly Operation[] = [];
+  /**
+   * The landscape, if the world has one. Held as the four numbers the workers build from,
+   * for the same reason the operations are held as a list: the picker builds its own field
+   * and the two must not be able to drift.
+   */
+  private readonly terrainParams: TerrainParams | undefined;
   private failures = 0;
   private disposed = false;
 
@@ -130,6 +150,7 @@ export class Session {
   private windowReady = false;
 
   constructor(options: SessionOptions) {
+    this.terrainParams = options.terrain;
     this.store = new ChunkMeshStore(
       options.scene,
       options.material,
@@ -184,14 +205,30 @@ export class Session {
     return this.currentOperations;
   }
 
+  /**
+   * The landscape this session streams, or undefined for an operations-only world.
+   *
+   * Public because the picker has to build the same field and cannot ask a worker what it
+   * built (ADR 0009). It is the same four numbers the workers read, from the same field, so
+   * the two cannot drift.
+   */
+  get terrain(): TerrainParams | undefined {
+    return this.terrainParams;
+  }
+
   /** The model, as the workers need it. */
   modelMessage(): ModelMessage {
+    const terrain = this.terrainParams;
     return {
       kind: "setModel",
       revision: this.revision,
       operations: serialiseOperations(this.currentOperations),
       paint: [],
-      base: "none",
+      base: terrain !== undefined ? "terrain" : "none",
+      // Carried only when there is terrain, so a world with no base field cannot arrive
+      // with half of one — which is why `ModelMessage` makes this a block rather than three
+      // optional numbers.
+      ...(terrain !== undefined ? { terrain } : {}),
     };
   }
 
@@ -210,12 +247,11 @@ export class Session {
   setOperations(operations: readonly Operation[], touched?: Bounds): void {
     this.currentOperations = operations;
     this.revision++;
-    this.pool.setModel({
-      revision: this.revision,
-      operations: serialiseOperations(operations),
-      paint: [],
-      base: "none",
-    });
+    // `modelMessage()` rather than a second construction of the same thing, because a model
+    // message that named terrain in one place and not the other would leave the workers
+    // meshing an operations-only world while the header said otherwise — and the only
+    // symptom would be a landscape that never appears.
+    this.pool.setModel(this.modelMessage());
 
     // In-flight meshes were built against the old model, so they are not wanted whatever
     // their generations say. Dropping the record is enough: the store's revision has not

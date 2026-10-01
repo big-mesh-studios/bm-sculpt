@@ -3,7 +3,8 @@ import { PerspectiveCamera } from "@random-mesh/rmsl/scene";
 
 import { SculptSession, type SculptModelSink } from "./sculpt";
 import { starterOperations } from "./session";
-import type { Operation } from "./csg";
+import { terrainField, type Operation, type TerrainParams } from "./csg";
+import { VOXEL_SIZE } from "./constants";
 import type { PickCamera } from "./edit/tool";
 
 /**
@@ -57,15 +58,37 @@ const camera = (): PickCamera => {
   return real;
 };
 
-const sessionOver = (operations = starterOperations()) => {
+const sessionOver = (
+  operations = starterOperations(),
+  terrain?: TerrainParams,
+) => {
   const stream = sink();
   const session = new SculptSession({
     session: stream.model,
     camera: camera(),
     operations,
+    terrain,
   });
   return { session, ...stream };
 };
+
+/**
+ * The field a session samples with, reached through the class rather than re-derived.
+ *
+ * The property under test is what the *composed* field does with the terrain's bound, so
+ * there is nothing to be gained by rebuilding a field here: a second one would be a second
+ * thing that could be wrong.
+ */
+const fieldOf = (session: SculptSession) =>
+  (
+    session as unknown as {
+      field: {
+        distance(x: number, y: number, z: number): number;
+        distanceForStepping(x: number, y: number, z: number): number;
+        lipschitz: number;
+      };
+    }
+  ).field;
 
 /** Drags across the model, from the centre towards one side of it. */
 const sculptAcross = (session: SculptSession): void => {
@@ -147,6 +170,65 @@ describe("the model a sculpting session folds", () => {
     const { session } = sessionOver();
     expect(session.undoDepth).toBe(0);
     expect(session.tool.undo()).toBe(false);
+  });
+});
+
+describe("a stroke with terrain under it", () => {
+  const TERRAIN = { origin: -70, scale: 96, octaves: 4, seed: 20260901 };
+
+  it("scales its stepping distance down, because a slope is not a distance", () => {
+    // The mechanism the Lipschitz bound feeds, asserted on the composed field rather than on
+    // the terrain: `distance` may over-report, `distanceForStepping` may not. A picker that
+    // stepped by the first would walk through the ground and report the underside of the
+    // world, which reads as a brush that does nothing.
+    //
+    // No operations, so the fold is the terrain and nothing else — otherwise the primitives
+    // are part of the answer and the assertion would be about them.
+    const { session } = sessionOver([], TERRAIN);
+    const field = fieldOf(session);
+    const surface = terrainField(TERRAIN).heightAt(30, 40);
+
+    expect(field.lipschitz).toBeLessThan(1);
+    // The vertical distance to the surface, which on a slope is more than the true distance.
+    expect(field.distance(30, surface + 40, 40)).toBeCloseTo(40, 6);
+    // The step is not.
+    expect(field.distanceForStepping(30, surface + 40, 40)).toBeLessThan(
+      field.distance(30, surface + 40, 40),
+    );
+  });
+
+  it("traces the ground rather than falling through it", () => {
+    // A hover is a pick, so hovering over the landscape is the picker against terrain. The
+    // hit has to land on the surface: below it and the picker is inside the world, far above
+    // it and the field never found the ground at all.
+    const { session } = sessionOver(starterOperations(), TERRAIN);
+    const surface = terrainField(TERRAIN).heightAt(0, 0);
+
+    session.tool.pointerMove(CENTRE, WIDTH, HEIGHT);
+    const hover = session.tool.state.hover;
+    expect(hover).toBeDefined();
+    expect(hover!.point.y).toBeLessThan(surface + VOXEL_SIZE * 20);
+    expect(hover!.point.y).toBeGreaterThan(surface - VOXEL_SIZE * 20);
+  });
+
+  it("gives every thread the same landscape from the same four numbers", () => {
+    // ADR 0009, in the form Phase 6 makes it matter: the picker builds its own field on this
+    // thread, the workers build theirs from the message, and the two must not disagree about
+    // where the ground is. Built twice from the same parameters, because that is all the
+    // message carries — anything more would be something the two sides could drift on.
+    const one = terrainField(TERRAIN);
+    const two = terrainField(TERRAIN);
+    for (const [x, z] of [
+      [0, 0],
+      [421.5, -87.25],
+      [-9000, 12000],
+    ]) {
+      expect(two.heightAt(x, z)).toBe(one.heightAt(x, z));
+      // Positive above the surface, negative below: the sign convention the whole CSG rests
+      // on, and the one a landscape that has it backwards would fail everywhere at once.
+      expect(two(x, one.heightAt(x, z) + 3, z)).toBeCloseTo(3, 9);
+      expect(two(x, one.heightAt(x, z) - 3, z)).toBeCloseTo(-3, 9);
+    }
   });
 });
 

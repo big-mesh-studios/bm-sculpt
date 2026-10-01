@@ -96,12 +96,50 @@ describe("building a mesher from a model message", () => {
     expect([...fromMessage.indices]).toEqual([...direct.indices]);
   });
 
-  it("refuses a model naming a base field it does not have", () => {
-    // Failing loudly costs one message and says why. A plausible wrong landscape costs
-    // the rest of the session and looks like a modelling bug.
+  it("refuses a model that claims terrain and does not say which", () => {
+    // Failing loudly costs one message and says why. A default landscape would be one
+    // nobody asked for, on every worker, discovered wherever the camera happened to be
+    // pointing — which is the worst of both: it costs a session and explains nothing.
     expect(() => mesherFor({ ...model([]), base: "terrain" })).toThrow(
-      /Phase 6/,
+      /terrain parameters/,
     );
+  });
+
+  it("gives a model that says which terrain the same landscape twice", () => {
+    // The property the four parameters exist for: the main thread and every worker build
+    // their field independently, from numbers, and have to arrive at the same one. Anything
+    // that made the terrain depend on call order or on a shared cache would break the
+    // agreement the picker and the mesher rely on (ADR 0009).
+    const withTerrain = {
+      ...model([aSphere(45)]),
+      base: "terrain" as const,
+      terrain: { origin: -70, scale: 96, octaves: 4, seed: 7 },
+    };
+    const first = mesherFor(withTerrain).mesh({ cell: cell(0), lod: 0 });
+    const second = mesherFor(withTerrain).mesh({ cell: cell(0), lod: 0 });
+
+    expect(first.vertexCount).toBeGreaterThan(0);
+    expect([...second.indices]).toEqual([...first.indices]);
+  });
+
+  it("gives a different seed a different landscape", () => {
+    // Otherwise the seed is decoration. Asserted on the mesh rather than on the noise,
+    // because the mesh is what anyone can see.
+    const terrain = { origin: -70, scale: 96, octaves: 4 };
+    const one = mesherFor({
+      ...model([]),
+      base: "terrain",
+      terrain: { ...terrain, seed: 1 },
+    }).mesh({ cell: cell(0), lod: 0 });
+    const two = mesherFor({
+      ...model([]),
+      base: "terrain",
+      terrain: { ...terrain, seed: 2 },
+    }).mesh({ cell: cell(0), lod: 0 });
+
+    expect(one.vertexCount).toBeGreaterThan(0);
+    expect(two.vertexCount).toBeGreaterThan(0);
+    expect([...one.indices]).not.toEqual([...two.indices]);
   });
 
   it("produces nothing for a model with no operations", () => {
