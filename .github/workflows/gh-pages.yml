@@ -1,0 +1,69 @@
+name: Deploy the site to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Pushing the published branch is what publishes the site, so this is the
+# permission the job actually needs.
+permissions:
+  contents: write
+
+# One Pages site and one publisher. Two runs at once — a second push landing while
+# the first is still pushing — would interleave two histories on the branch, and
+# whichever finished last would be the one served. Cancelling the earlier run is
+# the better of the two outcomes: its commit is superseded either way, and the one
+# that survives is the newer tree.
+concurrency:
+  group: gh-pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The version is not written here. `pnpm/action-setup` reads it from
+      # `packageManager` in package.json, so the version this site is built with is
+      # written down once and is the same one Corepack hands a contributor locally.
+      # Naming it here as well would be a second copy free to disagree with the
+      # first, which is the failure this arrangement exists to prevent.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Nothing tells this step where the site is served from, and that is the
+      # point. `base: "./"` in vite.config.ts makes every asset address in the built
+      # index.html relative (`./assets/...`), and the meshing workers are emitted
+      # as a URL resolved against the importing module, so each one lands beside
+      # the bundle that asked for it rather than at the site root. A build from
+      # this job is therefore correct served from `/bm-sculpt/`, from any other
+      # subdirectory, and from a local static server, with no environment variable
+      # to get wrong — and the same `pnpm build` a contributor runs locally is
+      # byte-for-byte the build that ships.
+      - run: pnpm build
+
+      # No `404.html` is copied over the way the sibling repository does for its
+      # routed applications, because this one has no routes. Its only addresses are
+      # query strings — `?spike`, `?lod=off` — and a browser never sends those to a
+      # server, so there is no address for GitHub Pages to be asked about and
+      # nothing to answer wrongly.
+      #
+      # `enable_jekyll: false` is the action's default, and is stated because it is
+      # the difference between the site being served as built and Jekyll being
+      # allowed to process it first.
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          enable_jekyll: false
