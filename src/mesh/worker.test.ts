@@ -240,13 +240,19 @@ describe("a worker handling messages", () => {
     return { state, replies };
   };
 
-  it("does nothing until it has a model", () => {
+  it("declines a request that arrives before it has a model", () => {
     // The main thread sends the model and the requests together, and a request is allowed
-    // to arrive first. Reporting a failure here would be noise, not information.
+    // to arrive first. Reporting a *failure* here would be noise, not information — but
+    // silence is not available either, because the pool is holding a slot for this
+    // generation and only an answer releases it.
     const { state, replies } = run([
       { kind: "meshChunk", cell: cell(0), lod: 0, generation: 1 },
     ]);
-    expect(replies).toEqual([]);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({
+      kind: "meshCancelled",
+      reason: "no model",
+    });
     expect(state.pending).toBeUndefined();
     expect(state.meshed).toBe(0);
   });
@@ -262,15 +268,22 @@ describe("a worker handling messages", () => {
     expect(state.pending).toBeUndefined();
   });
 
-  it("ignores a request it has been told to abandon", () => {
+  it("declines a request it has been told to abandon", () => {
     // A chunk re-requested before its answer arrives: the old answer is not wanted
-    // whatever happens to the new one.
+    // whatever happens to the new one. Declined *loudly* — the pool is holding a slot for
+    // this generation, and only an answer frees it, so silence here would wedge it.
     const { replies, state } = run([
       model(),
       { kind: "cancel", belowGeneration: 5 },
       { kind: "meshChunk", cell: cell(0), lod: 0, generation: 4 },
     ]);
-    expect(replies).toEqual([]);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({
+      kind: "meshCancelled",
+      cell: cell(0),
+      generation: 4,
+      reason: "cancelled",
+    });
     expect(state.meshed).toBe(0);
   });
 
@@ -290,7 +303,13 @@ describe("a worker handling messages", () => {
       { kind: "cancel", belowGeneration: 3 },
       { kind: "meshChunk", cell: cell(0), lod: 0, generation: 7 },
     ]);
-    expect(replies).toEqual([]);
+    // Declined at 7, which is below the *highest* line and above the one that would
+    // have let it through — so the message is the evidence that 9 was kept.
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({
+      kind: "meshCancelled",
+      reason: "cancelled",
+    });
   });
 
   it("reports a failure instead of dying", () => {
@@ -356,7 +375,10 @@ describe("a worker handling messages", () => {
         { kind: "meshChunk", cell: cell(0), lod: 0, generation },
         factory,
       );
-      expect(handled.reply, `generation ${generation}`).toBeUndefined();
+      expect(handled.reply, `generation ${generation}`).toMatchObject({
+        kind: "meshCancelled",
+        reason: "cancelled",
+      });
     }
 
     // And a genuinely new request is meshed.
@@ -399,7 +421,10 @@ describe("a worker handling messages", () => {
       { kind: "meshChunk", cell: cell(1), lod: 0, generation: 2 },
       slow,
     );
-    expect(second.reply).toBeUndefined();
+    expect(second.reply).toMatchObject({
+      kind: "meshCancelled",
+      reason: "busy",
+    });
     expect(built).toBe(0);
   });
 });
@@ -583,7 +608,22 @@ describe("the pool", () => {
     pool.dispose();
   });
 
-  it("tells the worker to stop work it no longer wants", () => {
+  it("does not cancel work on re-request, because the cancel cannot abort it", () => {
+    // **A cancel here would be actively harmful, and was measured to be.**
+    //
+    // Cancelling was meant to stop a worker wasting time on a chunk that has been
+    // re-requested. It cannot: a worker handles one message at a time and `meshChunk` is
+    // synchronous, so the cancel is not observed until the chunk it was meant to abandon
+    // has already been meshed. The time saved is zero.
+    //
+    // What it does instead is raise the worker's cancellation line, which is one number
+    // covering every chunk that worker will ever be handed — so raising it for one chunk
+    // also refuses later requests for *other* chunks at or below that line, which is what
+    // the pool's own retries are. Measured: a few hundred refusals per pan, each one a
+    // chunk that had to be retried, and each retry refused by the same cancel.
+    //
+    // The superseded chunk is abandoned by its own answer arriving, which `onMessage`
+    // drops as stale and which is what frees the slot.
     const fake = fakeWorker();
     const pool = new WorldWorkerPool({
       workers: 1,
@@ -593,8 +633,11 @@ describe("the pool", () => {
 
     pool.request(cell(3), 0);
     pool.request(cell(3), 0);
-    const cancel = fake.posted.find((message) => message.kind === "cancel");
-    expect(cancel).toBeDefined();
+
+    expect(
+      fake.posted.some((message) => message.kind === "cancel"),
+      "a re-request must not cancel",
+    ).toBe(false);
     pool.dispose();
   });
 

@@ -105,6 +105,16 @@ export interface SessionStats {
   readonly pending: number;
   /** Workers currently meshing something. */
   readonly busy: number;
+  /**
+   * Chunks the pool has been asked for and has not yet handed to a worker.
+   *
+   * The third number needed to tell a slow window from a stuck one. `pending` alone
+   * cannot: a chunk that is pending because a worker is building it and a chunk that is
+   * pending because it is sitting in the queue look identical, and only the second is
+   * evidence of a stall. A healthy window drains this towards zero; a starved one holds
+   * it high with `busy` at zero.
+   */
+  readonly queued: number;
   readonly staleRefusals: number;
   readonly failures: number;
 }
@@ -315,7 +325,29 @@ export class Session {
   /** Moves the window to follow a world position, and asks for whatever is now missing. */
   follow(world: Vec3): void {
     if (this.disposed) return;
-    this.window.scrollTo(world);
+    if (!this.window.scrollTo(world)) return;
+
+    // **Ask for everything unfilled, not only what the window flagged.**
+    //
+    // The window reports the cells that *arrived* and the ones whose level of detail
+    // changed, which is what makes a pan cost a ring rather than a window. It cannot
+    // report a chunk that was asked for earlier, never answered, and is still sitting in
+    // the window — because from the window's side nothing distinguishes that chunk from
+    // one that was never requested at all.
+    //
+    // That gap is why this used to be done only by sending a model. `requestAll` asks for
+    // every unfilled slot, so a sculpt was the only thing that recovered a window with a
+    // hole in it, and "pan fast, then sculpt, and it all appears" was the observable
+    // behaviour. A window that cannot ask for its own missing chunks is relying on an
+    // unrelated event to do it, which is not a recovery path.
+    //
+    // A scan of the window's slots on a scroll, where a scroll is a discrete movement of
+    // the focus cell rather than a per-frame event: `scrollTo` returns false — and so
+    // costs nothing — for every frame in which the focus cell has not changed.
+    for (let slot = 0; slot < this.window.slots.length; slot++) {
+      const entry = this.window.slots[slot];
+      if (entry !== undefined && !entry.filled) this.requestSlot(slot);
+    }
   }
 
   /** Reports what is on screen. */
@@ -330,6 +362,7 @@ export class Session {
       triangles: this.store.triangleCount,
       pending: this.inFlight.size,
       busy: this.pool.busy,
+      queued: this.pool.outstanding,
       staleRefusals: this.store.staleRefusals,
       failures: this.failures,
     };

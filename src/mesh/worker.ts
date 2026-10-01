@@ -17,7 +17,12 @@ import type { CellCoord, Lod } from "../world";
 import { sameCell } from "../world";
 
 import type { ChunkMesher } from "./chunk-mesher";
-import type { ChunkFailedMessage, FromWorker, ModelMessage } from "./protocol";
+import type {
+  ChunkCancelledMessage,
+  ChunkFailedMessage,
+  FromWorker,
+  ModelMessage,
+} from "./protocol";
 import { isToWorker } from "./protocol";
 
 /**
@@ -132,13 +137,21 @@ const setModel = (state: WorkerState, model: ModelMessage): Handled => {
  *
  * The order of the checks is the substance:
  *
- * 1. **Is there a model?** No model means no field, so there is nothing to do. Reporting
- *    a failure would be honest but noisy: the main thread sends the model and the
- *    requests together, and a request is allowed to arrive first.
+ * 1. **Is there a model?** No model means no field, so there is nothing to do.
  * 2. **Is the generation wanted?** A chunk can be re-requested before its answer
  *    arrives, and answers arrive out of order.
  * 3. **Is a chunk already in flight?** A worker meshes one at a time and the pool
  *    serialises them, so this should not happen; ignoring it is safer than re-entering.
+ *
+ * **Every one of those three answers is now a reply rather than silence.** The pool
+ * marks a slot busy the moment it posts a request, and the only thing that frees that
+ * slot is an answer arriving. A worker that declines in silence therefore wedges the
+ * pool: the slot stays busy forever, `busy` never returns to zero, and `Session.idle` —
+ * which every streamed edit is gated on — stays false, so the application stops
+ * responding to input entirely until an edit clears the flags by force.
+ *
+ * Declining in silence is cheaper by one message per declined request, and that
+ * economy is not worth an unrecoverable pool. The reply is small and carries no buffers.
  */
 const meshChunk = (
   state: WorkerState,
@@ -146,10 +159,10 @@ const meshChunk = (
   build: MesherFactory,
 ): Handled => {
   const model = state.model;
-  if (model === undefined) return { state, reply: undefined };
+  if (model === undefined) return decline(state, request, "no model");
   if (request.generation <= state.cancelledBelow)
-    return { state, reply: undefined };
-  if (state.pending !== undefined) return { state, reply: undefined };
+    return decline(state, request, "cancelled");
+  if (state.pending !== undefined) return decline(state, request, "busy");
 
   const pending: WorkerState = { ...state, pending: request };
 
@@ -207,6 +220,28 @@ const meshChunk = (
     };
   }
 };
+
+/**
+ * A reply saying this worker will not mesh this request, and is now free.
+ *
+ * Not an error and not a failure: nothing went wrong, the work simply is not wanted —
+ * or cannot be done yet. Reported so the pool can free the slot it is holding, which is
+ * the only way it learns the slot is available.
+ */
+const decline = (
+  state: WorkerState,
+  request: { cell: CellCoord; lod: Lod; generation: number },
+  reason: ChunkCancelledMessage["reason"],
+): Handled => ({
+  state,
+  reply: {
+    kind: "meshCancelled",
+    cell: request.cell,
+    lod: request.lod,
+    generation: request.generation,
+    reason,
+  },
+});
 
 /** What the main thread currently wants for a given cell. */
 export interface Wanted {

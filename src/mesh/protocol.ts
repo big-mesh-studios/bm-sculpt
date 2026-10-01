@@ -121,11 +121,43 @@ export interface ChunkFailedMessage {
   readonly reason: string;
 }
 
+/**
+ * A worker reporting that it will **not** mesh what it was asked for.
+ *
+ * This message exists because of one rule the pool cannot work without: **every
+ * generation the pool marks busy must eventually be answered.** A worker that declines a
+ * request in silence cannot satisfy that rule, and the pool has no other way to learn
+ * that a request is not coming — it is not holding a mesh, so nothing arrives, so the
+ * slot it marked busy is never freed, and the pool's busy count never comes back down.
+ * One lost reply is a chunk that never appears; one lost reply for a request the pool
+ * cannot re-issue is a pool that never works again, because `Session.idle` stays false
+ * and every streamed edit is gated on it.
+ *
+ * So a decline is a reply. It carries the cell and generation so the pool can free the
+ * right slot, and it is **never applied as geometry** — a chunk that was not meshed has
+ * no mesh, and reporting one as empty would mark a slot filled with nothing and leave a
+ * hole in the world that nothing re-requests.
+ */
+export interface ChunkCancelledMessage {
+  readonly kind: "meshCancelled";
+  readonly cell: CellCoord;
+  readonly lod: Lod;
+  readonly generation: number;
+  /**
+   * Why the worker declined, for the pool's counter and for anyone reading a log.
+   *
+   * Never for behaviour. A worker with no model and a worker told to cancel are the same
+   * thing to the pool: that slot is free and no mesh is coming.
+   */
+  readonly reason: "no model" | "cancelled" | "busy";
+}
+
 /** What a worker may send back. */
-export type FromWorker = ChunkMeshMessage | ChunkFailedMessage;
+export type FromWorker =
+  ChunkMeshMessage | ChunkFailedMessage | ChunkCancelledMessage;
 
 const TO_WORKER_KINDS = new Set(["meshChunk", "setModel", "cancel"]);
-const FROM_WORKER_KINDS = new Set(["meshReady", "meshFailed"]);
+const FROM_WORKER_KINDS = new Set(["meshReady", "meshFailed", "meshCancelled"]);
 
 const kindOf = (value: unknown): string | undefined => {
   if (typeof value !== "object" || value === null) return undefined;
@@ -173,3 +205,14 @@ export const meshTransferables = (message: FromWorker): Transferable[] => {
     indices.buffer,
   ] as Transferable[];
 };
+
+/**
+ * Whether a worker is promising a mesh for this message.
+ *
+ * **False for a decline, and that is the whole point of the distinction.** The pool
+ * applies a promise and frees a slot on a decline, and must never do the first for the
+ * second — reporting a chunk that was not meshed as an empty one marks its slot filled
+ * with no geometry, and a filled slot is one the window stops asking about.
+ */
+export const isMeshAnswer = (message: FromWorker): boolean =>
+  message.kind === "meshReady";

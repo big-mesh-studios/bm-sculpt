@@ -282,20 +282,32 @@ describe("a worker end to end, against a fake scope", () => {
     expect(fake.posted[0].message).toMatchObject({ empty: true });
   });
 
-  it("ignores a request that arrives before the model", () => {
+  it("declines a request that arrives before the model", () => {
+    // Not silently: the pool is holding a slot for this generation and only an answer
+    // releases it, so a decline has to be posted back even when nothing is wrong.
     const fake = scope();
     runWorker(fake);
     fake.send({ kind: "meshChunk", cell: cell(0), lod: 0, generation: 1 });
-    expect(fake.posted).toEqual([]);
+    expect(fake.posted).toHaveLength(1);
+    expect(fake.posted[0].message).toMatchObject({
+      kind: "meshCancelled",
+      reason: "no model",
+    });
+    // A decline carries no buffers, so nothing is transferred for it.
+    expect(fake.posted[0].transfer).toEqual([]);
   });
 
-  it("does not answer work the main thread has abandoned", () => {
+  it("declines work the main thread has abandoned", () => {
     const fake = scope();
     runWorker(fake);
     fake.send(model([aSphere(45)]));
     fake.send({ kind: "cancel", belowGeneration: 3 });
     fake.send({ kind: "meshChunk", cell: cell(0), lod: 0, generation: 2 });
-    expect(fake.posted).toEqual([]);
+    expect(fake.posted).toHaveLength(1);
+    expect(fake.posted[0].message).toMatchObject({
+      kind: "meshCancelled",
+      reason: "cancelled",
+    });
   });
 
   it("reports a bad model rather than dying", () => {
@@ -340,7 +352,7 @@ describe("a worker end to end, against a fake scope", () => {
         { kind: "meshChunk", cell: cell(1), lod: 0, generation: 2 },
         factory,
       ).reply,
-    ).toBeUndefined();
+    ).toMatchObject({ kind: "meshCancelled", reason: "busy" });
   });
 });
 

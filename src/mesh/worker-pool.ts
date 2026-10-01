@@ -73,6 +73,14 @@ export interface WorldWorkerPoolOptions {
   readonly handlers: PoolHandlers;
 }
 
+/**
+ * How many times a single worker may decline one chunk before the pool stops retrying.
+ *
+ * A count per worker rather than one for the pool, because the useful reading is "every
+ * worker has already said no to this chunk this many times".
+ */
+const DECLINE_BUDGET_PER_WORKER = 4;
+
 interface Slot {
   readonly worker: PoolWorker;
   /** What this worker is currently building, if anything. Written as answers arrive. */
@@ -83,6 +91,8 @@ export class WorldWorkerPool {
   private readonly slots: Slot[] = [];
   /** Chunks asked for but not yet given to a worker, in request order. */
   private readonly queue: CellCoord[] = [];
+  /** How many times each cell has been declined, so a retry can be bounded. */
+  private readonly declinedFor = new Map<string, number>();
   /** What has been asked for, by cell. The authority on staleness. */
   private readonly wantedByCell = new Map<string, Wanted>();
 
@@ -90,6 +100,17 @@ export class WorldWorkerPool {
 
   private nextGeneration = 1;
   private disposed = false;
+
+  /**
+   * How many requests a worker has declined.
+   *
+   * Not a failure count: nothing went wrong, and nothing is retried. It is here because
+   * the condition that produces declines is invisible from outside — a pool that is
+   * merely slow and a pool that is declining work it cannot then re-issue look identical
+   * from the busy count alone, and the difference is the difference between slow and
+   * wedged.
+   */
+  private cancellations = 0;
 
   constructor(options: WorldWorkerPoolOptions) {
     this.handlers = options.handlers;
@@ -121,6 +142,66 @@ export class WorldWorkerPool {
     );
   }
 
+  /** How many requests a worker has declined since the pool was made. */
+  get declined(): number {
+    return this.cancellations;
+  }
+
+  /**
+   * Puts a declined chunk back on the queue, up to a limit.
+   *
+   * The limit is the whole subtlety. A decline is usually transient — the request was
+   * cancelled, or a worker was still finishing the previous one — and retrying once the
+   * pool has a free slot is exactly right. But a decline can also be permanent: a worker
+   * with no model declines everything, and retrying that forever is a hot loop that never
+   * stops. Counting per cell bounds the permanent case without slowing the transient one,
+   * and the count is forgotten as soon as the cell is answered, abandoned, or swept by a
+   * new model — so a chunk that was unlucky once is not penalised later.
+   *
+   * The retry reuses the same generation rather than minting a new one. The generation
+   * identifies *which* mesh is wanted, not which attempt is being made, and re-issuing it
+   * keeps the pool's staleness rule a single equality test.
+   */
+  private retryDeclined(cell: CellCoord): void {
+    const key = this.key(cell);
+    const wanted = this.wantedByCell.get(key);
+    if (wanted === undefined) return;
+    const attempts = (this.declinedFor.get(key) ?? 0) + 1;
+    // A worker that declines everything would otherwise be retried for ever, which is a
+    // hot loop that never drains. The cap is generous because a refusal is normally
+    // transient — a request caught by a cancellation, or a worker still finishing the
+    // previous one — and because a caller asking for the chunk again clears the count,
+    // so a chunk that spends its budget is not permanently unaskable.
+    if (attempts > DECLINE_BUDGET_PER_WORKER * this.slots.length) return;
+    this.declinedFor.set(key, attempts);
+    this.issue(wanted.cell, wanted.lod);
+  }
+
+  /**
+   * Puts a request on the queue at a fresh generation.
+   *
+   * Split from `request` so that a retry can be a real re-request — new generation, new
+   * queue entry — without also clearing the decline history, which is what a call from
+   * outside means.
+   */
+  private issue(cell: CellCoord, lod: number): Wanted {
+    const wanted: Wanted = {
+      cell: { ...cell },
+      lod,
+      generation: this.nextGeneration++,
+    };
+    this.wantedByCell.set(this.key(cell), wanted);
+    this.dropQueued(cell);
+    this.enqueue(cell);
+    this.pump();
+    return wanted;
+  }
+
+  /** Forgets a cell's decline count, so a later attempt starts fresh. */
+  private forgetDeclines(cell: CellCoord): void {
+    this.declinedFor.delete(this.key(cell));
+  }
+
   /**
    * Asks for a chunk, replacing any request already outstanding for it.
    *
@@ -130,33 +211,15 @@ export class WorldWorkerPool {
    * model that no longer exists.
    */
   request(cell: CellCoord, lod: Lod): Wanted {
-    const generation = this.nextGeneration++;
-    const wanted: Wanted = { cell: { ...cell }, lod, generation };
-    this.wantedByCell.set(this.key(cell), wanted);
-
-    // Anything already queued for this cell is now redundant: the new request supersedes
-    // it. Removing it here rather than letting it reach a worker is what stops the queue
-    // filling with work for chunks that have been walked away from.
-    this.dropQueued(cell);
-
-    for (const slot of this.slots) {
-      if (slot.building !== undefined && sameCell(slot.building.cell, cell)) {
-        // In flight. Tell the worker its work is unwanted so it can stop early, but leave
-        // the slot marked busy: it *is* busy, and freeing it here would let a second
-        // chunk be sent to a worker that is still meshing the first.
-        slot.worker.post({ kind: "cancel", belowGeneration: generation });
-      }
-    }
-
-    this.enqueue(cell);
-    this.pump();
-    return wanted;
+    this.forgetDeclines(cell);
+    return this.issue(cell, lod);
   }
 
   /** Gives up on a chunk: it has left the window. */
   abandon(cell: CellCoord): void {
     this.wantedByCell.delete(this.key(cell));
     this.dropQueued(cell);
+    this.forgetDeclines(cell);
     this.pump();
   }
 
@@ -177,10 +240,23 @@ export class WorldWorkerPool {
       slot.worker.post({ ...message, kind: "setModel" });
     }
     // Queued chunks are not stale — they will simply be meshed under the new model —
-    // but anything in flight is, so it is dropped and re-requested by the caller.
-    for (const slot of this.slots) slot.building = undefined;
+    // but anything in flight is, so its slot stays busy until the worker answers it.
+    //
+    // **The slots are deliberately not marked idle here.** Clearing a busy flag says "this
+    // worker is free", and a worker mid-chunk is not: it will refuse the next request
+    // because it still holds this one, and — before `meshCancelled` existed — that
+    // refusal was silence, so the slot was wedged for good. The worker answers the
+    // superseded chunk when it finishes, the pool drops that answer as stale, and
+    // `onMessage` frees the slot. Waiting for that answer is also what keeps the pool
+    // from over-committing a worker that is busy, which is why the re-requests made after
+    // this simply queue.
+    //
+    // The wanted records are dropped because a generation issued before the cancel line is
+    // not wanted any more, and because `requestAll` is about to re-issue the unfilled
+    // chunks at generations above the line.
     this.wantedByCell.clear();
     this.queue.length = 0;
+    this.declinedFor.clear();
   }
 
   /** Stops every worker. */
@@ -191,6 +267,7 @@ export class WorldWorkerPool {
     this.slots.length = 0;
     this.queue.length = 0;
     this.wantedByCell.clear();
+    this.declinedFor.clear();
   }
 
   // ---- answering
@@ -208,6 +285,30 @@ export class WorldWorkerPool {
     }
 
     slot.building = undefined;
+    if (data.kind !== "meshCancelled") this.forgetDeclines(data.cell);
+
+    if (data.kind === "meshCancelled") {
+      // **The slot is freed, and the chunk goes back on the queue.**
+      //
+      // Freeing is the part that stops the pool wedging: the slot's busy flag exists to
+      // say "an answer is coming", and a decline is the answer that says one is not, so
+      // leaving the flag set is how a pool ends up permanently short a worker.
+      //
+      // Re-queueing is the part that stops the window going blank. A declined request has
+      // been *consumed* — its queue entry is gone — so if the chunk is not asked for again
+      // here, nothing will: the window only re-asks a slot when it scrolls or when the
+      // model changes, and a user who has stopped panning does neither. The symptom is a
+      // window that stays partly empty with `busy` at zero and nothing in the queue, and
+      // it clears only when something unrelated happens to send a model.
+      //
+      // Nothing is applied. The chunk was not meshed, so recording it as filled would
+      // mark a slot filled with no geometry, and a filled slot is one the window stops
+      // asking about — which is the same hole by a different route.
+      this.cancellations++;
+      this.retryDeclined(data.cell);
+      this.pump();
+      return;
+    }
 
     if (data.kind === "meshFailed") {
       this.handlers.onFailed(data, data.reason);
@@ -271,6 +372,9 @@ export class WorldWorkerPool {
     for (let i = 0; i < take; i++) {
       const cell = this.queue[i];
       const wanted = this.wantedByCell.get(this.key(cell));
+      // A queued cell with nothing wanted behind it cannot be sent, and leaving it in
+      // place would wedge the queue behind it. Dropping the entry is correct because
+      // nothing wants it.
       if (wanted === undefined) continue;
       idle[i].building = wanted;
       idle[i].worker.post({

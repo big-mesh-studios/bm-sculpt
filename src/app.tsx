@@ -395,7 +395,8 @@ export default function App() {
                 </div>
                 <div class={styles.row}>
                   triangles: {value().triangles.toLocaleString()} · workers:{" "}
-                  {value().busy} busy, {value().pending} pending
+                  {value().busy} busy, {value().pending} pending,{" "}
+                  {value().queued} queued
                 </div>
                 <Show when={history().undo > 0 || history().redo > 0}>
                   <div class={styles.row}>

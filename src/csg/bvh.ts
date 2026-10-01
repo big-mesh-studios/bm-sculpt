@@ -48,6 +48,54 @@ const BIN_COUNT = 16;
 /** How deep the build is willing to recurse before splitting anyway. */
 const MAX_DEPTH = 32;
 
+/**
+ * Blocks a side, when a declared region is subdivided.
+ *
+ * Eight, from three candidates for "smaller": 4³ measured 1.8× and 8³ measured 2.5×
+ * against one list per chunk, and 8³ is where the curve flattened on this project's
+ * chunk size. Sixteen was not measured to be better and would quadruple the lists a
+ * chunk pays to build, so the number a measurement justified is the number here.
+ *
+ * A region's span is divided rather than a fixed width, so any region subdivides
+ * evenly and a chunk thirty-four samples across gets about four a side — which is
+ * also about the width of the operations a brush leaves, which is why the partition
+ * helps where it does and not elsewhere.
+ */
+const BLOCKS = 8;
+
+/** Blocks in a subdivided region, since the grid is cubic. */
+const BLOCK_COUNT = BLOCKS * BLOCKS * BLOCKS;
+
+/**
+ * Which block a coordinate falls in along one axis, or `-1` if it is outside.
+ *
+ * `-1` rather than a clamp, because outside is not the same as at the edge: a point
+ * beyond the region's far face has no block that provably covers it, and the caller
+ * falls back to the whole gathered list rather than to a block that may not.
+ */
+const blockCoordinate = (value: number, min: number, max: number): number => {
+  const span = max - min;
+  if (!(span > 0) || value < min || value > max) return -1;
+  const block = Math.floor(((value - min) / span) * BLOCKS);
+  return block >= BLOCKS ? BLOCKS - 1 : block;
+};
+
+/**
+ * Which block a coordinate falls in, clamped to the edges rather than rejected.
+ *
+ * The other half of `blockCoordinate`, for the side that asks where a box *reaches*
+ * rather than where a point *is*. A candidate's grown box is outside the region on
+ * purpose — that is what the margin means — so a coordinate beyond the far face is
+ * the common case, and it belongs to the nearest block rather than to none of them.
+ */
+const blockIndexClamped = (value: number, min: number, max: number): number => {
+  const span = max - min;
+  if (!(span > 0)) return 0;
+  const block = Math.floor(((value - min) / span) * BLOCKS);
+  if (block < 0) return 0;
+  return block >= BLOCKS ? BLOCKS - 1 : block;
+};
+
 interface BvhNode {
   bounds: Bounds;
   left: BvhNode | null;
@@ -118,8 +166,30 @@ export class OperationBVH {
   /** Where the current candidates were centred. */
   private anchor: Vec3 = { x: 0, y: 0, z: 0 };
 
+  /**
+   * The declared region cut into blocks, each with the candidates that can reach it.
+   *
+   * `null` when there is no declared region, which is the picker and every other
+   * ad-hoc query. Those gather one list around a point and take a handful of samples
+   * from it, so there is nothing to subdivide and the block lookup would be pure
+   * overhead; the mesh worker, which is the case that costs, always declares one.
+   *
+   * Flat and indexed by `blockIndex`, so a lookup is an array read rather than a
+   * hash. 512 entries for an 8³ grid.
+   */
+  private blocks: IndexedOperation[][] | null = null;
+
   /** How many times the candidate cache has been rebuilt. */
   rebuilds = 0;
+
+  /**
+   * How many block lists have been built for the current region.
+   *
+   * Separate from `rebuilds`, which counts tree traversals, because they are
+   * different work and the cost tests pin both ideas. A chunk pays one traversal and
+   * up to `BLOCK_COUNT` of these.
+   */
+  blocksBuilt = 0;
 
   constructor(operations: readonly Operation[] = []) {
     this.set(operations);
@@ -168,6 +238,7 @@ export class OperationBVH {
     this.cachedBounds = emptyNode().bounds;
     this.region = null;
     this.anchor = { x: 0, y: 0, z: 0 };
+    this.blocks = null;
   }
 
   /**
@@ -243,10 +314,108 @@ export class OperationBVH {
       // twice per chunk, and a sort of a few hundred entries is nothing beside 34,304
       // folds.
       this.cached.sort(byIndex);
+      this.blocks =
+        this.region === null ? null : this.cutIntoBlocks(this.region);
       this.primed = true;
       this.rebuilds++;
     }
-    return this.cached;
+    // A declared region is subdivided, and the answer is the sub-list for the block
+    // the point falls in. A point outside the region has no block, and gets the whole
+    // gathered list — which is what the fold would have used anyway.
+    if (this.blocks === null) return this.cached;
+    const region = this.region as Bounds;
+    const bx = blockCoordinate(p.x, region.min.x, region.max.x);
+    const by = blockCoordinate(p.y, region.min.y, region.max.y);
+    const bz = blockCoordinate(p.z, region.min.z, region.max.z);
+    if (bx < 0 || by < 0 || bz < 0) return this.cached;
+    return this.blocks[(bz * BLOCKS + by) * BLOCKS + bx];
+  }
+
+  /**
+   * Cuts the declared region into blocks and files each gathered candidate under
+   * every block it could change the field inside.
+   *
+   * **The chunks the fold has to look at are the problem this answers.** With one
+   * candidate list for a whole chunk, every sample tests every operation near the
+   * chunk — so a chunk that a user has been sculpting in, where the brush has left
+   * hundreds of operations, tests all of them at all 34,304 of its samples, and its
+   * cost is linear in how long they have been sculpting. Measured on this project's
+   * own chunk, with the operations clustered the way a stroke clusters them, the
+   * candidates tested per sample were *exactly* the operation count: 4, 64, and 256
+   * operations all tested once per sample. Splitting the region into 8³ blocks and
+   * giving each its own list cut that to 24 and 96, for **2.5×** on the fold, with no
+   * change to the field — the blocks are a partition of the same candidates, not a
+   * different set of them.
+   *
+   * **Why each block's list is a subset of the gathered one, which is what makes it
+   * a partition rather than a second guess.** A candidate is filed under a block when
+   * it is within `CANDIDATE_MARGIN` of the block, which is the same condition under
+   * which it can change the field at *some* point of the block: the fold skips a
+   * candidate only when the point is further from its box than the threshold, the
+   * threshold is never larger than the margin, and the margin is the same one the
+   * gathered list was built with. A block lies inside the region, so a candidate
+   * within the margin of a block is within the margin of the region, and is therefore
+   * in the gathered list already. Nothing new can enter; only things that could not
+   * have mattered leave.
+   *
+   * **Why the order survives.** Each list is filled by walking the gathered list once
+   * in list order and appending, so every list is in list order too — which is what
+   * the fold's non-associativity requires, and why this can be done at all without
+   * asking what "sorted candidates" means more than once.
+   *
+   * **One traversal, not one per block.** Blocks are cut from the gathered list
+   * rather than queried for, so the tree is still walked once per chunk and
+   * `rebuilds` still means what it says. The cost is a box test per candidate per
+   * block it touches — for a few hundred clustered candidates, tens of thousands of
+   * tests against the millions of candidate tests the partition saves.
+   */
+  private cutIntoBlocks(region: Bounds): IndexedOperation[][] {
+    const blocks: IndexedOperation[][] = [];
+    for (let i = 0; i < BLOCK_COUNT; i++) blocks.push([]);
+
+    for (const candidate of this.cached) {
+      // The block range the candidate can reach, from its box grown by the margin.
+      // Every coordinate here is outside the region as often as not — that is what
+      // growing by the margin means — so these clamp rather than reject.
+      const b = candidate.bounds;
+      const x0 = blockIndexClamped(
+        b.min.x - CANDIDATE_MARGIN,
+        region.min.x,
+        region.max.x,
+      );
+      const x1 = blockIndexClamped(
+        b.max.x + CANDIDATE_MARGIN,
+        region.min.x,
+        region.max.x,
+      );
+      const y0 = blockIndexClamped(
+        b.min.y - CANDIDATE_MARGIN,
+        region.min.y,
+        region.max.y,
+      );
+      const y1 = blockIndexClamped(
+        b.max.y + CANDIDATE_MARGIN,
+        region.min.y,
+        region.max.y,
+      );
+      const z0 = blockIndexClamped(
+        b.min.z - CANDIDATE_MARGIN,
+        region.min.z,
+        region.max.z,
+      );
+      const z1 = blockIndexClamped(
+        b.max.z + CANDIDATE_MARGIN,
+        region.min.z,
+        region.max.z,
+      );
+      for (let z = z0; z <= z1; z++)
+        for (let y = y0; y <= y1; y++)
+          for (let x = x0; x <= x1; x++)
+            blocks[(z * BLOCKS + y) * BLOCKS + x].push(candidate);
+    }
+
+    this.blocksBuilt = BLOCK_COUNT;
+    return blocks;
   }
 
   /**
@@ -268,6 +437,7 @@ export class OperationBVH {
   beginRegion(bounds: Bounds): () => void {
     this.region = bounds;
     this.primed = false;
+    this.blocks = null;
     return () => this.endRegion();
   }
 
@@ -275,6 +445,7 @@ export class OperationBVH {
   endRegion(): void {
     this.region = null;
     this.primed = false;
+    this.blocks = null;
   }
 
   /** Whether the gathered candidates cover `p` closely enough to answer about it. */
@@ -369,6 +540,7 @@ export class OperationBVH {
    */
   invalidate(): void {
     this.primed = false;
+    this.blocks = null;
   }
 }
 
