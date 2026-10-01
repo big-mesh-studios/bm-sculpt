@@ -159,15 +159,24 @@ export const pickAlong = (
 /**
  * Turns a screen point into a ray through the world.
  *
- * Built from the camera's own inverse matrices rather than from its angles, because the
- * camera is driven by an orbit state rather than positioned directly and re-deriving angles
- * from it would be a second source of truth for where the camera is looking. Two
- * matrix-vector products and a normalise, and no arithmetic that can drift from what is
- * drawn.
+ * Built from the camera's own matrices rather than from its angles, because the camera is
+ * driven by an orbit state rather than positioned directly and re-deriving angles from it
+ * would be a second source of truth for where the camera is looking. Two matrix-vector
+ * products and a normalise, and no arithmetic that can drift from what is drawn.
+ *
+ * **The world matrix, not its inverse.** Unprojection runs camera space → world space, and
+ * `matrixWorld` is the camera → world one; `matrixWorldInverse` is the view matrix and runs
+ * the other way. Reading the inverse here compiles, type-checks, and returns a
+ * plausible-looking point, and it is wrong for every camera that is not sitting at the
+ * origin with no rotation — which is every camera this application has. That is worth
+ * writing down because the mistake is invisible in the one case a test is most likely to
+ * use: the identity matrix is its own inverse, so a camera at the origin passes whether the
+ * field is named `matrixWorld` or `matrixWorldInverse`. See the regression test that drives
+ * a real camera from off-origin.
  */
 export const rayThroughScreen = (
   camera: {
-    readonly matrixWorldInverse: { readonly elements: ArrayLike<number> };
+    readonly matrixWorld: { readonly elements: ArrayLike<number> };
     readonly projectionMatrixInverse: { readonly elements: ArrayLike<number> };
     readonly position: Vec3;
   },
@@ -176,7 +185,7 @@ export const rayThroughScreen = (
   ndcY: number,
 ): Ray => {
   const inverseProjection = camera.projectionMatrixInverse.elements;
-  const worldInverse = camera.matrixWorldInverse.elements;
+  const world = camera.matrixWorld.elements;
 
   // Unproject the near plane, which is where the perspective divide would put a point at
   // negative w and needs no division at all.
@@ -196,21 +205,13 @@ export const rayThroughScreen = (
     inverseProjection[10] * -1 +
     inverseProjection[14];
 
+  // Camera space to world space, which is what `matrixWorld` is for.
   const worldX =
-    worldInverse[0] * nearX +
-    worldInverse[4] * nearY +
-    worldInverse[8] * nearZ +
-    worldInverse[12];
+    world[0] * nearX + world[4] * nearY + world[8] * nearZ + world[12];
   const worldY =
-    worldInverse[1] * nearX +
-    worldInverse[5] * nearY +
-    worldInverse[9] * nearZ +
-    worldInverse[13];
+    world[1] * nearX + world[5] * nearY + world[9] * nearZ + world[13];
   const worldZ =
-    worldInverse[2] * nearX +
-    worldInverse[6] * nearY +
-    worldInverse[10] * nearZ +
-    worldInverse[14];
+    world[2] * nearX + world[6] * nearY + world[10] * nearZ + world[14];
 
   return {
     origin: {

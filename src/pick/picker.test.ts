@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { PerspectiveCamera } from "@random-mesh/rmsl/scene";
+
 import { VOXEL_SIZE } from "../constants";
 import { Field } from "../csg";
 import { OperationBVH } from "../csg";
@@ -214,63 +216,123 @@ describe("the cost of a pick", () => {
 });
 
 describe("turning a screen point into a ray", () => {
-  /** A camera looking down -z from the origin, as a perspective camera at the origin. */
-  const camera = () => {
-    // Projection inverse for a 90-degree vertical fov, aspect 1, near 1, far 1000.
-    const f = 1;
-    const near = 1;
-    const far = 1000;
-    const projectionInverse = [
-      1 / f,
-      0,
-      0,
-      0,
-      0,
-      1,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      -1 / (far - near),
-      1,
-    ];
-    return {
-      projectionMatrixInverse: { elements: projectionInverse },
-      // Identity: the camera is at the origin with no rotation.
-      matrixWorldInverse: {
-        elements: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-      },
-      position: { x: 0, y: 0, z: 0 },
-    };
+  /**
+   * A real camera, off-origin and rotated, aimed at `target`.
+   *
+   * This fixture was hand-written matrices at the origin, and it could not have caught the
+   * bug this describe block now exists to guard. With no translation and no rotation the
+   * world matrix is the identity — and the identity is its own inverse, so reading
+   * `matrixWorldInverse` where the world matrix belonged produced a ray that pointed the
+   * right way in that fixture and the wrong way in the application. A real camera is the
+   * only version of this setup where the two matrices are different numbers.
+   */
+  const cameraLookingAt = (
+    target: { x: number; y: number; z: number },
+    from = { x: 500, y: 300, z: 700 },
+  ) => {
+    const camera = new PerspectiveCamera(50, 1.5, 1, 10000);
+    camera.position.set(from.x, from.y, from.z);
+    camera.lookAt(target.x, target.y, target.z);
+    // What the renderer does each frame, and what the picker therefore depends on being
+    // current: the inverse matrices are only recomputed here.
+    camera.updateMatrixWorld(true);
+    return camera;
   };
 
-  it("sends the centre of the screen straight down the view", () => {
-    const ray = rayThroughScreen(camera(), 0, 0);
-    expect(ray.direction.z).toBeCloseTo(-1, 6);
+  /** Perpendicular distance from a point to the ray, which is unit length. */
+  const distanceToRay = (
+    ray: Ray,
+    point: { x: number; y: number; z: number },
+  ): number => {
+    const v = {
+      x: point.x - ray.origin.x,
+      y: point.y - ray.origin.y,
+      z: point.z - ray.origin.z,
+    };
+    const along =
+      v.x * ray.direction.x + v.y * ray.direction.y + v.z * ray.direction.z;
+    return Math.hypot(
+      v.x - ray.direction.x * along,
+      v.y - ray.direction.y * along,
+      v.z - ray.direction.z * along,
+    );
+  };
+
+  /**
+   * A camera axis in world space, read off its world matrix.
+   *
+   * Column-major, like every matrix in this renderer and in `rayThroughScreen` above: column
+   * `c` is `elements[4c]`, `elements[4c + 1]`, `elements[4c + 2]`, and the translation is the
+   * last column. Reading rows here instead is a silent sign flip rather than an error, which
+   * is the same family of mistake as the one this describe block guards.
+   */
+  const axisOf = (camera: PerspectiveCamera, column: 0 | 1 | 2) => {
+    const e = camera.matrixWorld.elements;
+    return {
+      x: e[4 * column],
+      y: e[4 * column + 1],
+      z: e[4 * column + 2],
+    };
+  };
+  const dot = (a: { x: number; y: number; z: number }, b: Ray["direction"]) =>
+    a.x * b.x + a.y * b.y + a.z * b.z;
+
+  it("sends the centre of the screen at whatever the camera is looking at", () => {
+    // The whole content of the unprojection. The centre of the screen *is* the camera's own
+    // axis, so the ray through it has to pass through the target. Swapping the world matrix
+    // for the view matrix still yields a unit direction leaving the camera, so nothing else
+    // about the result gives the mistake away.
+    const target = { x: 40, y: -25, z: 10 };
+    const ray = rayThroughScreen(cameraLookingAt(target), 0, 0);
+    expect(distanceToRay(ray, target)).toBeLessThan(1e-6);
   });
 
-  it("sends the right of the screen to the right", () => {
-    expect(rayThroughScreen(camera(), 1, 0).direction.x).toBeGreaterThan(0);
-    expect(rayThroughScreen(camera(), -1, 0).direction.x).toBeLessThan(0);
+  it("finds the surface the camera is aimed at", () => {
+    // The end-to-end version of the same property, through the field the mesher reads. This
+    // is the assertion that fails outright when the two matrices are confused: the ray sails
+    // past the sphere and the pick reports nothing there, which is a brush that does nothing
+    // rather than an error anybody would recognise.
+    const camera = cameraLookingAt({ x: 0, y: 0, z: 0 });
+    const hit = pickAlong(sphereField(), rayThroughScreen(camera, 0, 0));
+    expect(hit).toBeDefined();
+    expect(offSurface(hit!.point)).toBeLessThan(VOXEL_SIZE);
   });
 
-  it("sends the top of the screen up", () => {
+  it("sends the right of the screen along the camera's own right", () => {
+    const camera = cameraLookingAt({ x: 0, y: 0, z: 0 });
+    const right = axisOf(camera, 0);
+    expect(
+      dot(right, rayThroughScreen(camera, 1, 0).direction),
+    ).toBeGreaterThan(0);
+    expect(dot(right, rayThroughScreen(camera, -1, 0).direction)).toBeLessThan(
+      0,
+    );
+  });
+
+  it("sends the top of the screen along the camera's own up", () => {
     // Screen y grows downwards and NDC y upwards, and getting this backwards inverts the
     // vertical axis of every pick — which looks like a brush offset rather than an error.
-    expect(rayThroughScreen(camera(), 0, 1).direction.y).toBeGreaterThan(0);
-    expect(rayThroughScreen(camera(), 0, -1).direction.y).toBeLessThan(0);
+    const camera = cameraLookingAt({ x: 0, y: 0, z: 0 });
+    const up = axisOf(camera, 1);
+    expect(dot(up, rayThroughScreen(camera, 0, 1).direction)).toBeGreaterThan(
+      0,
+    );
+    expect(dot(up, rayThroughScreen(camera, 0, -1).direction)).toBeLessThan(0);
   });
 
-  it("starts the ray at the camera", () => {
-    const ray = rayThroughScreen(camera(), 0.3, 0.4);
-    expect(ray.origin).toEqual({ x: 0, y: 0, z: 0 });
-    expect(
-      Math.hypot(ray.direction.x, ray.direction.y, ray.direction.z),
-    ).toBeCloseTo(1, 9);
+  it("starts the ray at the camera, whatever is on screen", () => {
+    const camera = cameraLookingAt({ x: 0, y: 0, z: 0 });
+    for (const ndc of [
+      [0, 0],
+      [0.3, 0.4],
+      [-0.7, 0.2],
+    ]) {
+      const ray = rayThroughScreen(camera, ndc[0], ndc[1]);
+      expect(ray.origin).toEqual({ x: 500, y: 300, z: 700 });
+      expect(
+        Math.hypot(ray.direction.x, ray.direction.y, ray.direction.z),
+      ).toBeCloseTo(1, 9);
+    }
   });
 });
 

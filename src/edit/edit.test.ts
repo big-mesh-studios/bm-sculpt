@@ -461,7 +461,7 @@ const toolBed = (hit: Hit | null = ON_SURFACE) => {
   const tool = new SculptTool({
     camera: {
       projectionMatrixInverse: { elements: [] },
-      matrixWorldInverse: { elements: [] },
+      matrixWorld: { elements: [] },
       position: { x: 0, y: 0, z: 0 },
     },
     target,
@@ -506,9 +506,19 @@ describe("what a pointer drag means", () => {
     expect(tool.state.sculpting).toBe(false);
   });
 
-  it("orbits on a shift-left drag, which is what every sculpting tool does", () => {
+  it("pans on a shift drag, whichever button is underneath the shift", () => {
+    // Shift is a modifier rather than a gesture of its own, so it pans from the left button
+    // as well as the right. Asserted on both because the tool and the camera read the same
+    // rule from two files, and a rule that drifts leaves the tool reporting one gesture
+    // while the camera performs another.
     const { tool, strokes } = toolBed();
-    expect(tool.pointerDown(down({ shiftKey: true }), 800, 600)).toBe("orbit");
+    expect(tool.pointerDown(down({ shiftKey: true }), 800, 600)).toBe("pan");
+    expect(
+      tool.pointerDown(down({ button: 2, shiftKey: true }), 800, 600),
+    ).toBe("pan");
+    expect(
+      tool.pointerDown(down({ button: 1, shiftKey: true }), 800, 600),
+    ).toBe("pan");
     expect(strokes).toHaveLength(0);
   });
 
@@ -542,7 +552,7 @@ describe("what a pointer drag means", () => {
     const tool = new SculptTool({
       camera: {
         projectionMatrixInverse: { elements: [] },
-        matrixWorldInverse: { elements: [] },
+        matrixWorld: { elements: [] },
         position: { x: 0, y: 0, z: 0 },
       },
       target: {
@@ -645,7 +655,7 @@ describe("history keys", () => {
     const tool = new SculptTool({
       camera: {
         projectionMatrixInverse: { elements: [] },
-        matrixWorldInverse: { elements: [] },
+        matrixWorld: { elements: [] },
         position: { x: 0, y: 0, z: 0 },
       },
       target: {

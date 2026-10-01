@@ -33,6 +33,8 @@ const fakeElement = () => {
       listeners.get(type)?.delete(handler);
     },
     setPointerCapture: () => {},
+    hasPointerCapture: () => false,
+    releasePointerCapture: () => {},
     getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
   };
 
@@ -40,6 +42,23 @@ const fakeElement = () => {
     element: element as unknown as HTMLElement,
     fire(type: string, event: unknown): void {
       for (const handler of listeners.get(type) ?? []) handler(event);
+    },
+    /** Presses, drags by the given delta, and releases, with one button held throughout. */
+    drag(
+      dx: number,
+      dy: number,
+      options: { button?: number; shiftKey?: boolean } = {},
+    ): void {
+      const pointer = (x: number, y: number) => ({
+        pointerId: 1,
+        clientX: 400 + x,
+        clientY: 300 + y,
+        button: options.button ?? 0,
+        shiftKey: options.shiftKey ?? false,
+      });
+      this.fire("pointerdown", pointer(0, 0));
+      this.fire("pointermove", pointer(dx, dy));
+      this.fire("pointerup", pointer(dx, dy));
     },
     /** Lifts two fingers apart by a factor, as a real pinch would. */
     pinch(from: number, to: number): void {
@@ -67,6 +86,107 @@ const controller = (radius = 900) => {
   orbit.attach(harness.element);
   return { orbit, harness };
 };
+
+/**
+ * Drags on a controller of its own and reports which half of the camera moved.
+ *
+ * Answering "orbit or pan" as a property rather than as angles or target coordinates is the
+ * point: the two are arithmetically independent, so a test that checked the numbers would
+ * still pass if a drag did both, or neither, and a gesture that does nothing is exactly what
+ * a user cannot describe — only what is missing from it.
+ */
+const dragged = (options: { button: number; shiftKey?: boolean }) => {
+  const { orbit, harness } = controller();
+  const before = {
+    theta: orbit.state.theta,
+    phi: orbit.state.phi,
+    target: { ...orbit.state.target },
+  };
+
+  harness.drag(60, 40, options);
+
+  return {
+    orbited:
+      orbit.state.theta !== before.theta || orbit.state.phi !== before.phi,
+    panned:
+      orbit.state.target.x !== before.target.x ||
+      orbit.state.target.y !== before.target.y ||
+      orbit.state.target.z !== before.target.z,
+  };
+};
+
+/** The whole table, in the order a user would reach for the buttons. */
+const DRAGS: ReadonlyArray<{
+  readonly label: string;
+  readonly button: number;
+  readonly shiftKey: boolean;
+  readonly did: "orbited" | "panned";
+}> = [
+  { label: "a left drag", button: 0, shiftKey: false, did: "orbited" },
+  { label: "a shift-left drag", button: 0, shiftKey: true, did: "panned" },
+  { label: "a right drag", button: 2, shiftKey: false, did: "orbited" },
+  { label: "a shift-right drag", button: 2, shiftKey: true, did: "panned" },
+  { label: "a middle drag", button: 1, shiftKey: false, did: "panned" },
+];
+
+describe("which gesture a drag means", () => {
+  for (const { label, button, shiftKey, did } of DRAGS) {
+    it(`${label} ${did === "orbited" ? "orbits" : "pans"}`, () => {
+      expect(dragged({ button, shiftKey })).toEqual({
+        orbited: did === "orbited",
+        panned: did === "panned",
+      });
+    });
+  }
+
+  it("gives every button and modifier exactly one gesture, and never none", () => {
+    // The bug this table exists for: right-drag was the *pan* button, which is the right
+    // answer for a viewer whose left button orbits and the wrong one here, where the left
+    // button is a brush. It took the last gesture that turned the model, so a desktop user
+    // had no way to orbit at all — and the pure functions were all tested, and all correct.
+    // Enumerating the combinations rather than re-asserting the rows above is what stops that
+    // coming back as a hole in the table instead of as a failing case.
+    for (let button = 0; button <= 2; button++) {
+      for (const shiftKey of [false, true]) {
+        const what = dragged({ button, shiftKey });
+        const gestures = [what.orbited, what.panned].filter(Boolean);
+        expect(gestures, `button ${button}, shift ${shiftKey}`).toHaveLength(1);
+      }
+    }
+  });
+
+  it("orbits on a right drag by a turn, not a pan, and leaves the target alone", () => {
+    // The size of the turn is a constant rather than a number pinned here, but it has to be
+    // the right order of magnitude: a turn of a thousandth of a radian per pixel is a drag
+    // that looks broken in the same way an eighty-times-too-slow pinch did.
+    const { orbit, harness } = controller();
+    const start = orbit.state.theta;
+    harness.drag(60, 40, { button: 2 });
+
+    const turn = Math.abs(orbit.state.theta - start);
+    expect(turn).toBeCloseTo(60 * DEFAULT_ORBIT_LIMITS.rotateSpeed, 9);
+    expect(turn).toBeGreaterThan(0.1);
+    expect(orbit.state.target).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it("stops on release, so a pointer left hovering cannot keep moving the camera", () => {
+    // `button` is the button the drag *began* with, because a pointermove reports no button
+    // at all for a mouse being moved with none held. That makes it state a release has to
+    // clear, and a stale one is a camera that drifts on its own.
+    const { orbit, harness } = controller();
+    harness.drag(60, 40, { button: 2 });
+    const held = { ...orbit.state, target: { ...orbit.state.target } };
+
+    harness.fire("pointermove", {
+      pointerId: 1,
+      clientX: 460,
+      clientY: 340,
+      button: -1,
+      shiftKey: false,
+    });
+    expect(orbit.state).toEqual(held);
+  });
+});
 
 describe("orbiting angles", () => {
   it("holds phi inside the limits however far a flick overshoots", () => {

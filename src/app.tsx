@@ -12,7 +12,7 @@
  * session's chunk window tracks the orbit target, and the spike has nothing to stream.
  */
 
-import { createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import {
   Color,
   Mesh,
@@ -53,8 +53,25 @@ export default function App() {
   const [spike] = createSignal(isSpike());
   const [history, setHistory] = createSignal({ undo: 0, redo: 0 });
 
-  // Solid 2 replaced `onMount` with `onSettled`, which schedules once after the current
-  // activity settles and returns the disposal. One call now covers what used to need two.
+  // A memo rather than a `<Show>` with a narrowed child, because `<Show>` calls its children
+  // function with tracking switched off. Reading the narrowed accessor *in the return
+  // position* — `{(probe) => describePrecision(probe())}` — therefore reads the signal
+  // untracked: a dev-mode STRICT_READ_UNTRACKED warning, and a row that would silently
+  // never update if the probe landed after the first render. Every other read of a narrowed
+  // accessor here is inside JSX, which compiles to a deferred insert and is tracked; this one
+  // was the exception, and the compiler output is what showed it.
+  const precisionText = createMemo(() => {
+    const measured = precision();
+    return measured === undefined
+      ? "not probed yet"
+      : describePrecision(measured);
+  });
+
+  // Solid 2 replaced `onMount` with `onSettled`, which fires once after the current
+  // activity settles. It does *not* return a disposal — the callback returns the teardown,
+  // and `onCleanup` inside one is a dev-mode error that halts the reactive system. So the
+  // two halves of the lifecycle live in one block, and the block's last statement is its
+  // own undo.
   onSettled(() => {
     const measured = detectFragmentPrecision();
     setPrecision(measured);
@@ -221,11 +238,11 @@ export default function App() {
       }
     });
 
-    onCleanup(() => {
+    return () => {
       detachPointer();
       detach();
       disposeScene();
-    });
+    };
   });
 
   return (
@@ -242,12 +259,7 @@ export default function App() {
           </Show>
         </p>
         <dl class={styles.readout}>
-          <div class={styles.row}>
-            fragment precision:{" "}
-            <Show when={precision()} fallback={<>not probed yet</>}>
-              {(value) => describePrecision(value())}
-            </Show>
-          </div>
+          <div class={styles.row}>fragment precision: {precisionText()}</div>
           <div class={styles.row}>
             vertex layout: float32x3 + snorm16x2 + unorm8x4 = {VERTEX_BYTES} B
           </div>
@@ -292,8 +304,8 @@ export default function App() {
             when={!spike()}
             fallback={
               <>
-                drag to orbit · shift-drag or right-drag to pan · wheel or pinch
-                to dolly · <a href="?spike">phase 0 spike</a>
+                drag or right-drag to orbit · shift-drag or middle-drag to pan ·
+                wheel or pinch to dolly · <a href="?spike">phase 0 spike</a>
               </>
             }
           >

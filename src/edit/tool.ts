@@ -15,9 +15,12 @@
  * dab spacing turns the samples into dabs.
  *
  * **Editing is blocked while a pointer is down for navigation.** The orbit controller claims
- * left-drag, so a left drag both orbits and sculpts unless the two are told apart. The rule
- * is the one every sculpting tool uses: left is sculpt, right or shift-drag is orbit, middle
- * is pan.
+ * the same element, so a left drag both sculpts and navigates unless the two are told apart.
+ * The rule is the one every sculpting tool uses, and it is the same rule the camera applies:
+ * a bare left is sculpt, right is orbit, and shift or the middle button is pan. Shift is a
+ * modifier on *any* button rather than a gesture of its own, which is what keeps a pan one
+ * key away instead of one button away. This module only classifies — nothing here acts on
+ * the answer — so the two halves cannot drift apart as long as they name the same gestures.
  *
  * **Undo is not a pointer gesture.** It is keys. A sculpting tool that undoes on a
  * right-click undoes the stroke that was ending at that moment, which is not what anybody
@@ -32,7 +35,12 @@ import type { BrushSettings, BrushStroke } from "./brush";
 
 /** What the tool needs from the camera, for a pick. */
 export interface PickCamera {
-  readonly matrixWorldInverse: { readonly elements: ArrayLike<number> };
+  /**
+   * The camera → world matrix, which is what unprojection needs. Deliberately not
+   * `matrixWorldInverse`: that is the view matrix, it runs the other way, and a camera at
+   * the origin cannot tell the two apart.
+   */
+  readonly matrixWorld: { readonly elements: ArrayLike<number> };
   readonly projectionMatrixInverse: { readonly elements: ArrayLike<number> };
   readonly position: Vec3;
 }
@@ -114,8 +122,8 @@ export class SculptTool {
     width: number,
     height: number,
   ): DragKind {
-    // Right or shift is navigation whatever else is true, and a middle button pans. Left is
-    // the only one that sculpts, so a drag can never do both.
+    // A bare left drag sculpts. Everything else is navigation, whatever else is true, so a
+    // drag can never do two things at once.
     if (event.button === 0 && !event.shiftKey) {
       this.drag = "sculpt";
       const hit = this.pickNow(event.clientX, event.clientY, width, height);
@@ -126,7 +134,9 @@ export class SculptTool {
       return "sculpt";
     }
 
-    this.drag = event.button === 1 ? "pan" : "orbit";
+    // Shift pans on any button and the middle button pans alone, so what is left to orbit
+    // is the right — here, where the left one is a brush.
+    this.drag = event.shiftKey || event.button === 1 ? "pan" : "orbit";
     return this.drag;
   }
 

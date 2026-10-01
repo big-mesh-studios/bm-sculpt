@@ -29,14 +29,24 @@ import {
   DEFAULT_BRUSH,
   beginStroke,
 } from "./edit/brush";
-import { SculptDocument, type Change } from "./edit/document";
-
-import { Session } from "./session";
+import { SculptDocument, type Bounds, type Change } from "./edit/document";
 
 export interface SculptSessionOptions {
-  readonly session: Session;
+  /**
+   * Whatever streams the model, narrowed to the one thing a stroke has to say to it.
+   *
+   * Not the concrete `Session`: a `SculptSession` that cannot be built without a WebGL
+   * context is a `SculptSession` whose seeding and fold-rebuild cannot be tested, and the
+   * bug below lived in exactly that untested corner for want of a seam.
+   */
+  readonly session: SculptModelSink;
   readonly camera: PickCamera;
   readonly operations?: readonly Operation[];
+}
+
+/** The part of `Session` an edit talks to: told the model, and what it touched. */
+export interface SculptModelSink {
+  setOperations(operations: readonly Operation[], touched?: Bounds): void;
 }
 
 /** Where the preview sits, for the app to read each frame. */
@@ -59,7 +69,17 @@ export class SculptSession {
   };
 
   constructor(private readonly options: SculptSessionOptions) {
-    this.field = buildField(options.operations ?? []);
+    // The document is where the model lives, and it starts empty. Seeding it here is what
+    // makes a stroke an *edit* rather than a replacement: every rebuild reads
+    // `document.list`, so a document that did not already hold the model would have the
+    // first stroke fold the model down to that stroke alone — the picker, which traces the
+    // starter operations, would then be tracing a model that was no longer on screen.
+    //
+    // The history is dropped afterwards because the model it starts with is not something
+    // the user did, and "undo" at the start of a session should not be able to delete it.
+    this.document.add(options.operations ?? []);
+    this.document.resetHistory();
+    this.field = buildField(this.document.list);
     this.tool = new SculptTool({
       camera: options.camera,
       target: this.target(),

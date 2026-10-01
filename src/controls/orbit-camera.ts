@@ -3,7 +3,7 @@
  *
  * This library ships no `OrbitControls`, and nothing here is a substitute for
  * one: it is the minimum that makes a surface visible and its octahedral normals
- * checkable by eye — drag to orbit, right-drag or shift-drag to pan, wheel or
+ * checkable by eye — drag to orbit, shift-drag or middle-drag to pan, wheel or
  * pinch to dolly. The application's own camera grows out of this file, so the
  * spherical arithmetic is kept separate from the event handling and exported for
  * tests that need no DOM.
@@ -270,9 +270,17 @@ export class OrbitController {
 
       const dx = current.x - previous.x;
       const dy = current.y - previous.y;
-      if (this.button === 2 || event.shiftKey) {
+      // Shift is the pan modifier whichever button is held, so a pan never costs a trip to
+      // the middle button or a second hand, and the middle button pans on its own for the
+      // modifier keys nobody has bound. Everything else orbits.
+      //
+      // The right button is in that "everything else" deliberately. It was the pan button
+      // here, which is the conventional choice for a viewer where the left button orbits —
+      // and here the left button sculpts, so a pan button that was also the only remaining
+      // way to look around left a desktop user with no gesture that orbited at all.
+      if (event.shiftKey || this.button === 1) {
         this.state.target = panBy(this.state, dx, dy, this.limits);
-      } else if (this.button === 0) {
+      } else if (this.button === 0 || this.button === 2) {
         this.state.theta -= dx * this.limits.rotateSpeed;
         this.state.phi = clampPhi(
           this.state.phi - dy * this.limits.rotateSpeed,
