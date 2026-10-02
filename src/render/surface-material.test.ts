@@ -1,5 +1,5 @@
 import { BLOCK_WORLD } from "../constants";
-import { compileGLSL } from "@random-mesh/rmsl";
+import { compileGlsl } from "@random-mesh/rmsl/glsl";
 import { Scene } from "@random-mesh/rmsl/scene";
 import { describe, expect, it } from "vitest";
 
@@ -10,7 +10,7 @@ import { buildSpikeVolume } from "./spike-volume";
  * Compiling a material needs no graphics device.
  *
  * `NodeMaterial.build` turns the node graph into roots plus the exact set of
- * bindings the graph reaches, and `compileGLSL` renders those to GLSL ES 3.00.
+ * bindings the graph reaches, and `compileGlsl` renders those to GLSL ES 3.00.
  * Both are host-side string and object work, which means the three questions
  * Phase 0 was gated on are answerable in a unit test rather than by looking at a
  * screen: that the node DSL accepts the octahedral decode written as nodes,
@@ -26,8 +26,8 @@ const compile = (material: SurfaceMaterial) => {
   const program = material.build(scene);
   return {
     program,
-    vertex: compileGLSL.vertex(program.vertexRoot, { precision: "highp" }),
-    fragment: compileGLSL.fragment(program.fragmentRoot, {
+    vertex: compileGlsl.vertex(program.vertexRoot, { precision: "highp" }),
+    fragment: compileGlsl.fragment(program.fragmentRoot, {
       precision: "highp",
     }),
   };
@@ -116,8 +116,8 @@ describe("the spike material compiles", () => {
     const material = new SurfaceMaterial();
     const program = material.build(new Scene());
     for (const precision of ["lowp", "mediump", "highp"] as const) {
-      const vertex = compileGLSL.vertex(program.vertexRoot, { precision });
-      const fragment = compileGLSL.fragment(program.fragmentRoot, {
+      const vertex = compileGlsl.vertex(program.vertexRoot, { precision });
+      const fragment = compileGlsl.fragment(program.fragmentRoot, {
         precision,
       });
       expect(vertex).toContain(`precision ${precision} float;`);

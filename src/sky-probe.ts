@@ -38,7 +38,7 @@
  * to ask, and it answers in numbers rather than in adjectives.
  */
 
-import { compileGLSL } from "@random-mesh/rmsl";
+import { compileGlsl } from "@random-mesh/rmsl/glsl";
 import {
   BoxGeometry,
   Color,
@@ -146,12 +146,12 @@ const compileReport = (gl: WebGL2RenderingContext): string[] => {
       [
         "vertex",
         gl.VERTEX_SHADER,
-        compileGLSL.vertex(program.vertexRoot, { precision: "highp" }),
+        compileGlsl.vertex(program.vertexRoot, { precision: "highp" }),
       ],
       [
         "fragment",
         gl.FRAGMENT_SHADER,
-        compileGLSL.fragment(program.fragmentRoot, { precision: "highp" }),
+        compileGlsl.fragment(program.fragmentRoot, { precision: "highp" }),
       ],
     ];
     const shaders: WebGLShader[] = [];

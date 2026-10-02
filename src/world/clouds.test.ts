@@ -1,4 +1,4 @@
-import { compileGLSL } from "@random-mesh/rmsl";
+import { compileGlsl } from "@random-mesh/rmsl/glsl";
 import { Scene, Side } from "@random-mesh/rmsl/scene";
 import { describe, expect, it } from "vitest";
 
@@ -19,7 +19,7 @@ import { shapeTexture, weatherTexture } from "./cloud-textures";
  * Compiling a material needs no graphics device.
  *
  * `NodeMaterial.build` turns the node graph into roots plus the exact set of bindings
- * the graph reaches, and `compileGLSL` renders those to GLSL ES 3.00. Both are
+ * the graph reaches, and `compileGlsl` renders those to GLSL ES 3.00. Both are
  * host-side string and object work, so the questions worth asking about a shader this
  * size are answerable here rather than by looking at a sky.
  *
@@ -44,8 +44,8 @@ const compile = (material: CloudMaterial) => {
   const program = material.build(new Scene());
   return {
     program,
-    vertex: compileGLSL.vertex(program.vertexRoot, { precision: "highp" }),
-    fragment: compileGLSL.fragment(program.fragmentRoot, {
+    vertex: compileGlsl.vertex(program.vertexRoot, { precision: "highp" }),
+    fragment: compileGlsl.fragment(program.fragmentRoot, {
       precision: "highp",
     }),
   };
@@ -451,10 +451,10 @@ describe("the cloud material compiles", () => {
     for (const precision of ["lowp", "mediump", "highp"] as const) {
       const program = make().build(new Scene());
       expect(() =>
-        compileGLSL.fragment(program.fragmentRoot, { precision }),
+        compileGlsl.fragment(program.fragmentRoot, { precision }),
       ).not.toThrow();
       expect(() =>
-        compileGLSL.vertex(program.vertexRoot, { precision }),
+        compileGlsl.vertex(program.vertexRoot, { precision }),
       ).not.toThrow();
     }
   });

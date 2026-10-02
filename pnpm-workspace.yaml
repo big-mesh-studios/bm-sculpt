@@ -51,12 +51,15 @@ catalog:
   # carrying one. The override below pins the transitive resolve.
   "babel-preset-solid": "2.0.0-beta.29"
 
+minimumReleaseAgeExclude:
+  - '@random-mesh/rmsl@1.15.0'
+
 overrides:
   babel-preset-solid: "catalog:"
 
   # The renderer. Not a three.js fork: a scene graph plus a node-graph shader DSL.
   # See docs/adr/0001-rmsl-over-three.md.
-  "@random-mesh/rmsl": "1.14.0"
+  "@random-mesh/rmsl": "1.15.0"
 
   vite: "^8.3.1"
   vitest: "^4.1.3"

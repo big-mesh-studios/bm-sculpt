@@ -1,4 +1,4 @@
-import { compileGLSL } from "@random-mesh/rmsl";
+import { compileGlsl } from "@random-mesh/rmsl/glsl";
 import { Scene } from "@random-mesh/rmsl/scene";
 import { describe, expect, it } from "vitest";
 
@@ -293,7 +293,7 @@ const compile = (material: SurfaceMaterial) => {
   const program = material.build(new Scene());
   return {
     program,
-    fragment: compileGLSL.fragment(program.fragmentRoot, {
+    fragment: compileGlsl.fragment(program.fragmentRoot, {
       precision: "highp",
     }),
   };

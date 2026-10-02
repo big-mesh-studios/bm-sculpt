@@ -38,6 +38,7 @@ import {
   saturate,
   sin,
   smoothstep,
+  step,
   vec3,
   vec4,
 } from "@random-mesh/rmsl";
@@ -120,10 +121,19 @@ const STAR_FALLOFF = 1.6;
  *
  * Because of the falloff, the pixel a star lands on reads `pow(point, 1.6)` of it — a
  * seventh at one pixel out. Measured over a real frame, the mean brightness of a lit
- * pixel at unit gain was **0.13**, which is a grey dot on a sky of 0.02: present,
- * technically, and invisible to the eye. The gain takes that mean to 0.4 and clips the
- * cores to white, which is the whole difference between "there are stars" and "there
+ * pixel without this gain is **0.06**, which is a grey dot on a sky of 0.02: present,
+ * technically, and invisible to the eye. The gain takes that mean to **0.25** and clips
+ * the cores to white, which is the whole difference between "there are stars" and "there
  * are stars you can see".
+ *
+ * Both numbers are what the built material measures on rmsl's CPU target at two device
+ * pixels per CSS pixel — see "the starfield, on the CPU" in `sky.test.ts`, which prints
+ * them and fails if the mean falls below a fifth. They were 0.13 and 0.4 once, before the
+ * turn and the in-front guard were fixed, and both were wrong: they came from a
+ * hand-written transcription of this shader that used a boolean where the shader used a
+ * cosine, so it measured a starfield brighter and more even than the one that drew. A
+ * constant whose justification cannot be measured is a constant nobody can check, which
+ * is why the measuring now happens on the shader.
  */
 const STAR_GAIN = 4.5;
 
@@ -196,7 +206,48 @@ const starHash = (cell: Node<"vec3">): Node<"vec3"> => {
 };
 
 /**
- * The starfield for a ray direction.
+ * How far round the sky has turned, as the pair of trigonometry the sky needs of it.
+ *
+ * A pair rather than the angle because every consumer wants the sine and the cosine and
+ * not the angle: rmsl emits an expression once per use, so passing the angle about would
+ * mean recomputing both functions at each site and would make the "one cosine, one sine"
+ * test in `sky.test.ts` unfalsifiable.
+ */
+interface Turn {
+  cos: Node<"float">;
+  sin: Node<"float">;
+}
+
+/**
+ * Rotates a direction about the vertical — the frame the starfield is fixed in.
+ *
+ * The field does not move, so what moves is the lookup: this takes the ray the eye is
+ * looking down into the field's own coordinates.
+ */
+const turned = (turn: Turn, direction: Node<"vec3">): Node<"vec3"> =>
+  vec3(
+    direction.x.mul(turn.cos).sub(direction.z.mul(turn.sin)),
+    direction.y,
+    direction.x.mul(turn.sin).add(direction.z.mul(turn.cos)),
+  );
+
+/**
+ * And back again, for a direction that has to be projected onto the screen.
+ *
+ * The inverse of `turned`, which is why the signs swap rather than merely reversing.
+ * Everything in the field's frame has to come back through this before it can be
+ * projected: `projection · view` is a product of world-space matrices and will turn a
+ * celestial-space direction into nonsense without complaining about it.
+ */
+const unturned = (turn: Turn, direction: Node<"vec3">): Node<"vec3"> =>
+  vec3(
+    direction.x.mul(turn.cos).add(direction.z.mul(turn.sin)),
+    direction.y,
+    direction.z.mul(turn.cos).sub(direction.x.mul(turn.sin)),
+  );
+
+/**
+ * The starfield, from where the eye is and which way the field is turned.
  *
  * The grid is a three-dimensional lattice and the star is a point inside the cell the
  * ray lands in. That is not the usual choice — a cube-face projection is what gives
@@ -207,6 +258,26 @@ const starHash = (cell: Node<"vec3">): Node<"vec3"> => {
  * Everything hashed is put in a variable first. rmsl emits an expression once per use
  * and cannot see that two reads of the same hash are the same hash, so written plainly
  * this evaluates `starHash` eleven times per pixel.
+ *
+ * ## Two directions, and which of them is which
+ *
+ * The lattice is fixed in **celestial** space and the sky turns under it, so which cell
+ * a ray lands in has to be looked up in the turned direction — that is `field`. But the
+ * answer then has to be projected back onto the screen, and the screen is in **world**
+ * space, where `projection · view` live and know nothing of the turn. So the star's
+ * direction is turned back before it is projected, and the fragment's own direction is
+ * projected as it is.
+ *
+ * **These are two different directions and they are the whole of the bug this signature
+ * exists to prevent.** This took one direction and used it for both, which is right at
+ * exactly one hour of the cycle — the one where the turn is zero, sunrise, because the
+ * cycle is built to start there. Everywhere else the "ray" it projected was ninety or
+ * 180 degrees off the actual view ray, so `rayClip.w` came out negative over most of the
+ * frame, `bothInFront` zeroed those fragments, and the stars that survived were the ones
+ * whose *rotated* direction happened still to be in front of the camera. Midnight lit
+ * 51 pixels, all of them in the right-hand third of the screen; dusk, at a hundred and
+ * eighty degrees, lit none at all. Sunrise was perfect throughout, which is why this sat
+ * unfixed and why a test written against sunrise said the starfield was fine.
  *
  * ## Why the distance is measured in pixels
  *
@@ -224,31 +295,54 @@ const starHash = (cell: Node<"vec3">): Node<"vec3"> => {
  */
 const starfield = (
   b: Builder,
-  direction: Node<"vec3">,
+  ray: Node<"vec3">,
+  field: Node<"vec3">,
+  turn: Turn,
   pixelScale: Node<"float">,
 ): Node<"vec3"> => {
-  const grid = direction.mul(float(STAR_GRID)).toVar();
+  const grid = field.mul(float(STAR_GRID)).toVar();
   const cell = grid.floor().toVar();
   const pick = starHash(cell).toVar();
   const jitter = starHash(cell.add(vec3(7.3, 11.7, 3.1))).toVar();
 
-  // Where in its cell this star sits, as a direction.
+  // Where in its cell this star sits, as a direction — and then back out of the field's
+  // own frame into the world, because the next thing that happens to it is a
+  // projection. A star turned the wrong way is a star in the wrong place, which is
+  // invisible until the turn is anything but zero.
   const place = cell.add(jitter.mul(0.7).add(0.15)).normalize().toVar();
+  const placed = unturned(turn, place).toVar();
   const placeClip = b.projectionMatrix
     .mul(b.viewMatrix)
-    .mul(vec4(place, float(0)))
+    .mul(vec4(placed, float(0)))
     .toVar();
   const rayClip = b.projectionMatrix
     .mul(b.viewMatrix)
-    .mul(vec4(direction, float(0)))
+    .mul(vec4(ray, float(0)))
     .toVar();
 
   // Both divides are guarded by `w`: a direction at ninety degrees to the view has no
   // screen position, and one behind the camera projects mirrored, so an unguarded
   // distance would be small exactly where it should be undefined.
+  //
+  // The guard is a *test* of `w` and not `w` itself, which is what this was and why the
+  // field was dark away from the middle of the frame. `saturate(w)` returns `w`, not
+  // one, for every direction in front of the camera — and `w` is `-z` of the direction in
+  // view space, which is its cosine from the view axis. So every star was multiplied by
+  // the cosine of its own angle *and* the fragment's: one at the centre of the frame,
+  // a half at sixty degrees, a thirtieth at eighty. The gain above was tuned against a
+  // transcription that used a boolean, so the stars never got the brightness they were
+  // measured at: a lit pixel read 0.01 on this shader against the 0.4 the constant
+  // comment claims, which on a night sky of 0.02 is invisible.
+  //
+  // A step at zero, rather than something smooth, because the fade belongs where the
+  // projection stops meaning anything at all — ninety degrees off the view axis, which
+  // is off the frame for any field of view narrower than 180 degrees, so it cannot pop
+  // anywhere a player can see.
   const placeScreen = placeClip.xy.div(placeClip.w.max(float(1e-6))).toVar();
   const rayScreen = rayClip.xy.div(rayClip.w.max(float(1e-6))).toVar();
-  const bothInFront = saturate(placeClip.w).mul(saturate(rayClip.w)).toVar();
+  const bothInFront = step(float(1e-6), placeClip.w)
+    .mul(step(float(1e-6), rayClip.w))
+    .toVar();
 
   // Half the resolution converts NDC to pixels; the star's radius is then in them.
   const resolution = b.rendererUniform("resolution", "vec2").toVar();
@@ -415,17 +509,12 @@ export class SkyMaterial extends NodeMaterial {
     // because it is a refinement nobody would read in a twenty-minute cycle, and the
     // east-to-west component is the whole of the motion at this scale.
     const turn = this.starTurn!.toVar();
-    const cos = turn.cos().toVar();
-    const sin = turn.sin().toVar();
+    const spin: Turn = { cos: turn.cos().toVar(), sin: turn.sin().toVar() };
     // The field is fixed in celestial space, so what moves is the *lookup*: this is
     // the inverse of the apparent motion. Written out, a star due east at dusk is due
     // south a quarter-cycle later — the same direction the sun gets to — and the
     // naive sign puts it due north instead, which is a sky that runs backwards.
-    const turned = vec3(
-      raw.x.mul(cos).sub(raw.z.mul(sin)),
-      raw.y,
-      raw.x.mul(sin).add(raw.z.mul(cos)),
-    ).toVar();
+    const field = turned(spin, raw).toVar();
 
     // ---- the gradient ----
     const upward = saturate(raw.y);
@@ -462,7 +551,7 @@ export class SkyMaterial extends NodeMaterial {
       upward.mul(0.35).add(0.65),
     );
     sky.addAssign(
-      starfield(b, turned, this.pixelScaleUniform!)
+      starfield(b, raw, field, spin, this.pixelScaleUniform!)
         .mul(visible)
         .mul(this.starBrightnessUniform!),
     );

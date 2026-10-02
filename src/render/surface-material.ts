@@ -25,7 +25,7 @@
  * right, because that is not an art decision.
  *
  * There is no raw GLSL escape hatch in this library. Every line below is a node
- * graph that compiles to GLSL ES 3.00, and `compileGLSL` is the way to see what
+ * graph that compiles to GLSL ES 3.00, and `compileGlsl` is the way to see what
  * it produced when something comes out wrong.
  */
 

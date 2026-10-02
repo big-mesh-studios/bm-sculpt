@@ -21,7 +21,7 @@ catalogs:
 
 overrides:
   babel-preset-solid: 2.0.0-beta.29
-  '@random-mesh/rmsl': 1.14.0
+  '@random-mesh/rmsl': 1.15.0
   vite: ^8.3.1
   vitest: ^4.1.3
   typescript: ^5.7.2
@@ -33,8 +33,8 @@ importers:
   .:
     dependencies:
       '@random-mesh/rmsl':
-        specifier: 1.14.0
-        version: 1.14.0(vite@8.3.1(esbuild@0.28.2))
+        specifier: 1.15.0
+        version: 1.15.0(vite@8.3.1(esbuild@0.28.2))
       '@solidjs/signals':
         specifier: 'catalog:'
         version: 2.0.0-beta.29
@@ -384,8 +384,8 @@ packages:
   '@oxc-project/types@0.151.0':
     resolution: {integrity: sha512-J1yXrIlNDZVzE3ada310xeAw7nH8yCAyLPuUIsjKatFPmfn5bS1oW+cM+QsGOtVWd5nhSpbwZWx/rue+r5Z+PA==}
 
-  '@random-mesh/rmsl@1.14.0':
-    resolution: {integrity: sha512-Z42siaflOnvtGPssGjf2MO30agcRt7IG/+9BQOHCUtWZGwg+CU42OcR9DcUEKgTW/k4l3I8lqGUIq9k7Gu3GHQ==}
+  '@random-mesh/rmsl@1.15.0':
+    resolution: {integrity: sha512-OkIc+QXwTq2PhAXAnV8jSjc08LApTp0N+V+fsKrGjpBAOEMbulhVWuFlox1yAzEpDSQmG9UI+w1+WVDTyA/MzA==}
     peerDependencies:
       vite: ^8.3.1
     peerDependenciesMeta:
@@ -1041,6 +1041,10 @@ packages:
     resolution: {integrity: sha512-4Nsy8K5Tr6SPDH9jhKJOHf7ChDrc1zufZTVSF7x72hwuEXBqxqk9G6cK+K2NRUtB3iELRJqjXb4JPDMBjMTl2Q==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
+  wabt@1.0.39:
+    resolution: {integrity: sha512-ba+dRL/75VQQY7RkU/CgriGbkoWAfS8TDyUlJfJhJ8KhtXgMl5dhNvoPNUcQ9IWRhW8u41glMSuZeTvsYq2rRg==}
+    hasBin: true
+
   webidl-conversions@8.0.1:
     resolution: {integrity: sha512-BMhLD/Sw+GbJC21C/UgyaZX41nPt8bUTg+jWyDeg7e7YN4xOM05YPSIXceACnXVtqyEw/LMClUQMtMZ+PGGpqQ==}
     engines: {node: '>=20'}
@@ -1339,10 +1343,11 @@ snapshots:
 
   '@oxc-project/types@0.151.0': {}
 
-  '@random-mesh/rmsl@1.14.0(vite@8.3.1(esbuild@0.28.2))':
+  '@random-mesh/rmsl@1.15.0(vite@8.3.1(esbuild@0.28.2))':
     dependencies:
       '@webgpu/types': 0.1.74
       esbuild: 0.28.2
+      wabt: 1.0.39
     optionalDependencies:
       vite: 8.3.1(esbuild@0.28.2)
 
@@ -1873,6 +1878,8 @@ snapshots:
   w3c-xmlserializer@6.0.0:
     dependencies:
       xml-name-validator: 5.0.0
+
+  wabt@1.0.39: {}
 
   webidl-conversions@8.0.1: {}
 

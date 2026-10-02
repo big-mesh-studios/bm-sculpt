@@ -61,7 +61,7 @@
  * a bake of its own and this module already has a two-and-a-half-second bake in it.
  */
 
-import type { Node, UniformNode } from "@random-mesh/rmsl";
+import type { Node, UniformNode, Var } from "@random-mesh/rmsl";
 import {
   Break,
   If,
@@ -396,8 +396,8 @@ const shapeUnderCoverage = (
 const sampleVolume = (
   f: Field,
   coords: Node<"vec3">,
-  base: Node<"float">,
-  detail: Node<"float">,
+  base: Var<"float">,
+  detail: Var<"float">,
 ): void => {
   const sampled = f.shape.texture(coords).toVar();
   base.assign(sampled.r);
@@ -421,8 +421,8 @@ const lightDepthAt = (
   origin: Node<"vec3">,
   direction: Node<"vec3">,
   warp: Node<"vec2">,
-  accumulator: Node<"float">,
-  stepTo: Node<"float">,
+  accumulator: Var<"float">,
+  stepTo: Var<"float">,
 ): void => {
   // Two approximations, both cheap and both invisible at this scale.
   //
