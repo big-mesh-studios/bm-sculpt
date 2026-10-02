@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>bm-sculpt — places probe</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        background: #16181d;
+        color: #d8dae0;
+        font:
+          13px/1.55 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+      }
+      h1 {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      p.note {
+        margin: 0 0 14px;
+        color: #8b909c;
+        max-width: 76ch;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+      }
+      .pass {
+        color: #7fc98a;
+      }
+      .fail {
+        color: #e2756b;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>places probe — can a place script run in this browser?</h1>
+    <p class="note">
+      Runs the same claims as <code>src/places/interpreter.test.ts</code>, in a
+      real browser, through the real <code>createSpikeSandbox</code>. The unit
+      test covers everything except the one thing it cannot: that the
+      WebAssembly file loads under Vite's dev server, which rewrites the
+      loader's own module location and can leave the fetch answering with the
+      page instead of the binary.
+    </p>
+    <pre id="out">running…</pre>
+    <script type="module" src="/src/places-probe.ts"></script>
+  </body>
+</html>

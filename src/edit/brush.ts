@@ -89,13 +89,19 @@ export class BrushStroke {
   private maxY = -Infinity;
   private maxZ = -Infinity;
   private lastDab: Vec3 | undefined;
-  private baseIndex: number;
 
   constructor(
     private readonly document: SculptDocument,
     private settings: BrushSettings = DEFAULT_BRUSH,
   ) {
-    this.baseIndex = document.count;
+    // Nothing is reserved here. A dab takes its index from the document's fold order
+    // when it happens, rather than from a base computed at the start, because a stroke
+    // is however long the drag was and the alternative asks every owner to remember to
+    // report how far its own reservation went — an owner that forgets silently
+    // reissues indices to its own later dabs.
+    //
+    // Not `document.count` any more, though, which is what this used: a place may
+    // already hold indices above this document's length, and the two would collide.
   }
 
   /** How many operations this stroke has produced so far. */
@@ -204,7 +210,7 @@ export class BrushStroke {
     );
 
     const operation = makeOperation(
-      this.baseIndex + this.operations.length,
+      this.document.order.allocate(),
       { x: point.x, y: point.y, z: point.z },
       { type: "Ellipsoid", radius: { x: radius, y: radius, z: radius } },
       combineOf(this.settings.mode),

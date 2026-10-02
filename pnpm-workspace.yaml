@@ -51,6 +51,14 @@ catalog:
   # carrying one. The override below pins the transitive resolve.
   "babel-preset-solid": "2.0.0-beta.29"
 
+  # The place-script interpreter, as pure WebAssembly — see ADR 0015 and
+  # `src/places/quickjs-spike.ts`. Two packages, deliberately: `core` is the API
+  # and the runtime, and `wasmfile-release-sync` is one specific build of the
+  # interpreter as a single synchronously-readable file. They must be the same
+  # version, because the core package dispatches into the wasm build's own ABI.
+  "quickjs-emscripten-core": "0.32.0"
+  "@jitl/quickjs-wasmfile-release-sync": "0.32.0"
+
 minimumReleaseAgeExclude:
   - '@random-mesh/rmsl@1.15.0'
 
@@ -66,3 +74,11 @@ overrides:
   typescript: "^5.7.2"
   prettier: "^3.9.6"
   jsdom: "^30.0.1"
+
+  # Reads a place zip. The same version the sibling project pins, so a place
+  # authored there opens here and the two cannot disagree about what a zip is.
+  #
+  # **In `overrides` rather than `catalog:` because this is its only consumer** —
+  # the same place jsdom and prettier are in. It is dynamically imported, so it
+  # reaches only the `/place:open` path and never the first frame.
+  jszip: "^3.10.2"

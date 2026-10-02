@@ -19,17 +19,20 @@ which of the two broke it.
 
 ## What exists
 
-Remaining work, and what is left of the phases after this one, is written down in
-[`TODO.md`](TODO.md).
+The decisions behind all of it, with their costs and their rejected alternatives, are in
+[`docs/adr/`](docs/adr/README.md). The phases the sculpting application was built in —
+0 through 5 — are in the repository history, one commit per phase, each verified before the
+next began.
 
-|              |                                                                                                                                                                                                                                                                                        |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Renderer** | [`@random-mesh/rmsl`](https://www.npmjs.com/package/@random-mesh/rmsl) 1.14.0 — a scene graph and a node-graph shader DSL. Not a three.js fork; see [ADR 0001](docs/adr/0001-rmsl-over-three.md).                                                                                      |
-| **UI**       | Solid **2.0.0-beta.29**, `solid-js` + `@solidjs/web` + `@solidjs/signals`, coordinated at one version. The JSX transform runs through Babel rather than the native compiler, so the toolchain has no native step and builds anywhere Node does; see `pnpm-workspace.yaml`.             |
-| **Build**    | Vite 8, `vite-plugin-solid@3.0.0-next.5`, TypeScript in `strict` with `noUnusedLocals` and `noUnusedParameters`.                                                                                                                                                                       |
-| **Style**    | One Prettier config, no linter. Type safety is `tsc --noEmit`.                                                                                                                                                                                                                         |
-| **Layout**   | One package. `pnpm-workspace.yaml` exists for the `catalog:` it holds, which every version more than one place needs is written into once.                                                                                                                                             |
-| **Console**  | `/` for a floating terminal over the game: fuzzy command completion, history, `/help`, and the fullscreen button beside its trigger. Commands are declared in one table (`src/console/commands.ts`) whose `run` closures call plain methods on `Game`; neither knows a console exists. |
+|              |                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Renderer** | [`@random-mesh/rmsl`](https://www.npmjs.com/package/@random-mesh/rmsl) 1.14.0 — a scene graph and a node-graph shader DSL. Not a three.js fork; see [ADR 0001](docs/adr/0001-rmsl-over-three.md).                                                                                                                                                                                                                                        |
+| **UI**       | Solid **2.0.0-beta.29**, `solid-js` + `@solidjs/web` + `@solidjs/signals`, coordinated at one version. The JSX transform runs through Babel rather than the native compiler, so the toolchain has no native step and builds anywhere Node does; see `pnpm-workspace.yaml`.                                                                                                                                                               |
+| **Build**    | Vite 8, `vite-plugin-solid@3.0.0-next.5`, TypeScript in `strict` with `noUnusedLocals` and `noUnusedParameters`.                                                                                                                                                                                                                                                                                                                         |
+| **Style**    | One Prettier config, no linter. Type safety is `tsc --noEmit`.                                                                                                                                                                                                                                                                                                                                                                           |
+| **Layout**   | One package. `pnpm-workspace.yaml` exists for the `catalog:` it holds, which every version more than one place needs is written into once.                                                                                                                                                                                                                                                                                               |
+| **Console**  | `/` for a floating terminal over the game: fuzzy command completion, history, `/help`, and the fullscreen button beside its trigger. Commands are declared in one table (`src/console/commands.ts`) whose `run` closures call plain methods on `Game`; neither knows a console exists. A second table, `/place:`, is merged in with `Commander.with()` and may return a promise, which the console prints as a pending line it replaces. |
+| **Places**   | TypeScript run in QuickJS-in-WASM, bundled from source, with 19 effects and 7 events. `/place:load bridge` builds a bridge you can walk on, and `/place:open` reads one out of a zip. Isolated, deterministic and capped; see [ADR 0021](docs/adr/0021-a-place-arrives-as-a-zip-with-a-manifest.md).                                                                                                                                     |
 
 ## Phase 0 spikes
 
@@ -107,27 +110,36 @@ all of which are JSX-free, run without a compiler at all.
 The architecture decisions, each with its costs and its rejected alternatives,
 are in [`docs/adr/`](docs/adr/README.md):
 
-|                                                                      |                                                       |
-| -------------------------------------------------------------------- | ----------------------------------------------------- |
-| [0001](docs/adr/0001-rmsl-over-three.md)                             | Render with rmsl, not three.js                        |
-| [0002](docs/adr/0002-computed-field-never-stored.md)                 | The field is computed, never stored                   |
-| [0003](docs/adr/0003-surface-nets.md)                                | Surface Nets per chunk, not marching cubes            |
-| [0004](docs/adr/0004-csg-per-chunk.md)                               | Each chunk evaluates the operations at its own LOD    |
-| [0005](docs/adr/0005-streaming-shape.md)                             | Slot-indexed arrays and a coordinate map              |
-| [0006](docs/adr/0006-field-saturation.md)                            | The field saturates at a fixed distance               |
-| [0007](docs/adr/0007-window-presence-and-lod-reset.md)               | Invalidating a slot invalidates what a query may read |
-| [0008](docs/adr/0008-worker-pool-and-generations.md)                 | One chunk per worker, and a generation per request    |
-| [0009](docs/adr/0009-picking-and-history.md)                         | Edits land where the field says, and are undoable     |
-| [0010](docs/adr/0010-suspend-the-pointer-lock-not-the-input.md)      | Suspend the pointer lock, not the input               |
-| [0011](docs/adr/0011-the-sun-is-placed-by-a-solar-model.md)          | The sun is placed by a solar model, not a drawn curve |
-| [0012](docs/adr/0012-the-cloud-layer-is-a-raymarched-slab.md)        | The cloud layer is a raymarched slab with a carrier   |
-| [0013](docs/adr/0013-fog-is-exponential-and-closes-at-the-window.md) | Fog is exponential and closes at the window           |
-| [0014](docs/adr/0014-the-sky-dome-is-drawn-first.md)                 | The sky dome is drawn first and ignores depth         |
+|                                                                                  |                                                                                    |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [0001](docs/adr/0001-rmsl-over-three.md)                                         | Render with rmsl, not three.js                                                     |
+| [0002](docs/adr/0002-computed-field-never-stored.md)                             | The field is computed, never stored                                                |
+| [0003](docs/adr/0003-surface-nets.md)                                            | Surface Nets per chunk, not marching cubes                                         |
+| [0004](docs/adr/0004-csg-per-chunk.md)                                           | Each chunk evaluates the operations at its own LOD                                 |
+| [0005](docs/adr/0005-streaming-shape.md)                                         | Slot-indexed arrays and a coordinate map                                           |
+| [0006](docs/adr/0006-field-saturation.md)                                        | The field saturates at a fixed distance                                            |
+| [0007](docs/adr/0007-window-presence-and-lod-reset.md)                           | Invalidating a slot invalidates what a query may read                              |
+| [0008](docs/adr/0008-worker-pool-and-generations.md)                             | One chunk per worker, and a generation per request                                 |
+| [0009](docs/adr/0009-picking-and-history.md)                                     | Edits land where the field says, and are undoable                                  |
+| [0010](docs/adr/0010-suspend-the-pointer-lock-not-the-input.md)                  | Suspend the pointer lock, not the input                                            |
+| [0011](docs/adr/0011-the-sun-is-placed-by-a-solar-model.md)                      | The sun is placed by a solar model, not a drawn curve                              |
+| [0012](docs/adr/0012-the-cloud-layer-is-a-raymarched-slab.md)                    | The cloud layer is a raymarched slab with a carrier                                |
+| [0013](docs/adr/0013-fog-is-exponential-and-closes-at-the-window.md)             | Fog is exponential and closes at the window                                        |
+| [0014](docs/adr/0014-the-sky-dome-is-drawn-first.md)                             | The sky dome is drawn first and ignores depth                                      |
+| [0015](docs/adr/0015-place-scripts-run-in-a-quickjs-interpreter.md)              | Place scripts run in QuickJS, and all three caps are set                           |
+| [0016](docs/adr/0016-a-place-is-a-named-group-of-operations.md)                  | A place is a named group of operations, and `flatten` decides the fold order       |
+| [0017](docs/adr/0017-the-vocabulary-is-a-table.md)                               | The effect and event vocabulary is a table, and a payload is all-or-nothing        |
+| [0018](docs/adr/0018-a-place-is-bundled-and-the-guest-library-is-a-real-file.md) | A place is bundled into one reproducible program; the guest library is a real file |
+| [0019](docs/adr/0019-the-host-owns-what-it-can-own.md)                           | The host owns what it can own, and asks for the eight things it cannot             |
+| [0020](docs/adr/0020-a-place-runs-on-the-frame.md)                               | A place runs on the frame, and the console is how a person meets it                |
+| [0021](docs/adr/0021-a-place-arrives-as-a-zip-with-a-manifest.md)                | A place arrives as a zip with a manifest at its root                               |
 
-Phases 1 to 8, in order, are in the project plan. Phases 0 to 5 are the sculpting
-application and are independently shippable; 6 to 8 are an infinite streaming
-world, and because the field is never stored they add no changes to the CSG or the
-mesher — only a `baseField` binding and a camera.
+**The phases after 6 are not in this table, because they are not decided.** Phase 6 was the
+terrain base field and is in: `session.ts` binds the landscape as the field's base, which is
+all ADR 0002 says an infinite world would need. Phases 7 and 8 were the infinite streaming
+world, and **their scope was never written down anywhere in the tree** — the handoff that
+should have said so said it plainly rather than inventing one. What is left instead is the
+places track and props, figures and NPCs, and neither has a phase number.
 
 ## The sky
 
@@ -217,6 +229,122 @@ no test can — "too big to compile" is a failure mode particular to one GPU, an
 throws on it from inside the render loop, which looks exactly like a sky that drew
 nothing.
 
+## Places
+
+A **place** is a piece of code someone else wrote that builds a world, and the question of
+where that code runs was settled by measurement before any of it was built — see
+[ADR 0015](docs/adr/0015-place-scripts-run-in-a-quickjs-interpreter.md). The short version:
+
+- Code runs inside a [QuickJS](https://bellard.org/quickjs/) interpreter compiled to
+  WebAssembly. A script has no `fetch`, no timers, no DOM and no engine objects beyond the
+  handful this application injects — not denied, **absent**. It receives that one object as
+  a _function parameter_, so code that was never passed it cannot name it.
+- A step is capped at **250 ms**, memory at **16 MiB**, and interpreter stack at
+  **128 KiB**. The third is not hygiene. Without it, a script that recurses without end
+  overflows the _host's_ stack, leaves the interpreter unfreeable, and then aborts the peer
+  — not as an exception, as `abort()`, which a tab cannot report or survive. The ADR has the
+  measurement.
+- `Math.random` is seeded and `Date.now` answers from a caller-supplied clock, because
+  every peer runs every place and has to arrive at the same world.
+
+`src/places/interpreter.ts` and its twenty tests settle all of that under Node, and
+`/places-probe.html` settles the one claim a test cannot: that the WebAssembly file loads
+under Vite, which rewrites the loader's own module location and can leave the fetch
+answering with the page instead of the binary. Same argument as `sky-probe.html` — one page
+load, and it prints a verdict per claim.
+
+```
+pnpm dev                            # then open /places-probe.html
+```
+
+### What a place is
+
+Settled in [ADR 0016](docs/adr/0016-a-place-is-a-named-group-of-operations.md): **a place
+is a named group of operations in one flat fold order.** Not a field, not a range in the
+document's list, and not an `owner` field on `Operation` — the record says why each of
+those lost, and two of them were close.
+
+Three things follow, and they are the reason to want this shape:
+
+- **A place is not in the undo history.** Its operations never reach `document.undoStack`,
+  so ctrl-z cannot delete a bridge somebody else's code built. That falls out of the design
+  rather than being enforced by a guard somebody can forget.
+- **`PlaceRegistry.flatten` is the only place the fold order is decided.** `sculpt.ts` read
+  the operation list in four places — the picker trace, the model sent to the workers, the
+  live preview, the discarded-stroke rebuild — and all four now go through one method. Four
+  independent copies of ADR 0009's invariant is three too many.
+- **The fold is chronological, and so is colour.** `flatten` sorts by index rather than
+  concatenating, because `bvh.ts` sorts fold candidates by index while `evalPaint` takes
+  the last writer in list order. Concatenating made those disagree the moment a place built
+  twice, and a user painting over a script's painted wall lost.
+
+`MAX_OPERATIONS_PER_PLACE` is 2,000, and it is measured rather than guessed — one chunk's
+39,936 field samples, with every operation packed inside the sampled chunk because overlap
+is what costs:
+
+| operations                    | ms        | ratio to a session's worth |
+| ----------------------------- | --------- | -------------------------- |
+| 310 — a hand-sculpted session | 144       | 1×                         |
+| **2,000 — one place**         | **1,218** | **8.5×**                   |
+| 4,000                         | 3,893     | 27×                        |
+
+The test that holds the number asserts a **ratio rather than a wall clock**, which is a
+correction: the millisecond version failed, because the same sweep takes a second alone and
+3.5 seconds inside the suite where every file runs in parallel.
+
+### What a script may ask for
+
+Settled in [ADR 0017](docs/adr/0017-the-vocabulary-is-a-table.md). Nineteen effects in six
+groups — geometry, triggers, clock, player, camera, and output — seven events, and
+twenty-five bounds. It is much smaller than voxelscape's ninety-two because most of those are
+about a voxel grid this engine does not have; the surface here is the sign of a distance
+field, so `block-set` and the six plan shapes are one `createShape` call.
+
+What carries the weight is not the count:
+
+- **The rules are the definition.** `parseEffect` is a function over the table of fields and
+  bounds, so a tag cannot exist without being validated and there is no second list of
+  required fields that can fall out of step with the first. The same table is what a generated
+  reference document would be read from, so the documentation cannot describe a field the
+  parser does not check.
+- **A payload is accepted whole or refused whole.** There is no partial result type, so a
+  caller cannot accidentally apply the nine tenths of a shape whose position was `null`. A
+  shape in the wrong place with no record that anything was wrong is the worst outcome
+  available; a refused effect is a log line naming the field, which is a bug report.
+- **An undeclared field is refused, not ignored** — which is also what makes the vocabulary
+  safe to extend, since a future field cannot arrive at an old peer and be dropped there.
+- **Facts are never forgotten.** The event log refuses when it is full rather than evicting,
+  because a log that had dropped its oldest events would be a _different_ log from every other
+  peer's.
+
+### What exists today
+
+All of it, and it runs. `/place:load bridge` in the browser builds a bridge you can walk on.
+
+- The interpreter (`interpreter.ts`), the registry and the shared fold-order counter they
+  allocate from (`place-registry.ts`, `src/edit/fold-order.ts`), the vocabulary
+  (`limits.ts`, `fields.ts`, `effects.ts`, `events.ts`, `event-log.ts`), the bundler
+  (`bundle.ts`) and the guest library as a real type-checked file (`guest/place-api.ts`).
+- The host (`host.ts`), which owns what it can and asks the application for the eight
+  things it cannot, and the zone overlay (`zones.ts`) that draws them — one mesh for every
+  zone, because `MAX_ZONES` is 256 and a player can count 256 boxes on their fingers.
+- `SculptSession.refreshPlaces`, the seam that makes a place's geometry reach the meshes
+  at all. A place writes into the registry rather than through `document.add`, so nothing
+  else would find out; the symptom is a bridge that is in the collision field and in no
+  mesh, so the player stands on something nobody can see.
+- Three shipped places (`src/places/demo/`), loaded for real by `demos.test.ts` — the
+  only test that would catch a typo in an example, and the reason a demo nobody can run
+  does not reach a person.
+- **`/place:open` reads a place out of a zip** — `manifest.json` at the root, validated
+  before a byte of it is read, refused whole rather than half-loaded. Same format as the
+  sibling project's, plus an `entry` field because `PlaceHost` is handed one. `jszip` is
+  dynamically imported, so the 29 kB of it reaches only the command that needs it.
+
+Still to come: a way to _write_ a place, the two things the engine cannot yet express
+(`getSeatYawAt` needs figures and `getSurfaceVelocityAt` needs moving surfaces, both of
+which the props phase is expected to bring), and lights — v1's vocabulary has geometry
+and zones but no lights, so a lantern is a shape that appears and stays.
+
 ## The game and its console
 
 The application grew a third scene, the default one: a first-person player over the
@@ -255,8 +383,26 @@ The fullscreen button beside the `>_` trigger runs `/fullscreen` rather than a s
 path to the same place, so the button and the command are one thing that can only be
 tested once. It asks for fullscreen, asks for `screen.orientation.lock("landscape")` —
 the button exists because a phone held sideways is the ordinary way to play this — and
-reports what it asked for rather than waiting to find out what it got, which keeps
-`Commander.run` synchronous and every command in the table a `string` to print.
+reports what it asked for rather than waiting to find out what it got, which keeps every
+command in the table a `string` to print.
+
+### A command that takes time
+
+`/place:load` genuinely waits — it bundles, starts an interpreter and runs a script's
+top-level code — so `CommandEntry.run` may return a promise and `CommandOutput` a promise
+of a line. The console prints `…` under the echo and **replaces that line** when the
+promise settles, so a slow load is visibly slow rather than apparently hung, and a reader
+is never left pairing up a line that said it was waiting with a line that said what
+happened. Each pending entry carries an id: replacing by position works, replacing by
+content does not, because two pending commands can print the same `…`.
+
+The `/place:` commands are a second table in their own file, merged in by
+`Commander.with()`, because nothing outside the game should have to know a place exists.
+`ConsoleState.print()` is how a place's `log` reaches the scrollback — it is not a command
+and has no echo of its own, and it lands in the same entries so a place's output and a
+person's commands interleave in the order they happened.
+[ADR 0020](docs/adr/0020-a-place-runs-on-the-frame.md) records the frame order and the two
+`clearX` methods that shipped wrong once each.
 
 ## Phase 5 — sculpting on it
 

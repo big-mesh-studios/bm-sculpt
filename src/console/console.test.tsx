@@ -488,3 +488,169 @@ describe("what the console does to the pointer lock", () => {
     expect(root!.querySelector("output")).toBeNull();
   });
 });
+
+/**
+ * A command that takes time.
+ *
+ * **The one behaviour `/place:load` needs** and the only one the rest of the table cannot
+ * reach: a `run` that returns a promise prints something immediately, and then prints the
+ * answer in the same place rather than below it.
+ */
+describe("a command that has not finished", () => {
+  /** A promise a test settles by hand, so nothing here depends on a real timer. */
+  const deferred = () => {
+    let resolve!: (text: string) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<string>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    return { promise, resolve, reject };
+  };
+
+  /**
+   * Runs a line, opening the panel first if it is closed.
+   *
+   * **Opens only when closed**, so a second `submit` in one test runs against the open panel
+   * rather than toggling it shut and typing into nothing.
+   */
+  const submit = (console_: Mounted, text: string): void => {
+    if (root!.querySelector("input") === null) click(console_.trigger());
+    type(console_, text);
+    press(console_, "Enter");
+  };
+
+  const until = async (check: () => boolean): Promise<void> => {
+    for (let i = 0; i < 20 && !check(); i++) {
+      await Promise.resolve();
+      flush();
+    }
+  };
+
+  it("says so while it waits", () => {
+    const { promise } = deferred();
+    const console_ = mount(() => promise);
+    submit(console_, "/place:load bridge");
+    expect(console_.output()).toContain("…");
+  });
+
+  it("prints the answer where the waiting was", async () => {
+    const { promise, resolve } = deferred();
+    const console_ = mount(() => promise);
+    submit(console_, "/place:load bridge");
+    resolve("loaded bridge\n2 shapes");
+    await until(() => console_.output().includes("2 shapes"));
+
+    // One line, not two: the "…" is *replaced*, so a reader is never left
+    // pairing up a line that said it was waiting with a line that said what
+    // happened.
+    expect(console_.output()).not.toContain("…");
+    expect(console_.output()).toContain("loaded bridge");
+  });
+
+  it("still echoes the command that is waiting", async () => {
+    const { promise, resolve } = deferred();
+    const console_ = mount(() => promise);
+    submit(console_, "/place:load bridge");
+    resolve("loaded");
+    await until(() => console_.output().includes("loaded"));
+    expect(console_.output()).toContain("/place:load bridge");
+  });
+
+  it("reports a refusal instead of leaving the waiting there", async () => {
+    const { promise, reject } = deferred();
+    const console_ = mount(() => promise);
+    submit(console_, "/place:load bridge");
+    reject(new Error("bridge.ts:12: no such file"));
+    await until(() => console_.output().includes("failed"));
+
+    // **The reason, not "failed".** A place that will not load is the one
+    // failure a person can act on, and a summary of it is the same as none.
+    expect(console_.output()).toContain("bridge.ts:12: no such file");
+    expect(console_.output()).not.toContain("…");
+  });
+
+  it("settles a reason that is not an Error at all", async () => {
+    const { promise, reject } = deferred();
+    const console_ = mount(() => promise);
+    submit(console_, "/place:load bridge");
+    reject("the interpreter was closed");
+    await until(() => console_.output().includes("failed"));
+    expect(console_.output()).toContain("the interpreter was closed");
+  });
+
+  it("keeps two waiting commands apart", async () => {
+    const first = deferred();
+    const second = deferred();
+    const console_ = mount((line) =>
+      line.includes("bridge") ? first.promise : second.promise,
+    );
+    submit(console_, "/place:load bridge");
+    submit(console_, "/place:load lanterns");
+
+    // **The second to settle must not take the first's line with it.** This is
+    // what the pending entry's id is for: by position alone the first to settle
+    // would rewrite whichever line came first.
+    second.resolve("loaded lanterns");
+    await until(() => console_.output().includes("loaded lanterns"));
+    expect(console_.output()).toContain("…");
+    expect(console_.output()).not.toContain("loaded bridge");
+
+    first.resolve("loaded bridge");
+    await until(() => console_.output().includes("loaded bridge"));
+    expect(console_.output()).not.toContain("…");
+  });
+
+  it("answers a later command before an earlier one is still waiting", async () => {
+    const first = deferred();
+    const console_ = mount((line) =>
+      line === "/place:load bridge" ? first.promise : "answered",
+    );
+    submit(console_, "/place:load bridge");
+    submit(console_, "/player:fly");
+    expect(console_.output()).toContain("answered");
+    // **The waiting command does not block the console.** It is a line in the
+    // scrollback, not a lock on it — otherwise one slow place would make the
+    // whole console unusable while it loaded.
+    expect(console_.output()).toContain("…");
+  });
+});
+
+/** `print`, for a loaded place's `log`, which is not a command. */
+describe("printing a line that was not typed", () => {
+  it("lands in the scrollback as a bare line", () => {
+    const terminal: ConsoleState = createConsole({
+      onCommand: () => "",
+      commands: () => COMMANDS,
+    });
+    terminal.print("the bridge is up");
+    flush();
+    expect(terminal.entries().map((entry) => JSON.stringify(entry))).toContain(
+      JSON.stringify({ kind: "line", text: "the bridge is up" }),
+    );
+  });
+
+  it("is not an echo of anything", () => {
+    const terminal: ConsoleState = createConsole({
+      onCommand: () => "",
+      commands: () => COMMANDS,
+    });
+    terminal.print("the bridge is up");
+    flush();
+    // No echo, because nothing was typed: a place's output should not look like
+    // something a person typed into a prompt.
+    expect(terminal.entries().every((entry) => entry.kind !== "echo")).toBe(
+      true,
+    );
+  });
+
+  it("prints nothing for a blank line", () => {
+    const terminal: ConsoleState = createConsole({
+      onCommand: () => "",
+      commands: () => COMMANDS,
+    });
+    terminal.print("");
+    flush();
+    expect(terminal.entries()).toEqual([]);
+  });
+});

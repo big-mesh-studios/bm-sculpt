@@ -43,6 +43,7 @@ import {
   boundsOf,
   type Change,
 } from "./edit/document";
+import { PlaceRegistry } from "./places/place-registry";
 
 export interface SculptSessionOptions {
   /**
@@ -82,6 +83,19 @@ export interface Preview {
 export class SculptSession {
   /** The model, and its history. */
   readonly document = new SculptDocument();
+  /**
+   * The named groups of operations that fold in after the document's.
+   *
+   * Built here over *this session's* `document.order` rather than passed in, because the
+   * two must allocate from one counter and only the session has the document. Which
+   * makes the session the owner of the registry: a script host adds to
+   * `session.places` rather than holding a registry of its own, which is what stops two
+   * registries existing and drifting.
+   *
+   * Empty until something creates a place, and flattening it costs one array copy of the
+   * document's own list, so the editor and the game pay nothing for having it.
+   */
+  readonly places: PlaceRegistry;
   /** The tool the pointer talks to. */
   readonly tool: SculptTool;
 
@@ -125,13 +139,17 @@ export class SculptSession {
 
   constructor(private readonly options: SculptSessionOptions) {
     // The document is where the model lives, and it starts empty. Seeding it here is what
-    // makes a stroke an *edit* rather than a replacement: every rebuild reads
-    // `document.list`, so a document that did not already hold the model would have the
-    // first stroke fold the model down to that stroke alone — the picker, which traces the
+    // makes a stroke an *edit* rather than a replacement: every rebuild reads the whole
+    // model, so a document that did not already hold the operations would have the first
+    // stroke fold the world down to that stroke alone — the picker, which traces the
     // starter operations, would then be tracing a model that was no longer on screen.
     //
     // The history is dropped afterwards because the model it starts with is not something
     // the user did, and "undo" at the start of a session should not be able to delete it.
+    //
+    // The registry is built first because it shares the document's fold order, and the
+    // document's `add` is what moves that order past the seeded operations.
+    this.places = new PlaceRegistry(this.document.order);
     this.document.add(options.operations ?? []);
     this.document.resetHistory();
     this.terrain =
@@ -294,7 +312,20 @@ export class SculptSession {
    */
   private applyChange(change: Change | undefined): void {
     this.field = this.buildField();
-    this.options.session.setOperations(this.document.list, change?.bounds);
+    this.options.session.setOperations(this.model(), change?.bounds);
+  }
+
+  /**
+   * The one operation list this session's world is built from.
+   *
+   * **Every reader of the operation list goes through here**, which is the whole point:
+   * the field the picker traces, the model the workers mesh and the live preview are
+   * three separate readers, and each of them deciding the fold order for itself is three
+   * chances for the picker to trace a different field from the one on screen (ADR 0009).
+   * A place's operations are in here, so `PlaceRegistry.flatten` is the answer.
+   */
+  private model(): readonly Operation[] {
+    return this.places.flatten(this.document.list);
   }
 
   /**
@@ -306,7 +337,7 @@ export class SculptSession {
    * picker would walk through the ground.
    */
   private buildField(): Field {
-    return new Field(new OperationBVH(this.document.list), {
+    return new Field(new OperationBVH(this.model()), {
       base: this.terrain,
       extent: this.terrain,
       lipschitz: this.terrain?.lipschitz,
@@ -362,7 +393,7 @@ export class SculptSession {
     // the commit finally puts every dab in the document at once. The invalidation box stays
     // the new dabs' own, so a chunk the stroke has already passed is not re-meshed again.
     this.options.session.setOperations(
-      [...this.document.list, ...stroke.operationsSince(0)],
+      [...this.model(), ...stroke.operationsSince(0)],
       bounds,
     );
   }
@@ -407,7 +438,7 @@ export class SculptSession {
         this.forgetStroke();
         if (streamed !== undefined) {
           this.field = this.buildField();
-          this.options.session.setOperations(this.document.list, streamed);
+          this.options.session.setOperations(this.model(), streamed);
         }
       },
 
@@ -455,6 +486,29 @@ export class SculptSession {
     if (operations.length > 0) this.document.add(operations);
     this.document.resetHistory();
     this.applyChange(undefined);
+  }
+
+  /**
+   * Re-reads the model after something other than a stroke changed it.
+   *
+   * **The way a place's geometry reaches the meshes.** A place writes into
+   * `this.places`, not through `document.add`, so nothing here would otherwise notice — and the
+   * symptom is a bridge that is in the collision field and in no mesh, so the player stands on
+   * something nobody can see. This is what `PlaceHost`'s `geometryChanged` calls.
+   *
+   * **The stroke in progress is abandoned rather than kept.** A stroke's operations live in the
+   * stroke rather than the document until it is committed, and the field is *not* rebuilt while
+   * one is in progress — that is what stops a drag towering (ADR 0009). A place changing the
+   * world under a stroke the user is halfway through is the same situation: the honest thing is
+   * to discard the stroke, which the user sees as their drag ending, rather than to commit it or
+   * to fold it into a field the preview no longer matches.
+   *
+   * `bounds` is the box that changed, in the same contract as `Change.bounds`, so the caller
+   * does not have to work out which chunks to re-mesh.
+   */
+  refreshPlaces(bounds?: Bounds): void {
+    this.forgetStroke();
+    this.applyChange({ kind: "add", bounds, count: 0 });
   }
 }
 

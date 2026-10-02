@@ -210,3 +210,71 @@ describe("what the controller must not hold", () => {
     expect(surface.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * `nowMs`, which is what a place's events are timestamped with.
+ *
+ * The property that matters is not the arithmetic — it is that this reads **the shared clock**
+ * rather than the wall, and that it agrees with the light on screen.
+ */
+describe("the clock as a place's event time", () => {
+  it("starts at zero", () => {
+    expect(new DayNightController().nowMs()).toBe(0);
+  });
+
+  it("advances with the clock", () => {
+    const clock = new DayNightController();
+    clock.tick(2.5);
+    expect(clock.nowMs()).toBe(2500);
+  });
+
+  it("advances at the clock's own speed, not at real time", () => {
+    // **A paused sky is a paused world.** At 0x the clock is held still, and a
+    // place's timers measured against real time would fire anyway — which is how
+    // a place ends up building something while the player is looking at a frozen
+    // afternoon.
+    const clock = new DayNightController();
+    clock.setSpeed(0);
+    clock.tick(5);
+    expect(clock.nowMs()).toBe(0);
+  });
+
+  it("runs at the clock's speed when it is not one", () => {
+    const clock = new DayNightController();
+    clock.setSpeed(4);
+    clock.tick(2);
+    expect(clock.nowMs()).toBe(8000);
+  });
+
+  it("reports the second that is shown, so a pinned clock pins the events too", () => {
+    // **The same rule `tick` states for the light.** A pinned sky with events
+    // running on would be a world where the sun is frozen and the lanterns are
+    // not, and a place that times something to the day would be wrong by exactly
+    // the amount the clock is pinned.
+    const clock = new DayNightController();
+    clock.tick(30);
+    clock.jumpTo(NOON_SECONDS);
+    expect(clock.nowMs()).toBe(NOON_SECONDS * 1000);
+  });
+
+  it("keeps running under a pin, so releasing it returns to where the world would be", () => {
+    const clock = new DayNightController();
+    clock.jumpTo(NOON_SECONDS);
+    clock.tick(40);
+    clock.clearOverride();
+    // **Pinning the *light* is not pausing the world** — the distinction the
+    // controller's own doc comment is about, and the reason `state.elapsed` and
+    // `nowMs()` disagree while a pin is held.
+    expect(clock.nowMs()).toBe(40_000);
+  });
+
+  it("agrees with the light it just produced", () => {
+    // **One answer to "what hour is it".** Read the same frame twice — once as
+    // the material would, once as a place's event would — and they must be the
+    // same number, or a place reacting to the hour and a player seeing the hour
+    // are looking at two different afternoons.
+    const clock = new DayNightController();
+    const light = clock.tick(137);
+    expect(clock.nowMs()).toBe(light.elapsed * 1000);
+  });
+});

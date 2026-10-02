@@ -20,9 +20,12 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "catalog:",
     "@random-mesh/rmsl": "catalog:",
     "@solidjs/signals": "catalog:",
     "@solidjs/web": "catalog:",
+    "jszip": "catalog:",
+    "quickjs-emscripten-core": "catalog:",
     "solid-js": "catalog:"
   },
   "devDependencies": {

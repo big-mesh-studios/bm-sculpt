@@ -29,7 +29,19 @@ export interface CommandEntry {
   description: string;
   /** The arguments it takes, written as they would be typed. */
   args?: string;
-  run: (rest: string[]) => string;
+  /**
+   * What the command hands back: the line to print, or a promise of it.
+   *
+   * **A promise is allowed because loading a place genuinely takes time** — it bundles,
+   * starts an interpreter and runs a script's top-level code — and the alternative was not to
+   * support it but to make `/fullscreen` lie about being the only such command. The console
+   * prints `…` under the echo and replaces that line when the promise settles, so a pending
+   * command is visible rather than silent.
+   *
+   * Most entries return a string, and widening this type does not put an `await` in them: a
+   * synchronous `run` is still synchronous, and the console only awaits what is a promise.
+   */
+  run: (rest: string[]) => string | Promise<string>;
 }
 
 /** One command as `/help` describes it: what to type, and what it does. */
@@ -40,8 +52,12 @@ export interface CommandHelp {
   description: string;
 }
 
-/** What running a line produces: the lines to print, or what `/help` lists. */
-export type CommandOutput = string | CommandHelp[];
+/**
+ * What running a line produces: the lines to print, what `/help` lists, or a promise of
+ * either. See `CommandEntry.run` for why a promise is allowed.
+ */
+export type CommandOutput =
+  string | CommandHelp[] | Promise<string | CommandHelp[]>;
 
 /**
  * The part of the Screen Orientation API `/fullscreen` uses. `lock` is absent
@@ -83,6 +99,24 @@ export class Commander {
       return `unknown command "${line}" — try /help`;
     }
     return command.run(rest);
+  }
+
+  /**
+   * A second table, folded into this one.
+   *
+   * **For the tables that are not the application's own commands** — `/place:` is a separate
+   * table in `place-commands.ts`, because loading a place is asynchronous and nothing else
+   * here is. Merging rather than one literal of thirty-six entries keeps `/help`'s order
+   * reading as "the game's commands, then the place's", instead of as whatever order two
+   * authors happened to type in.
+   *
+   * A name already present is **kept, not overwritten**, so the application's own table cannot
+   * be redefined by whatever a place feature adds later. Nothing reports the collision: both
+   * tables are written here, in the same commit as each other, and a duplicate name is a typo
+   * that TypeScript does not catch and a person will within a minute of `/help`.
+   */
+  with(extra: Record<string, CommandEntry>): Commander {
+    return new Commander({ ...extra, ...this.commands });
   }
 
   /** Every command there is, in the order they are declared, `/help` first. */

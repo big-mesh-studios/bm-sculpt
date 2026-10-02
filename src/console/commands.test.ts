@@ -461,3 +461,103 @@ describe("the clock commands", () => {
     expect(withArgs).toEqual(["/clock:time", "/clock:speed"]);
   });
 });
+
+/**
+ * `with`, for the tables that are not the application's own commands.
+ *
+ * `/place:` is the one that exists, and the point of these tests is that merging it is
+ * invisible: the merged table runs both, `/help` lists both, and nothing about the game's
+ * thirty-odd commands had to change.
+ */
+describe("merging a second command table", () => {
+  const extra = {
+    "/place:list": {
+      description: "list the places this build ships",
+      run: () => "shipped places:\n  bridge",
+    },
+  };
+
+  it("runs the commands that were added", () => {
+    expect(table().commander.with(extra).run("/place:list")).toBe(
+      "shipped places:\n  bridge",
+    );
+  });
+
+  it("still runs the ones that were already there", () => {
+    expect(table().commander.with(extra).run("/help")).toBeDefined();
+    expect(table().commander.with(extra).run("/clock:day")).toBeDefined();
+  });
+
+  it("lists both in /help, and says /help first", () => {
+    const names = table()
+      .commander.with(extra)
+      .help()
+      .map((command) => command.name);
+    expect(names[0]).toBe("/help");
+    expect(names).toContain("/place:list");
+    expect(names).toContain("/clock:day");
+  });
+
+  it("carries the added command's own description and args", () => {
+    const added = table()
+      .commander.with({
+        "/place:load": {
+          description: "load a place",
+          args: "<id>",
+          run: () => "loaded",
+        },
+      })
+      .help()
+      .find((command) => command.name === "/place:load");
+    expect(added).toEqual({
+      name: "/place:load",
+      args: "<id>",
+      description: "load a place",
+    });
+  });
+
+  it("does not let the added table redefine an existing command", () => {
+    // The application's own table cannot be overwritten by whatever a later
+    // feature adds. Nothing reports the collision — both tables are written in
+    // this repo — but `/help` must still describe the command that runs.
+    const merged = table().commander.with({
+      "/clock:day": { description: "hijacked", run: () => "hijacked" },
+    });
+    expect(merged.run("/clock:day")).not.toBe("hijacked");
+    expect(
+      merged.help().find((command) => command.name === "/clock:day")
+        ?.description,
+    ).not.toBe("hijacked");
+  });
+
+  it("leaves the table it was called on alone", () => {
+    const base = table().commander;
+    base.with(extra);
+    // Merging returns a new table rather than adding to this one, so a second
+    // merge of the same extra cannot accumulate duplicates.
+    expect(base.help().map((command) => command.name)).not.toContain(
+      "/place:list",
+    );
+  });
+
+  it("puts the added commands first in /help", () => {
+    // **Order is what makes `/help` readable at thirty-six entries.** The place
+    // commands are a small block and the game's own are the long tail, and the
+    // added ones land before them because they were spread in first.
+    const names = table()
+      .commander.with(extra)
+      .help()
+      .map((command) => command.name);
+    expect(names[1]).toBe("/place:list");
+  });
+
+  it("returns a promise when a command hands one back", async () => {
+    const merged = table().commander.with({
+      "/place:load": {
+        description: "load a place",
+        run: () => Promise.resolve("loaded bridge"),
+      },
+    });
+    await expect(merged.run("/place:load")).resolves.toBe("loaded bridge");
+  });
+});

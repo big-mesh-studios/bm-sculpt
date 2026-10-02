@@ -37,6 +37,7 @@ import type { Viewport } from "../render/viewport";
 import type { Session } from "../session";
 import type { SculptSession } from "../sculpt";
 import { GameWorld } from "../world/game-world";
+import { pickAlong } from "../pick";
 
 export interface GameOptions {
   /** The streamed world, told where to follow. */
@@ -55,6 +56,24 @@ export interface GameOptions {
   readonly player?: Partial<PlayerConfig>;
 }
 
+/** What `Game.raycast` reports, and what a place's guest library receives. */
+export interface RayHit {
+  /**
+   * What was hit.
+   *
+   * **Always `"terrain"` today, and named as if it might not be.** The field is one signed
+   * distance function over the terrain and every operation in every place, so it cannot say
+   * which of them it met — the fold is a single surface with no record of what made it. A
+   * place that asked could be told "something solid", which is all the field knows and all it
+   * is entitled to say. Splitting it later means adding a case here, not changing this type's
+   * meaning.
+   */
+  readonly kind: "terrain";
+  readonly point: readonly [number, number, number];
+  readonly normal: readonly [number, number, number];
+  readonly distance: number;
+}
+
 export class Game {
   readonly player: Player;
   readonly world: GameWorld;
@@ -66,6 +85,41 @@ export class Game {
   private readonly playerConfig: Partial<PlayerConfig>;
   /** The aim action currently held, so a stroke is begun and ended once. */
   private aim: "dig" | "place" | undefined;
+  /**
+   * Where a place has pointed the camera, and the field of view it asked for.
+   *
+   * **`undefined` for both is the normal state** — the camera is the player's eye and nothing
+   * has claimed it. They are held rather than applied so that a place can set them between
+   * frames and they take effect on the next `tick`, which is the only point at which the
+   * camera is otherwise written.
+   */
+  private cameraTarget: Vec3 | undefined;
+  private cameraFov: number | undefined;
+  /**
+   * The field of view the camera had before a place claimed it.
+   *
+   * **Remembered so clearing can put it *back*, rather than merely stop setting it.** A field
+   * of view only changes while a place is asking for one, so "the place has gone" and "the
+   * camera is zoomed to 0.5 radians because a place was here" would otherwise be the same
+   * state — and the zoom would outlive the place that set it, with nothing to reset it.
+   */
+  private baseFov: number | undefined;
+  /**
+   * The player's own movement numbers, captured before anything has changed them.
+   *
+   * **The base every multiplier scales from, and why it is a snapshot rather than
+   * `DEFAULT_PLAYER_CONFIG`.** A world can be built with its own `player: { speed: 30 }`, and
+   * scaling from the *default* would silently replace that world's walking speed with the
+   * default's — a place that halved the speed of a deliberately slow world would instead make
+   * it walk at the default half. Reading the config at construction is the only reading that is
+   * true about the world in question.
+   *
+   * It is a snapshot because every `set` scales from this and every `clear` restores it, which
+   * makes the two order-independent: setting a multiplier twice replaces rather than compounds,
+   * and clearing twice is the same as clearing once. Compounding would mean a place that ran its
+   * setup twice left the player at four times their speed with no way back.
+   */
+  private readonly baseConfig: PlayerConfig;
 
   constructor(options: GameOptions) {
     this.session = options.session;
@@ -84,6 +138,10 @@ export class Game {
 
     const spawn = options.spawn ?? this.spawnAtOrigin();
     this.player = createPlayer(spawn.x, spawn.y, spawn.z, this.playerConfig);
+    // After construction, because `createPlayer` is what fills in the defaults — a
+    // snapshot taken before it would capture `halfSize: undefined` and every
+    // multiplier would scale from nothing.
+    this.baseConfig = { ...this.player.config };
   }
 
   /** One frame: read input, step the player, place the camera, edit, stream. */
@@ -92,6 +150,20 @@ export class Game {
 
     updatePlayer(this.player, dt, input, this.world);
     placeCamera(this.viewport.camera, this.player, true);
+    // **After `placeCamera`, never before.** That call is the player's own answer for where the
+    // camera is, and it runs every frame; anything written before it would be overwritten by
+    // the player's eye before a single pixel was drawn. So a place's `lookAt` is applied here,
+    // on top, and `clearCameraLook` is a single `undefined` that lets the next frame stand
+    // alone.
+    if (this.cameraTarget !== undefined) {
+      const camera = this.viewport.camera;
+      camera.lookAt(
+        this.cameraTarget.x,
+        this.cameraTarget.y,
+        this.cameraTarget.z,
+      );
+      if (this.cameraFov !== undefined) camera.fov = this.cameraFov;
+    }
     // The aim traces the camera's matrices, and those are otherwise only brought
     // up to date at draw time — so it would aim with the previous frame's view.
     this.viewport.camera.updateMatrixWorld();
@@ -131,6 +203,129 @@ export class Game {
     }
 
     if (this.aim !== undefined) this.sculpt.updateAim(this.camera());
+  }
+
+  /* ------------------------------------------------- what a place can ask for */
+
+  /**
+   * Puts the player somewhere, facing a direction.
+   *
+   * **Zeroes the fall, the way `/player:fly` does**, because a place that builds a platform
+   * and puts a player on it should not have to know that arriving there with a downward
+   * velocity means the platform is a suggestion. The velocity is discarded rather than
+   * cancelled so the next frame starts from rest either way.
+   */
+  teleportPlayer(at: { x: number; y: number; z: number }, yaw?: number): void {
+    const player = this.player;
+    player.position.x = at.x;
+    player.position.y = at.y;
+    player.position.z = at.z;
+    if (yaw !== undefined) player.yaw = yaw;
+    player.vx = 0;
+    player.vy = 0;
+    player.vz = 0;
+  }
+
+  /**
+   * Overrides how fast this player walks, until something clears it.
+   *
+   * **A multiplier on this world's own walking speed, not a replacement for it**, so a place
+   * that halves it does not also change how fast the player turns or jumps. Scaling from
+   * `baseConfig` means a second call replaces the first rather than compounding with it.
+   */
+  setPlayerSpeed(multiplier: number): void {
+    this.player.config.speed = this.baseConfig.speed * multiplier;
+  }
+
+  /** Puts the walking speed back to this world's own. */
+  clearPlayerSpeed(): void {
+    this.player.config.speed = this.baseConfig.speed;
+  }
+
+  /** As `setPlayerSpeed`, for the jump. */
+  setPlayerJump(multiplier: number): void {
+    this.player.config.jumpSpeed = this.baseConfig.jumpSpeed * multiplier;
+  }
+
+  /** Puts the jump back to this world's own. */
+  clearPlayerJump(): void {
+    this.player.config.jumpSpeed = this.baseConfig.jumpSpeed;
+  }
+
+  /**
+   * Points the camera at a place in the world, until `clearCameraLook`.
+   *
+   * **A look target rather than a camera position**, so the camera keeps following the player
+   * and a place cannot leave it inside geometry. The camera *is* the player's eye, and moving
+   * it away from the eye would mean a script could put the camera somewhere the player is not
+   * — which is a nicer thing for a title sequence than for a level.
+   */
+  lookAt(at: { x: number; y: number; z: number }, fov?: number): void {
+    // **Captured on the first claim, not on every call.** A place that re-aims its
+    // camera every tick must not recapture the zoom it is currently applying —
+    // that would make clearing restore the place's own fov and leave the player
+    // looking through a lens they never chose.
+    if (this.cameraTarget === undefined)
+      this.baseFov = this.viewport.camera.fov;
+    this.cameraTarget = { x: at.x, y: at.y, z: at.z };
+    if (fov !== undefined) this.cameraFov = fov;
+  }
+
+  /** Gives the camera back to the player, lens and all. */
+  clearCameraLook(): void {
+    this.cameraTarget = undefined;
+    this.cameraFov = undefined;
+    if (this.baseFov !== undefined) {
+      this.viewport.camera.fov = this.baseFov;
+      this.baseFov = undefined;
+    }
+  }
+
+  /**
+   * Traces a ray against the world, for a place's `raycast`.
+   *
+   * **The same field the picker traces and the player collides with**, because
+   * `GameWorld.getSolidAt` is `field().distance(x, y, z) < 0` and there is one field
+   * (ADR 0009). A place asking "what is over there" and the player looking at it must be
+   * answered by the same surface, or a place that builds a bridge in response to a ray would
+   * be building it against something nobody can see.
+   *
+   * Sphere-traced rather than a DDA: there is no grid here, so there is nothing to step
+   * through, and a surface is found by the sign of a distance function.
+   */
+  raycast(
+    origin: readonly [number, number, number],
+    direction: readonly [number, number, number],
+    maxDistance: number,
+  ): RayHit | undefined {
+    if (maxDistance <= 0) return undefined;
+    const length = Math.hypot(direction[0], direction[1], direction[2]);
+    // A zero-length direction has no direction in it, and normalising it would divide by
+    // zero. "Nothing there" is the honest answer and is what the guest library turns into
+    // `undefined` rather than a hit at the origin.
+    if (length === 0) return undefined;
+
+    const hit = pickAlong(
+      this.sculpt.collisionField,
+      {
+        origin: { x: origin[0], y: origin[1], z: origin[2] },
+        direction: {
+          x: direction[0] / length,
+          y: direction[1] / length,
+          z: direction[2] / length,
+        },
+      },
+      // `reach` rather than a step count: "how far to look" is a place author's question,
+      // and `pickAlong` already turns it into a budget.
+      { reach: maxDistance },
+    );
+    if (hit === undefined) return undefined;
+    return {
+      kind: "terrain",
+      point: [hit.point.x, hit.point.y, hit.point.z],
+      normal: [hit.normal.x, hit.normal.y, hit.normal.z],
+      distance: hit.distance,
+    };
   }
 
   /** Whether the player's eye is under the surface, for an underwater tint. */

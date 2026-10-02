@@ -17,6 +17,20 @@
     // Imports inside `src/` stay extensionless.
     "allowImportingTsExtensions": true,
 
+    // So that a place's source — `src/places/demo/*.ts` — type-checks here rather than only
+    // when a person is reading it. A place imports `voxelscape`, which is not a package: it is
+    // the guest library in `guest/place-api.ts`, reached through the two-line alias in
+    // `guest/voxelscape.ts`. Without this, `tsc` cannot resolve a place's imports, the demos
+    // would be the only TypeScript in the repository that nothing checks, and a typo in an
+    // effect's field name would surface at runtime as a refusal rather than at compile time as
+    // an error.
+    //
+    // **A place author's own project needs the same line**, and it is in `voxelscape.ts`'s
+    // header. It is here because the demos are places.
+    "paths": {
+      "voxelscape": ["./src/places/guest/voxelscape.ts"]
+    },
+
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "isolatedModules": true,

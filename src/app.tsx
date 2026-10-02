@@ -50,6 +50,15 @@ import { TouchControls } from "./player/touch-controls";
 import { Game } from "./engine/game";
 import { createWater, SEA_LEVEL } from "./world/water";
 import { createClouds, type Clouds } from "./world/clouds";
+import { createZoneLines, type ZoneLines } from "./places/zones";
+import { PlaceHost } from "./places/host";
+import { demoPlace } from "./places/demos";
+import { PLACE_MIME_TYPE, type PlaceSpawn } from "./places/place-file";
+import type { LoadedPlace } from "./places/load-place";
+import type { PlaceFiles } from "./places/bundle";
+import { placeCommands, NO_PLACE_LOADED } from "./console/place-commands";
+import { MAX_OPERATIONS_PER_PLACE } from "./places/place-registry";
+import { MAX_ZONES } from "./places/limits";
 import {
   bakeCloudFieldOffThread,
   type CloudBakeSource,
@@ -121,6 +130,33 @@ type CloudStatus =
     }
   | { readonly state: "failed"; readonly reason: string };
 
+/**
+ * One line, or several, saying what a running place has actually done.
+ *
+ * **Counts rather than a list.** `/place:state` is asked "is this place all right", and the
+ * answer to that is four integers and whether anything went wrong — not the four thousand
+ * operations it made. A person who wants those can read `/place:notices`, which is where the
+ * things that went wrong go.
+ *
+ * `MAX_ZONES` and `MAX_OPERATIONS_PER_PLACE` are printed beside the counts so the numbers mean
+ * something: "3 shapes" says nothing on its own, and "3 shapes of 2000" says where the ceiling
+ * is.
+ */
+const describePlace = (id: string, host: PlaceHost): string => {
+  const zones = host.zoneList;
+  return [
+    id,
+    `shapes   ${host.places.operationCount} of ${MAX_OPERATIONS_PER_PLACE}`,
+    `zones    ${zones.length} of ${MAX_ZONES}`,
+    `timers   ${host.pendingTimerCount}`,
+    `events   ${host.events.length}`,
+    `data     ${host.storedData.size}`,
+    host.lastProblem === undefined ? "" : `problem  ${host.lastProblem}`,
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+};
+
 const describeCloudStatus = (status: CloudStatus): string => {
   switch (status.state) {
     case "baking":
@@ -147,6 +183,19 @@ export default function App() {
   const [underwater, setUnderwater] = createSignal(false);
   const [coarse] = createSignal(isCoarsePointer());
   const [suspended, setSuspended] = createSignal(false);
+  /** What the loaded place most recently complained about, for a line over the game. */
+  const [placeBanner, setPlaceBanner] = createSignal<string | undefined>();
+  /** A toast a place asked for, since there is no HUD to show it in. */
+  const [placeToast, setPlaceToast] = createSignal<string | undefined>();
+  /**
+   * The hidden file input `/place:open` clicks.
+   *
+   * **A signal rather than a document query, because the console owns its own input** and a
+   * command reaching into the DOM for a second one would be a second, unowned text field. It is
+   * `display: none` — not visually hidden — because a file input that is laid out and empty is a
+   * box on the screen saying nothing about what it is for.
+   */
+  const [placePicker] = createSignal<HTMLInputElement>();
   const [cloudStatus, setCloudStatus] = createSignal<CloudStatus>({
     state: "baking",
   });
@@ -440,6 +489,230 @@ export default function App() {
     // anything that draws, so `app.tsx` is where the two meet: the state comes out of
     // `tick` below and the five materials take it here.
     const clock = new DayNightController();
+    // ---- A place ----
+    //
+    // `host` is null until one is loaded, and everything below asks rather than assumes:
+    // the frame loop has no place to step and the console has nothing to report, which is the
+    // state the application spends its whole life in before anyone types `/place:load`.
+    const zoneLines: ZoneLines = createZoneLines(viewport.scene);
+    /** The loaded place's problems, newest last, for `/place:notices`. */
+    const notices: string[] = [];
+    /** What is loaded — a demo's id, or a zip's own name — for `/place:state`. */
+    let loadedName: string | undefined;
+    let host: PlaceHost | undefined;
+
+    const notice = (message: string): void => {
+      notices.push(message);
+      setPlaceBanner(message);
+    };
+
+    /**
+     * Prints a line into the console scrollback from outside a command.
+     *
+     * **A place's `log`, which has no command to arrive through.** The console's history is
+     * closed over `onCommand`, and a place logging is not a command — so this appends an entry
+     * directly rather than pretending to be one. Without it a place's only output is whatever
+     * `/place:notices` remembers, which is its *problems*, not its messages.
+     */
+    const runConsoleLine = (text: string): void => {
+      terminal.print(text);
+    };
+
+    /**
+     * Opens a place zip the person picks, and loads it.
+     *
+     * **A promise that always settles, including on dismissal.** The console prints `…` and
+     * replaces the line when the promise resolves, so a picker the person cancelled without ever
+     * choosing a file would leave that `…` on screen for the rest of the session — which is the
+     * one failure the pending line in ADR 0020 was built to make impossible. `cancel` is the
+     * browser's own signal for a dismissed picker, and it is the only one that fires in that case.
+     */
+    const openFromDisk = (): Promise<string> =>
+      new Promise<string>((resolve) => {
+        const picker = placePicker();
+        if (picker === undefined) {
+          resolve("this build has no place picker — use /place:list");
+          return;
+        }
+
+        // **Reset first, so opening the same file twice in a row still fires
+        // `change`.** A file input holding a value does not report the same file again, and
+        // "open the place I just fixed" is the single most likely thing a person does twice.
+        picker.value = "";
+        picker.addEventListener(
+          "change",
+          () => {
+            const file = picker.files?.[0];
+            if (file === undefined) {
+              resolve("no file chosen");
+              return;
+            }
+            void loadFromDisk(file).then(resolve);
+          },
+          { once: true },
+        );
+        // **`addEventListener` rather than an `onclick`-style property,** because a Solid ref is
+        // the raw element and this code runs outside any reactive scope — an attribute it will
+        // never see change.
+        picker.addEventListener("cancel", () => resolve("no file chosen"), {
+          once: true,
+        });
+        picker.click();
+      });
+
+    /** Reads one file and runs it, reporting the manifest's refusal or the load's own. */
+    const loadFromDisk = async (file: File): Promise<string> => {
+      // **Imported here rather than at the top of the module.** `jszip` is a hundred kilobytes
+      // and nothing on the first frame needs it, so a place file costs a place file and not
+      // everybody's first paint.
+      const { readPlaceZip } = await import("./places/load-place");
+
+      let place: LoadedPlace;
+      try {
+        place = await readPlaceZip(file);
+      } catch (error) {
+        // **The whole reason, from the format's own gate.** A refused zip has said precisely
+        // what is wrong with it, and summarising that here would throw away the only sentence a
+        // person can act on.
+        return error instanceof Error ? error.message : String(error);
+      }
+
+      const report = await startPlace(
+        place.files,
+        place.entry,
+        place.manifest.seed,
+        place.manifest.name,
+        place.manifest.spawn,
+      );
+      return report.startsWith("could not load")
+        ? report
+        : `opened ${place.manifest.name}\n${report}`;
+    };
+
+    const dropPlace = (): void => {
+      host?.dispose();
+      host = undefined;
+      loadedName = undefined;
+      notices.length = 0;
+      setPlaceBanner(undefined);
+      setPlaceToast(undefined);
+      zoneLines.update([]);
+      sculpt.places.clearAll();
+      sculpt.refreshPlaces();
+    };
+
+    /**
+     * Builds a host over a place's files and runs it, reporting what happened.
+     *
+     * **One path for every source.** A place in the tree and a place out of a zip are the same
+     * `{ files, entry }` by the time they get here, and the point of `load-place.ts` is that
+     * they are — so `/place:load bridge` and `/place:open` differ only in where the files came
+     * from and which seed the world is built under. Two code paths would mean two places where a
+     * geometry change stops reaching the mesh.
+     */
+    const startPlace = async (
+      files: PlaceFiles,
+      entry: string,
+      seed: number,
+      name: string,
+      spawn?: PlaceSpawn,
+    ): Promise<string> => {
+      // **Dropped before the new one is built, not after.** Two places at once would both
+      // write into one registry, and the operation indices from the first would be spent under
+      // the second's fold order.
+      dropPlace();
+
+      const next = new PlaceHost({
+        files,
+        entry,
+        seed,
+        now: () => clock.nowMs(),
+        world: {
+          places: sculpt.places,
+          terrainHeight: sculpt.terrainHeight,
+          solidAt: (x, y, z) => game.world.getSolidAt(x, y, z),
+          waterAt: (x, y, z) => game.world.getInWaterAt(x, y, z),
+          raycast: (origin, direction, maxDistance) =>
+            game.raycast(origin, direction, maxDistance),
+          // The seam that makes a place visible: without it a shape a script made would be
+          // in the collision field and in no mesh.
+          geometryChanged: (bounds) => sculpt.refreshPlaces(bounds),
+        },
+        effects: {
+          log: (text) => runConsoleLine(text),
+          toast: (text) => setPlaceToast(text),
+          movePlayer: (at, yaw) => game.teleportPlayer(at, yaw),
+          setPlayerSpeed: (multiplier) => game.setPlayerSpeed(multiplier),
+          setPlayerJump: (multiplier) => game.setPlayerJump(multiplier),
+          setFlying: (on) => game.setFlying(on),
+          lookAt: (at, fov) => game.lookAt(at, fov),
+          clearCamera: () => game.clearCameraLook(),
+        },
+        clock,
+        onNotice: notice,
+      });
+
+      try {
+        await next.load();
+      } catch (error) {
+        next.dispose();
+        // A place that will not bundle is the one failure a person can fix, so the whole
+        // reason comes back rather than a summary of it.
+        return `could not load "${name}": ${error instanceof Error ? error.message : String(error)}`;
+      }
+
+      host = next;
+      loadedName = name;
+      zoneLines.update(host.zoneList);
+
+      // **A place's own spawn, honoured or there is no point in the field.** The manifest
+      // carries it and the reference uses it, so reading it here is what makes `spawn` a promise
+      // the format keeps rather than one it makes.
+      if (spawn !== undefined) {
+        game.teleportPlayer({ x: spawn[0], y: spawn[1], z: spawn[2] });
+      }
+
+      // **The load's own problems, not "loaded".** A place that built half of itself reports
+      // as a success, and "loaded" on a world with a missing bridge is the least useful thing
+      // a console can say.
+      const summary = describePlace(name, host);
+      return notices.length === 0
+        ? summary
+        : `${summary}\n— with ${notices.length} problem(s):\n${notices.map((line) => `  ${line}`).join("\n")}`;
+    };
+
+    /**
+     * Loads one of the places in the tree.
+     *
+     * **On the world's own seed rather than a number written here.** A demo is part of this
+     * build rather than something somebody made elsewhere, so it is meant to be stood on and
+     * looked at on the ground this world already has — and a peer running the same build has the
+     * same `DEFAULT_TERRAIN` and therefore the same ground (ADR 0016).
+     */
+    const loadDemo = async (id: string): Promise<string> => {
+      const demo = demoPlace(id);
+      if (demo === undefined) return `no place called "${id}"`;
+      return startPlace(demo.files, demo.entry, DEFAULT_TERRAIN.seed, demo.id);
+    };
+
+    // The place commands, as the same interface the table in `place-commands.ts` takes — so
+    // that file's tests can stand a host in and never touch a `Game`.
+    const places = {
+      loadDemo,
+      openFromDisk,
+      unload: () => {
+        if (host === undefined) return NO_PLACE_LOADED;
+        const name = loadedName ?? "place";
+        dropPlace();
+        return `unloaded ${name}`;
+      },
+      describe: () =>
+        host === undefined
+          ? NO_PLACE_LOADED
+          : describePlace(loadedName ?? "place", host),
+      notices: () => notices,
+    };
+
     // The console's commands are the game's own methods by another name, so the
     // game is what they are built over. It exists here, and nowhere earlier,
     // which is why the table can only be built now.
@@ -472,7 +745,7 @@ export default function App() {
               ? `no cloud layer yet — ${describeCloudStatus(cloudStatus())}`
               : `built | coverage ${layer.material.coverage.toFixed(3)} | density ${layer.material.density.toFixed(3)} | ${describeCloudStatus(cloudStatus())}`,
         },
-      }),
+      }).with(placeCommands(places)),
     );
 
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -495,6 +768,20 @@ export default function App() {
       lastTime = time;
       game.tick(dt);
 
+      // ---- The place, on the same frame ----
+      //
+      // **Moved before the clock, and stepped after it**, which is the order that makes the
+      // three answers agree. `movePlayer` sees where the player *is* this frame, so a zone
+      // crossed during this frame's movement fires now rather than next; then the clock ticks,
+      // so a timer that comes due is measured against the second the player is standing in;
+      // then `step` runs, and the effects it dispatches are in the world before `render` is
+      // called below. A place therefore never builds something a frame draws without.
+      host?.movePlayer(
+        game.player.position.x,
+        game.player.position.y,
+        game.player.position.z,
+      );
+
       // The clock, on the frame's own dt, and the one place the day's lighting is
       // derived. Everything downstream reads this single object: the sky, the clouds,
       // the terrain, the water and the clear colour. They cannot disagree about what
@@ -504,6 +791,14 @@ export default function App() {
       // The clear colour is the sky's horizon colour, which is what the terrain's fog
       // fades to and what the water reflects. One colour, set once, rather than three
       // places that each hold a copy and are each right on a different afternoon.
+      host?.step();
+
+      // A place that changes its zones mid-step has just redrawn the terrain by way of
+      // `geometryChanged`, so the overlay is rebuilt after the step rather than before it —
+      // otherwise the boxes trail the world by a frame, which is visible exactly when someone
+      // is watching a zone appear.
+      zoneLines.update(host?.zoneList ?? []);
+
       skyColour.set(light.skyColor[0], light.skyColor[1], light.skyColor[2]);
       material.sky.lighting = light;
       material.fog.colour = light.skyColor;
@@ -534,6 +829,11 @@ export default function App() {
       detachInput();
       sky?.dispose();
       water.dispose();
+      // **The place before the session.** A `dropPlace` touches `sculpt.places` and re-meshes
+      // through `refreshPlaces`, and `session.dispose()` is about to take away the very field
+      // that reads them — so the order is the one that lets both finish.
+      dropPlace();
+      zoneLines.dispose();
       cloudsDisposed = true;
       cloudBake.dispose();
       layer?.dispose();
@@ -545,6 +845,15 @@ export default function App() {
   return (
     <div class={styles.root}>
       <canvas ref={canvas} class={styles.canvas} />
+      {/* The picker `/place:open` clicks. `display: none` rather than visually hidden,
+          and it is here rather than inside the console because a file dialog is not a
+          text field and giving the terminal two of its own would be worse. */}
+      <input
+        ref={placePicker}
+        type="file"
+        accept={PLACE_MIME_TYPE}
+        style={{ display: "none" }}
+      />
       {/* Not while the pointer lock is merely suspended — the console has taken
           it, so "click to play" would be inviting a click at a moment when the
           world is already being played. */}
@@ -607,6 +916,53 @@ export default function App() {
               "pointer-events": "none",
             }}
           />
+        </Show>
+        {/* ---- What a place said ----
+         *
+         * `pointer-events: none` on both, because this sits over the crosshair and a place
+         * that logs every tick must not stop the player being able to play. */}
+        <Show when={placeBanner()}>
+          {(message) => (
+            <div
+              style={{
+                position: "absolute",
+                left: "50%",
+                top: "calc(50% + 48px)",
+                transform: "translateX(-50%)",
+                padding: "6px 12px",
+                "border-radius": "4px",
+                background: "rgba(180, 60, 40, 0.85)",
+                color: "#fff",
+                "font-size": "12px",
+                "font-family": "monospace",
+                "pointer-events": "none",
+                "white-space": "pre-wrap",
+              }}
+            >
+              {message()}
+            </div>
+          )}
+        </Show>
+        <Show when={placeToast()}>
+          {(text) => (
+            <div
+              style={{
+                position: "absolute",
+                left: "50%",
+                bottom: "72px",
+                transform: "translateX(-50%)",
+                padding: "8px 14px",
+                "border-radius": "4px",
+                background: "rgba(20, 24, 30, 0.85)",
+                color: "#e6edf3",
+                "font-size": "13px",
+                "font-family": "monospace",
+                "pointer-events": "none",
+              }}
+            >
+              {text()}
+            </div>
+          )}
         </Show>
         <Show when={coarse()}>
           <TouchControls input={input} />

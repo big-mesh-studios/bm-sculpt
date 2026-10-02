@@ -27,6 +27,7 @@
  */
 
 import type { Operation } from "../csg";
+import { FoldOrder } from "./fold-order";
 
 /** A contiguous run of operations, which is what a stroke adds and undo removes. */
 interface Range {
@@ -71,6 +72,17 @@ export class SculptDocument {
   private readonly redoStack: Removed[] = [];
   private readonly listeners = new Set<DocumentListener>();
 
+  /**
+   * Where this document's next operation's position in the fold comes from.
+   *
+   * Shared rather than private, because `index` is not the document's alone: a place
+   * allocates from the same counter so that the two cannot collide (see
+   * `fold-order.ts`). It is exposed as an object rather than as a number because a
+   * bare `nextIndex` getter would invite a caller to read it and compute an index
+   * itself, which is the one way to get this wrong.
+   */
+  readonly order = new FoldOrder();
+
   /** Every operation, in fold order. */
   get list(): readonly Operation[] {
     return this.operations;
@@ -111,6 +123,12 @@ export class SculptDocument {
    */
   add(operations: readonly Operation[], bounds?: Bounds): boolean {
     if (operations.length === 0) return false;
+
+    // Before the append, not after: an operation arriving with an index from
+    // elsewhere — a deserialised model, a peer's wire format — has to move the counter
+    // out of its way whether or not it lands at the end. And never backwards, so a
+    // reset to a shorter list cannot reissue what a place above already holds.
+    this.order.reserveThrough(operations);
 
     const from = this.operations.length;
     this.operations.push(...operations);

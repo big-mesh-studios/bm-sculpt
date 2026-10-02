@@ -280,6 +280,16 @@ function ConsoleInput(props: {
  */
 type ConsoleEntry =
   | { kind: "line"; text: string }
+  /**
+   * A line from a command that has not finished.
+   *
+   * **Which is why the `id` is here.** A pending line is replaced rather than appended to, so
+   * that `/place:load` leaves one line saying it is loading and then one line saying what
+   * happened, instead of two lines the reader has to pair up themselves. Replacing by position
+   * works; replacing by content does not, because two pending commands can print the same
+   * `…`.
+   */
+  | { kind: "pending"; id: number; text: string }
   | { kind: "echo"; command: string }
   | { kind: "help"; commands: CommandHelp[] };
 
@@ -336,6 +346,8 @@ function ConsoleOutput(props: { entries: ConsoleEntry[] }) {
           switch (entry.kind) {
             case "echo":
               return <Echo command={entry.command} />;
+            case "pending":
+              return <div class={styles.pending}>{entry.text}</div>;
             case "help":
               return <Help commands={entry.commands} />;
             default:
@@ -357,7 +369,22 @@ export interface ConsoleState {
   entries: Accessor<ConsoleEntry[]>;
   commands: Accessor<CommandHelp[]>;
   onCommand(command: string): void;
+  /**
+   * Prints a line that did not come from a command.
+   *
+   * **For a loaded place's `log`, which is not a command and has no echo of its own.** It is
+   * appended as a bare line rather than run through `onCommand`, so it cannot be mistaken for
+   * something a person typed — and because it lands in the same scrollback, a place's output
+   * and a person's commands interleave in the order they happened rather than in two stacks.
+   *
+   * An empty string prints nothing, on the same rule commands follow: a script that logs a
+   * blank line has said nothing, and saying nothing should not take a line of the scrollback.
+   */
+  print(line: string): void;
 }
+
+/** What a command that has not finished prints under its echo. */
+const PENDING_TEXT = "…";
 
 /**
  * The console's scrollback and command handling, independent of whether the
@@ -372,13 +399,24 @@ export function createConsole(props: CreateConsoleProps): ConsoleState {
     setEntries((entries) => [...entries, ...added]);
   };
 
+  const print = (line: string): void => {
+    if (line === "") return;
+    append({ kind: "line", text: line });
+  };
+
   /** What a command handed back, as entries to print under its echo. */
-  const printed = (output: CommandOutput): ConsoleEntry[] =>
+  const printed = (output: string | CommandHelp[]): ConsoleEntry[] =>
     typeof output === "string"
       ? output === ""
         ? []
         : output.split("\n").map((text) => ({ kind: "line", text }))
       : [{ kind: "help", commands: output }];
+
+  /**
+   * The next id for a pending line, so a settlement can replace its own line and not another
+   * command's.
+   */
+  let nextPending = 0;
 
   /**
    * `/clear` empties the scrollback rather than printing into it, and is the one
@@ -391,10 +429,46 @@ export function createConsole(props: CreateConsoleProps): ConsoleState {
       setEntries([]);
       return;
     }
-    append({ kind: "echo", command }, ...printed(props.onCommand(command)));
+
+    const output = props.onCommand(command);
+
+    // **The promise is awaited here rather than by the caller**, so that every caller — the
+    // key handler, the fullscreen button — gets pending output for free and none of them has
+    // to know a command can be slow. The line under the echo says so immediately, so a slow
+    // command is visibly slow rather than apparently hung.
+    if (output instanceof Promise) {
+      const id = nextPending++;
+      append(
+        { kind: "echo", command },
+        { kind: "pending", id, text: PENDING_TEXT },
+      );
+      void output.then(
+        (settled) =>
+          setEntries((entries) =>
+            entries.flatMap((entry) =>
+              entry.kind === "pending" && entry.id === id
+                ? printed(settled)
+                : [entry],
+            ),
+          ),
+        (reason: unknown) =>
+          setEntries((entries) =>
+            entries.flatMap((entry) =>
+              entry.kind === "pending" && entry.id === id
+                ? printed(
+                    `failed: ${reason instanceof Error ? reason.message : String(reason)}`,
+                  )
+                : [entry],
+            ),
+          ),
+      );
+      return;
+    }
+
+    append({ kind: "echo", command }, ...printed(output));
   }
 
-  return { entries, commands: props.commands, onCommand };
+  return { entries, commands: props.commands, onCommand, print };
 }
 
 export interface ConsoleProps {

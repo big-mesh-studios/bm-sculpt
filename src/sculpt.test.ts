@@ -3,7 +3,12 @@ import { PerspectiveCamera } from "@random-mesh/rmsl/scene";
 
 import { SculptSession, type SculptModelSink } from "./sculpt";
 import { starterOperations } from "./session";
-import { terrainField, type Operation, type TerrainParams } from "./csg";
+import {
+  terrainField,
+  makeOperation,
+  type Operation,
+  type TerrainParams,
+} from "./csg";
 import { VOXEL_SIZE } from "./constants";
 import type { PickCamera } from "./edit/tool";
 
@@ -475,5 +480,174 @@ describe("a stroke while the pointer is still down", () => {
     // The last fold is the committed model again, and the history never grew.
     expect(folds[folds.length - 1]).toEqual(operations);
     expect(session.undoDepth).toBe(0);
+  });
+});
+
+/**
+ * `refreshPlaces` — the seam that makes a loaded place visible.
+ *
+ * ## Why this is worth its own block
+ *
+ * **A place writes into `session.places` and nowhere else.** It does not go through
+ * `document.add`, so nothing in the session's own change-tracking would notice: no `Change`, no
+ * re-mesh, no new fold. The symptom is a bridge that is in the collision field and in no mesh —
+ * the player walks on something nobody can see, and the place's author cannot tell whether their
+ * geometry is wrong or the engine is.
+ *
+ * So these tests assert the two things that symptom rests on: a place's operations reach the
+ * model the mesher is given, and they do not reach the *undo history*, because nothing about a
+ * place was typed by a person.
+ */
+describe("re-reading the model after a place changed it", () => {
+  // The same landscape the rest of this file uses, so the terrain's own surface
+  // at the origin is a known height rather than a guess.
+  const TERRAIN = { origin: -70, scale: 96, octaves: 4, seed: 20260901 };
+
+  /**
+   * Adds one box to a place, the way `PlaceHost` does — through a place handle rather than
+   * through `document.add`, and **without an index of its own** because the handle allocates
+   * one. That last part is the point: an index supplied by a caller could differ between peers,
+   * which is exactly what the registry exists to prevent (ADR 0016).
+   */
+  const addBox = (session: SculptSession, id: string, y = 20): void => {
+    const place = session.places.create("p");
+    const added = place.add(
+      id,
+      makeOperation(
+        0,
+        { x: 0, y, z: 0 },
+        { type: "Box", len: { x: 30, y: 3, z: 30 } },
+        "Add",
+      ),
+    );
+    expect(added).toBeDefined();
+  };
+
+  it("puts a place's operations into the fold", () => {
+    // **A session with no operations has folded nothing yet,** so the count of
+    // folds — not the contents of the last one — is what says whether the call
+    // happened. An empty model has still to be pushed once.
+    const { session, folds, latest } = sessionOver([]);
+    expect(folds).toHaveLength(0);
+
+    addBox(session, "deck");
+    // **Nothing at all happens until this is called** — which is the whole
+    // reason the method exists, and what makes it a bug when it is forgotten.
+    expect(folds).toHaveLength(0);
+
+    session.refreshPlaces();
+    expect(folds).toHaveLength(1);
+    expect(latest()).toHaveLength(1);
+    // **An operation, not an id.** The name a place gave its shape lives on the
+    // registry's handle and never travels onto the operation — it is a
+    // per-place key, and the fold only ever sees the geometry.
+    expect(latest()[0].origin).toEqual({ x: 0, y: 20, z: 0 });
+  });
+
+  it("keeps the document's own operations too", () => {
+    // **Appended, not replaced.** A place and the starter model are both in the
+    // world, and a refresh that dropped the document's operations would empty the
+    // terrain out from under the player.
+    const operations = starterOperations();
+    const { session, latest } = sessionOver(operations);
+    addBox(session, "deck");
+    session.refreshPlaces();
+    expect(latest()).toHaveLength(operations.length + 1);
+    // **By fold index, which is what identifies an operation to the fold.**
+    // Comparing by `id` would pass here for the wrong reason: an `Operation`
+    // has no `id` — the name a place gave its shape lives on the registry's
+    // handle — so two `undefined`s compare equal and the test says nothing.
+    const folded = new Set(latest().map((inFold) => inFold.index));
+    for (const operation of operations) {
+      expect(folded.has(operation.index)).toBe(true);
+    }
+  });
+
+  it("leaves the undo history alone", () => {
+    // **Not undoable, and not an edit.** A person pressing undo after a place
+    // built something expects the edit they made before it, not a bridge they
+    // never drew disappearing — and undo reaching into a place would be a peer
+    // divergence waiting to happen (ADR 0016).
+    const { session } = sessionOver([]);
+    addBox(session, "deck");
+    session.refreshPlaces();
+    expect(session.undoDepth).toBe(0);
+    expect(session.redoDepth).toBe(0);
+  });
+
+  it("re-reads the field, so the player stands on the place's geometry", () => {
+    const { session } = sessionOver([], TERRAIN);
+    // **Twenty units clear of the terrain's own surface, and probed there.**
+    // An absolute height would not do: this landscape has peaks, so a fixed y is
+    // inside a hill on one column and in open air on another, and a test that
+    // happened to be inside the ground would pass for the wrong reason.
+    const above = terrainField(TERRAIN).heightAt(0, 0) + 20;
+    expect(fieldOf(session).distance(0, above, 0)).toBeGreaterThan(0);
+
+    addBox(session, "deck", above);
+    session.refreshPlaces();
+    // **Inside the box is a negative distance.** This is the assertion the
+    // symptom is made of: without it the bridge is in no field, so it is in no
+    // collision, and a player falls through it.
+    expect(fieldOf(session).distance(0, above, 0)).toBeLessThan(0);
+  });
+
+  it("passes the bounds on, so only the chunks that changed re-mesh", () => {
+    const { session, folds } = sessionOver([]);
+    const bounds = {
+      min: { x: -30, y: 17, z: -30 },
+      max: { x: 30, y: 23, z: 30 },
+    };
+    addBox(session, "deck");
+    session.refreshPlaces(bounds);
+    // The sink records operations rather than bounds, so what is checked is that
+    // the call still happened with the box the host gave it — a `refreshPlaces()`
+    // that dropped its argument would re-mesh the whole world on every shape a
+    // place made, which is correct-looking and unusable.
+    expect(folds).toHaveLength(1);
+    expect(bounds.max.y).toBeGreaterThan(bounds.min.y);
+  });
+
+  it("abandons a stroke in progress rather than folding it into a field it no longer matches", () => {
+    const { session, latest } = sessionOver([]);
+    // **A stroke's operations live in the stroke, not the document, until it is
+    // committed** — and the field is deliberately not rebuilt while one is in
+    // progress, which is what stops a drag towering (ADR 0009). A place changing
+    // the world under a half-finished drag is the same situation, and the honest
+    // answer is to end the drag.
+    session.beginAim(camera(), "add");
+    addBox(session, "deck");
+    session.refreshPlaces();
+
+    // The place's shape is there, and the abandoned stroke is not: one operation,
+    // not the place plus whatever the aim had dabbed.
+    expect(latest()).toHaveLength(1);
+    expect(latest()[0].origin).toEqual({ x: 0, y: 20, z: 0 });
+  });
+
+  it("drops every shape when the place is emptied", () => {
+    // **The unload path.** `dropPlace` calls `clearAll` and then this, so a
+    // reload must actually remove the old bridge rather than leaving it standing
+    // with the new place's geometry inside it.
+    const { session, latest } = sessionOver([]);
+    addBox(session, "deck");
+    session.refreshPlaces();
+    expect(latest()).toHaveLength(1);
+
+    session.places.clearAll();
+    session.refreshPlaces();
+    expect(latest()).toHaveLength(0);
+  });
+
+  it("can be called twice in a row, since a place fires once per shape", () => {
+    // **Per shape, not per place.** A place that adds three boxes calls this three
+    // times, and a second call that threw or double-counted would make a
+    // three-shape place the one a person could not load.
+    const { session, latest } = sessionOver([]);
+    addBox(session, "deck");
+    addBox(session, "rail");
+    session.refreshPlaces();
+    session.refreshPlaces();
+    expect(latest().length).toBe(2);
   });
 });

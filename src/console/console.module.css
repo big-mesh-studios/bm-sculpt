@@ -124,6 +124,17 @@
   color: #6b7c8c;
 }
 
+/*
+ * A command that has not finished. Dimmed rather than coloured, so it reads as
+ * provisional — and because a pending line is replaced the moment it settles,
+ * nothing here is left on screen saying "loading" for a command that finished a
+ * frame later.
+ */
+.pending {
+  color: rgba(255, 255, 255, 0.45);
+  font-style: italic;
+}
+
 .input-container {
   display: flex;
   align-items: center;

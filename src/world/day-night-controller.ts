@@ -87,6 +87,22 @@ export class DayNightController {
   }
 
   /**
+   * The second the clock is showing, in milliseconds.
+   *
+   * **What a place's events are timestamped with.** Reading `Date.now()` here instead would
+   * be the obvious thing and would break convergence: two peers a few hundred milliseconds
+   * apart order the same facts differently and never re-converge (ADR 0016). So the shared
+   * clock *is* the clock that draws the sky, which means a place's events and a place's
+   * light cannot disagree about what time it is.
+   *
+   * `shownTime()` rather than `elapsed`, because a pinned sky is pinned for its events too —
+   * the same rule the `tick` doc comment states for the light.
+   */
+  nowMs(): number {
+    return this.shownTime() * 1000;
+  }
+
+  /**
    * Pins the clock to a second of the cycle.
    *
    * Not clamped to the cycle: `dayNightState` wraps, so a second outside the cycle is
