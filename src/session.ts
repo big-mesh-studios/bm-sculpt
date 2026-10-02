@@ -52,6 +52,28 @@ import {
 import { ChunkMeshStore, hooksFor } from "./render";
 import type { Bounds } from "./edit/document";
 
+/**
+ * The streaming window's radius, in chunks, when the caller does not ask for one.
+ *
+ * **Four is not a preference: it is the fog's far distance.** `src/render/fog.ts` closes
+ * at `4 * BLOCK_WORLD` because that is where the terrain stops, and this is where the
+ * terrain stops. So the two are named here and in there and `fog.test.ts` holds them
+ * together — a window that grew without the fog following it would still be *correct*
+ * (an exponential never stops) and would still show a seam at its edge, which is the
+ * failure mode that costs a day to find from a screenshot.
+ */
+export const DEFAULT_WINDOW_RADIUS = 4;
+
+/**
+ * The game's window: wider and much flatter than the editor's.
+ *
+ * A walking player wants ground ahead and a little above, not a ball of sky, and wants
+ * further than an orbit camera does because the horizon is most of what a first-person
+ * frame is. Five chunks is 1600 units against the editor's 1280, which the fog has to
+ * cover — so `fog.test.ts` asserts against this and not only against `FOG_FAR`.
+ */
+export const GAME_WINDOW = { radius: 5, yRadius: 2 } as const;
+
 /** What a mesh request is remembered as, so its answer can be applied where it belongs. */
 interface Outstanding {
   readonly slot: number;
@@ -72,7 +94,7 @@ export interface SessionOptions {
    * of the thread boundary could not be checked at all.
    */
   readonly terrain?: TerrainParams;
-  /** Chunk radius in x and z. */
+  /** Chunk radius in x and z. Defaults to `DEFAULT_WINDOW_RADIUS`. */
   readonly radius?: number;
   /** Chunk radius in y, normally smaller — see `sphereCells`. */
   readonly yRadius?: number;
@@ -173,7 +195,7 @@ export class Session {
     const hooks = hooksFor(this.store);
 
     this.window = new ChunkWindow({
-      radius: options.radius ?? 4,
+      radius: options.radius ?? DEFAULT_WINDOW_RADIUS,
       ...(options.yRadius !== undefined ? { yRadius: options.yRadius } : {}),
       ...(options.bands !== undefined ? { bands: options.bands } : {}),
       ...hooks,

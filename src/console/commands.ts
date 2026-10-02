@@ -9,11 +9,13 @@
  *
  * Ported from `big-mesh-studios`'s `apps/voxelscape`, which has a console with
  * about forty commands across the clock, the world window, level of detail,
- * accounts, places and multiplayer. Only the two that act on this application's
- * player came with it; the rest are commands for systems this build does not
- * have yet, and a command that reports on a renderer that isn't there is worse
- * than no command at all.
+ * accounts, places and multiplayer. The clock and the two commands that act on this
+ * application's player came with it; the rest are commands for systems this build
+ * does not have yet, and a command that reports on a renderer that isn't there is
+ * worse than no command at all.
  */
+
+import { CYCLE_SECONDS, phasePreset, type Phase } from "../world/day-night";
 
 /**
  * Declares a command, keyed by the name that runs it. Every entry's `run`
@@ -101,6 +103,54 @@ export interface CommandsParams {
   setFlying(flying?: boolean): string;
   /** Turns no-clip on or off, toggling when `noclip` is omitted. */
   setNoClip(noclip?: boolean): string;
+  /**
+   * The day-night clock, for `/clock:` — the four methods voxelscape's commands use
+   * and no others.
+   *
+   * Declared structurally rather than as `DayNightController`, which is what keeps
+   * this table testable against a three-line fake and keeps `day-night.ts` free of any
+   * knowledge that a console exists. It is also what makes the direction of the
+   * dependency honest: the console asks the clock to do things, never the reverse.
+   */
+  clock: ClockCommands;
+  /** The cloud layer, for `/cloud:`. See `CloudCommands`. */
+  cloud: CloudCommands;
+}
+
+/** The clock's surface, as `/clock:` uses it. See `CommandsParams.clock`. */
+export interface ClockCommands {
+  /** Pins the sky to a second of the cycle. */
+  jumpTo(seconds: number): void;
+  /** Releases the pin, and the live clock carries on. */
+  clearOverride(): void;
+  /** Runs the clock at `multiplier` times real time; zero holds it. */
+  setSpeed(multiplier: number): void;
+  /** One line saying where the clock is. */
+  describe(): string;
+}
+
+/**
+ * The two cloud knobs and the layer's own state, as `/cloud:` uses them.
+ *
+ * Declared as strings in and strings out, for the same reason `fogColourOf` is a
+ * function rather than a rule: nothing in this file should know that a material has a
+ * `coverage` field, and the caller owns whether the layer exists yet — it is null for
+ * the second or two the field takes to bake.
+ *
+ * **This exists because the cloud defaults have never been looked at.** Every
+ * constant in `clouds.ts` was reasoned about on paper, `coverage = 0.52` and
+ * `density = 1` most of all, and the only way to find out what they look like was to
+ * edit a constant and rebuild. A console command turns that into a keystroke, which is
+ * also why these are the only two the console exposes: they are the two a player would
+ * notice first.
+ */
+export interface CloudCommands {
+  /** Reports or sets coverage, 0 to 1. */
+  coverage(value?: number): string;
+  /** Reports or sets density. */
+  density(value?: number): string;
+  /** One line saying whether the layer exists and what it is set to. */
+  state(): string;
 }
 
 /**
@@ -124,6 +174,61 @@ const readToggle = (
 };
 
 /**
+ * Reads a number the console is going to act on, refusing anything that is not one.
+ *
+ * `NaN` and `Infinity` are both refused by `Number.isFinite`, which is the whole of
+ * the validation: `Number` is a permissive parser that answers a number for `"12px"`,
+ * and a clock asked to jump to `NaN` seconds hands every material in the frame a
+ * `NaN` — a black screen with no error, which is the most expensive kind of typo to
+ * chase.
+ *
+ * @param usage - The line to print instead of a number. Carries the command's own
+ *   name and its legal range, so no caller has to spell that out twice.
+ * @param minimum - Lowest accepted value, where a negative one would be meaningless.
+ * @returns The number, or `usage`.
+ */
+const readNumber = (
+  argument: string | undefined,
+  usage: string,
+  minimum?: number,
+): number | string => {
+  const value = Number(argument);
+  if (argument === undefined || !Number.isFinite(value)) return usage;
+  if (minimum !== undefined && value < minimum) return usage;
+  return value;
+};
+
+/** The phase a `/clock:<phase>` jump reports, in words rather than as a name. */
+const PHASE_WORDS: Record<Phase, string> = {
+  day: "noon",
+  sunset: "dusk",
+  night: "midnight",
+  sunrise: "dawn",
+};
+
+/**
+ * The one `/clock:` jump, written once for the four that share it.
+ *
+ * **The second comes from `phasePreset`, never from a literal.** voxelscape's four
+ * commands jumped to 300 / 645 / 900 / 1120 — hardcoded seconds that stopped meaning
+ * what their names said the moment the sun path became a solar model rather than a
+ * drawn curve, which is exactly what happened: the dusk the reference drew at 645 is
+ * not the dusk this model produces. `phasePreset` asks the model where the phase is
+ * and returns the middle of its longest run, so a jump lands as far from either
+ * boundary as the phase allows and keeps doing so if the latitude or the twilight
+ * threshold ever moves.
+ *
+ * @returns The line to print, which names the phase and the second it landed on —
+ *   because a console that reports "jumped to dusk" alone leaves the player unable to
+ *   tell which dusk, and `/clock:state` is a separate command to consult.
+ */
+const jumpToPhase = (clock: ClockCommands, phase: Phase): string => {
+  const seconds = phasePreset(phase);
+  clock.jumpTo(seconds);
+  return `jumped to ${PHASE_WORDS[phase]} (t=${seconds.toFixed(1)}s)`;
+};
+
+/**
  * Every console command, declared as a single object literal keyed by command
  * name. This is the only place in the application that knows the whole command
  * vocabulary exists.
@@ -131,8 +236,92 @@ const readToggle = (
 export const createCommands = ({
   setFlying,
   setNoClip,
+  clock,
+  cloud,
 }: CommandsParams): Commander => {
   return new Commander({
+    "/clock:day": {
+      description: "jump to the middle of the day",
+      run: () => jumpToPhase(clock, "day"),
+    },
+    "/clock:sunset": {
+      description: "jump to the middle of dusk",
+      run: () => jumpToPhase(clock, "sunset"),
+    },
+    "/clock:night": {
+      description: "jump to the middle of the night",
+      run: () => jumpToPhase(clock, "night"),
+    },
+    "/clock:sunrise": {
+      description: "jump to the middle of dawn",
+      run: () => jumpToPhase(clock, "sunrise"),
+    },
+    "/clock:time": {
+      description: `pin the sky to a second of the ${CYCLE_SECONDS}-second cycle`,
+      args: "<seconds>",
+      run: (rest) => {
+        const seconds = readNumber(
+          rest[0],
+          `usage: /clock:time <seconds>  (0..${CYCLE_SECONDS}, wraps)`,
+        );
+        if (typeof seconds === "string") return seconds;
+        clock.jumpTo(seconds);
+        return `time set to ${seconds}s`;
+      },
+    },
+    "/clock:speed": {
+      description: "run the clock that many times fast (0 pauses)",
+      args: "<multiplier>",
+      run: (rest) => {
+        const speed = readNumber(
+          rest[0],
+          "usage: /clock:speed <multiplier>  (0 pauses, 1 = real time)",
+          0,
+        );
+        if (typeof speed === "string") return speed;
+        clock.setSpeed(speed);
+        return `clock speed set to ${speed}×`;
+      },
+    },
+    "/clock:live": {
+      description: "release the pin, and let the cycle run on",
+      run: () => {
+        clock.clearOverride();
+        return "resumed the live clock";
+      },
+    },
+    "/clock:state": {
+      description: "say where the clock is",
+      run: () => clock.describe(),
+    },
+    "/cloud:coverage": {
+      description: "report or set how much of the sky is cloud (0 to 1)",
+      args: "[0..1]",
+      run: (rest) => {
+        if (rest[0] === undefined) return cloud.coverage();
+        const value = readNumber(rest[0], "usage: /cloud:coverage [0..1]");
+        if (typeof value === "string") return value;
+        if (value < 0 || value > 1) {
+          return "usage: /cloud:coverage [0..1]";
+        }
+        return cloud.coverage(value);
+      },
+    },
+    "/cloud:density": {
+      description: "report or set how opaque a formed cloud is",
+      args: "[multiplier]",
+      run: (rest) => {
+        if (rest[0] === undefined) return cloud.density();
+        const value = readNumber(rest[0], "usage: /cloud:density [multiplier]");
+        if (typeof value === "string") return value;
+        if (value < 0) return "usage: /cloud:density [multiplier]  (0 or more)";
+        return cloud.density(value);
+      },
+    },
+    "/cloud:state": {
+      description: "say whether the layer is built and what it is set to",
+      run: () => cloud.state(),
+    },
     "/player:fly": {
       description: "turn flight on or off (no gravity; W follows the look)",
       args: "[on|off]",

@@ -43,11 +43,22 @@ const setFullscreenEnabled = (enabled: boolean | undefined): void => {
   });
 };
 
-/** The command table, built over setters it never calls. */
+/** The command table, built over setters, a clock and clouds it never calls. */
 const commands = () =>
   createCommands({
     setFlying: () => "flying",
     setNoClip: () => "no-clip",
+    clock: {
+      jumpTo: () => {},
+      clearOverride: () => {},
+      setSpeed: () => {},
+      describe: () => "phase: day | t=0.0s | speed=1× | live",
+    },
+    cloud: {
+      coverage: () => "coverage 0.520",
+      density: () => "density 1.000",
+      state: () => "built",
+    },
   });
 
 const run = (line: string): string => {

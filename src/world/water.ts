@@ -26,6 +26,8 @@ import {
 
 import { DEFAULT_TERRAIN } from "../csg";
 import type { Vec3 } from "../constants";
+import { Fog } from "../render/fog";
+import { SkyLight } from "../render/sky-light";
 
 /** The world y water settles at — the terrain's own zero, so half the land is dry. */
 export const SEA_LEVEL = DEFAULT_TERRAIN.origin;
@@ -38,10 +40,20 @@ const WATER_SNAP = 100;
 
 /**
  * A translucent water surface: a Fresnel mix from deep water toward the sky at
- * grazing angles, so looking down reads as depth and looking out reads as a
- * horizon.
+ * grazing angles, so looking down reads as depth and looking out reads as a horizon.
+ *
+ * The sky it reflects is the day's, and it is fogged like everything else. Both were
+ * hardcoded — the sky was a literal blue duplicated from the viewport's clear colour,
+ * which is the kind of duplication that survives until the clear colour changes at dusk
+ * and the sea does not.
  */
 class WaterMaterial extends NodeMaterial {
+  /** The day this reflects, and what it fades into at distance. */
+  readonly sky = new SkyLight();
+
+  /** The fog. Its colour is the sky's horizon colour, which is what it reflects too. */
+  readonly fog = new Fog();
+
   constructor() {
     super();
     this.transparent = true;
@@ -53,6 +65,11 @@ class WaterMaterial extends NodeMaterial {
     this.depthWrite = false;
   }
 
+  protected override setup(b: Builder, _scene: Scene): void {
+    this.sky.declare(b);
+    this.fog.declare(b);
+  }
+
   protected override buildFragmentBody(b: Builder): Node<"vec4"> {
     const normal = b.normalWorld.normalize();
     const view = b.viewDirection.normalize();
@@ -62,16 +79,23 @@ class WaterMaterial extends NodeMaterial {
       float(0.95).mul(float(1).sub(facing).pow(float(3))),
     );
     const deep = vec3(0.05, 0.22, 0.4);
-    const sky = vec3(0.45, 0.62, 0.9);
-    const rgb = deep.mix(sky, fresnel);
+    const rgb = deep.mix(this.sky.skyColour, fresnel);
+
+    // Fogged, and the fog colour is the same sky it reflects — so the plane's far edge
+    // and the sky behind it are the same colour and the sea has no edge. The plane runs
+    // to a hundred thousand units and the fog closes by twelve hundred and eighty, so
+    // there is nothing to see of it past that.
+    const faded = this.fog.apply(b, rgb);
     const alpha = fresnel.add(float(0.55)).clamp(float(0), float(1));
-    return vec4(rgb, alpha);
+    return vec4(faded, alpha);
   }
 }
 
 export interface Water {
   /** Keeps the plane centred on the eye, so its edge is always out of sight. */
   update(camera: Vec3): void;
+  /** The material, so a caller can push the day's lighting at it. */
+  readonly material: WaterMaterial;
   dispose(): void;
 }
 
@@ -88,6 +112,7 @@ export const createWater = (
   scene.add(mesh);
 
   return {
+    material,
     update(camera) {
       mesh.position.x = Math.round(camera.x / WATER_SNAP) * WATER_SNAP;
       mesh.position.z = Math.round(camera.z / WATER_SNAP) * WATER_SNAP;

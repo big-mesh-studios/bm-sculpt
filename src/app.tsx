@@ -34,7 +34,12 @@ import {
 import { SurfaceMaterial } from "./render/surface-material";
 import { createViewport, type Viewport } from "./render/viewport";
 import { VERTEX_BYTES } from "./render/spike-geometry";
-import { Session, starterOperations, type SessionStats } from "./session";
+import {
+  GAME_WINDOW,
+  Session,
+  starterOperations,
+  type SessionStats,
+} from "./session";
 import { DEFAULT_TERRAIN } from "./csg";
 import { LOD_OFF, lodIsOff, type LodBands } from "./world";
 import { SculptSession } from "./sculpt";
@@ -44,7 +49,13 @@ import { createInput } from "./player/input";
 import { TouchControls } from "./player/touch-controls";
 import { Game } from "./engine/game";
 import { createWater, SEA_LEVEL } from "./world/water";
-import { createClouds } from "./world/clouds";
+import { createClouds, type Clouds } from "./world/clouds";
+import {
+  bakeCloudFieldOffThread,
+  type CloudBakeSource,
+} from "./world/cloud-bake-client";
+import { createSky } from "./world/sky";
+import { DayNightController } from "./world/day-night-controller";
 
 import styles from "./app.module.css";
 
@@ -93,6 +104,34 @@ const describeBands = (bands: LodBands): string =>
     ? "off (every chunk full resolution)"
     : `full within ${bands.full} chunks, coarse within ${bands.coarse}`;
 
+/**
+ * Where the cloud layer is, as the header says it.
+ *
+ * **The one asynchronous thing in the scene, and therefore the only one that can fail
+ * silently.** The field is baked on a worker, so for the first second or two there is
+ * no cloud layer at all, and a player looking up sees clear sky — which is exactly what
+ * a broken sky looks like. So the state is on screen rather than in a log, and it names
+ * the failure rather than only the absence.
+ */
+type CloudStatus =
+  | { readonly state: "baking" }
+  | {
+      readonly state: "ready";
+      readonly field: Extract<CloudBakeSource, "worker" | "main thread">;
+    }
+  | { readonly state: "failed"; readonly reason: string };
+
+const describeCloudStatus = (status: CloudStatus): string => {
+  switch (status.state) {
+    case "baking":
+      return "baking the field…";
+    case "ready":
+      return `ready (baked on the ${status.field})`;
+    case "failed":
+      return `NOT BUILT — ${status.reason}`;
+  }
+};
+
 export default function App() {
   let canvas!: HTMLCanvasElement;
   const [precision, setPrecision] = createSignal<PrecisionProbe | undefined>();
@@ -108,6 +147,9 @@ export default function App() {
   const [underwater, setUnderwater] = createSignal(false);
   const [coarse] = createSignal(isCoarsePointer());
   const [suspended, setSuspended] = createSignal(false);
+  const [cloudStatus, setCloudStatus] = createSignal<CloudStatus>({
+    state: "baking",
+  });
 
   // Created here rather than in the settled effect so the touch UI can bind to it
   // and the effect can attach it to the canvas. It listens to nothing until it is
@@ -182,6 +224,13 @@ export default function App() {
     });
     viewport.setBackground(new Color(0.07, 0.07, 0.09));
 
+    // The sky, added before anything else in the scene. rmsl has no render-order
+    // key — draw order is scene traversal order — and the dome neither tests nor
+    // writes depth, so it has to be first for the terrain, water and clouds to land on
+    // top of it. Only the game gets one: the editor's near-black is deliberate, for
+    // reading a model's silhouette against.
+    const sky = isGame() ? createSky(viewport.scene) : null;
+
     const material = new SurfaceMaterial();
     const previewMaterial = new MeshBasicMaterial({
       color: new Color(1, 0.85, 0.4),
@@ -197,9 +246,9 @@ export default function App() {
       material,
       operations: initialOperations,
       terrain: DEFAULT_TERRAIN,
-      // A flatter window than the editor's: a walking player wants ground ahead
-      // and a little above, not a ball of sky.
-      ...(isGame() ? { radius: 5, yRadius: 2 } : {}),
+      // A wider and flatter window than the editor's — see `GAME_WINDOW`, which the
+      // fog's own test reads so that these two cannot drift apart.
+      ...(isGame() ? GAME_WINDOW : {}),
       ...(chosen !== undefined ? { bands: chosen } : {}),
     });
 
@@ -332,8 +381,10 @@ export default function App() {
 
     // ---- The game: a first-person player over the terrain ----
     // A sky colour rather than the editor's near-black, so water and cloud meet
-    // the horizon rather than a void.
-    viewport.setBackground(new Color(0.45, 0.62, 0.9));
+    // the horizon rather than a void. The day-night cycle writes over it every
+    // frame; this is only what the very first one is drawn with.
+    const skyColour = new Color(0.53, 0.81, 0.92);
+    viewport.setBackground(skyColour);
     const game = new Game({
       session,
       sculpt,
@@ -342,10 +393,53 @@ export default function App() {
       seaLevel: SEA_LEVEL,
     });
     const water = createWater(viewport.scene, SEA_LEVEL);
-    const clouds = createClouds(viewport.scene, DEFAULT_TERRAIN.seed);
+    // The clouds, built once their field has been baked — on a worker, because the bake
+    // is two and a half seconds of arithmetic and the only reason to move it is that it
+    // was happening on the thread that draws. The layer is null until the field lands,
+    // and the frame loop's optional call is the whole of the handling: the first second
+    // or so has a sky, a terrain and a sea, and no weather yet.
+    const cloudBake = bakeCloudFieldOffThread(DEFAULT_TERRAIN.seed);
+    let layer: Clouds | null = null;
+    let cloudsDisposed = false;
+
+    void cloudBake.field.then(
+      (field) => {
+        // Between the field being baked and this running, the scene can have been torn
+        // down — and a mesh added to a disposed scene is a leak with no owner.
+        if (cloudsDisposed) return;
+        try {
+          layer = createClouds(viewport.scene, DEFAULT_TERRAIN.seed, field);
+          const source = cloudBake.source();
+          setCloudStatus({
+            state: "ready",
+            field: source === "main thread" ? "main thread" : "worker",
+          });
+        } catch (reason) {
+          // A material that throws on its first draw is the same fault as no layer at
+          // all, and it used to be invisible: the promise's callback threw, the
+          // rejection went to a handler nobody had, and the sky was empty with nothing
+          // in the header to say why.
+          console.warn("cloud layer could not be built:", reason);
+          setCloudStatus({
+            state: "failed",
+            reason: reason instanceof Error ? reason.message : String(reason),
+          });
+        }
+      },
+      (reason: unknown) => {
+        setCloudStatus({
+          state: "failed",
+          reason: reason instanceof Error ? reason.message : String(reason),
+        });
+      },
+    );
     const detachInput = input.attach(canvas);
     const stopLock = input.onPointerLockChange(setLocked);
     const stopSuspension = input.onPointerLockSuspensionChange(setSuspended);
+    // The clock, which `/clock:` drives. It holds three numbers and no reference to
+    // anything that draws, so `app.tsx` is where the two meet: the state comes out of
+    // `tick` below and the five materials take it here.
+    const clock = new DayNightController();
     // The console's commands are the game's own methods by another name, so the
     // game is what they are built over. It exists here, and nowhere earlier,
     // which is why the table can only be built now.
@@ -353,6 +447,31 @@ export default function App() {
       createCommands({
         setFlying: (flying) => game.setFlying(flying),
         setNoClip: (noclip) => game.setNoClip(noclip),
+        clock,
+        // The two cloud knobs, adapted rather than passed as an object, because the
+        // layer does not exist yet and only this scope knows that. `state()` says so
+        // rather than reporting zeroes, which is what a null layer would otherwise look
+        // like.
+        cloud: {
+          coverage: (value) => {
+            if (layer === null)
+              return "no cloud layer yet — the field is still baking";
+            const material = layer.material;
+            if (value !== undefined) material.coverage = value;
+            return `coverage ${material.coverage.toFixed(3)}`;
+          },
+          density: (value) => {
+            if (layer === null)
+              return "no cloud layer yet — the field is still baking";
+            const material = layer.material;
+            if (value !== undefined) material.density = value;
+            return `density ${material.density.toFixed(3)}`;
+          },
+          state: () =>
+            layer === null
+              ? `no cloud layer yet — ${describeCloudStatus(cloudStatus())}`
+              : `built | coverage ${layer.material.coverage.toFixed(3)} | density ${layer.material.density.toFixed(3)} | ${describeCloudStatus(cloudStatus())}`,
+        },
       }),
     );
 
@@ -375,8 +494,28 @@ export default function App() {
         lastTime === 0 ? 1 / 60 : Math.min((time - lastTime) / 1000, MAX_STEP);
       lastTime = time;
       game.tick(dt);
+
+      // The clock, on the frame's own dt, and the one place the day's lighting is
+      // derived. Everything downstream reads this single object: the sky, the clouds,
+      // the terrain, the water and the clear colour. They cannot disagree about what
+      // hour it is because there is only one answer to ask.
+      const light = clock.tick(dt);
+
+      // The clear colour is the sky's horizon colour, which is what the terrain's fog
+      // fades to and what the water reflects. One colour, set once, rather than three
+      // places that each hold a copy and are each right on a different afternoon.
+      skyColour.set(light.skyColor[0], light.skyColor[1], light.skyColor[2]);
+      material.sky.lighting = light;
+      material.fog.colour = light.skyColor;
+      water.material.sky.lighting = light;
+      water.material.fog.colour = light.skyColor;
+
+      // A star is sized in CSS pixels, so the dome needs the ratio the canvas is
+      // actually drawing at — which the viewport owns and changes on a resize.
+      if (sky !== null) sky.material.pixelScale = viewport.pixelRatio;
+      sky?.update(game.player.position, light);
       water.update(game.player.position);
-      clouds.update(game.player.position, time / 1000);
+      layer?.update(game.player.position, light);
       if (game.underwater !== underwater()) setUnderwater(game.underwater);
       viewport.render();
 
@@ -393,8 +532,11 @@ export default function App() {
       stopLock();
       stopSuspension();
       detachInput();
+      sky?.dispose();
       water.dispose();
-      clouds.dispose();
+      cloudsDisposed = true;
+      cloudBake.dispose();
+      layer?.dispose();
       session.dispose();
       viewport.dispose();
     };
@@ -498,6 +640,11 @@ export default function App() {
               ? "default (full within 1 chunk, coarse within 2)"
               : describeBands(bands() as LodBands)}
           </div>
+          <Show when={isGame()}>
+            <div class={styles.row}>
+              clouds: {describeCloudStatus(cloudStatus())}
+            </div>
+          </Show>
 
           <Show when={spikeCounts()}>
             {(counts) => (

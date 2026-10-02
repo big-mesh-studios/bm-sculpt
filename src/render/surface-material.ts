@@ -11,11 +11,18 @@
  *      read straight out of the vertex rather than sampled from a palette.
  *   3. A `sampler3D` binding a volume and addressing it in world space.
  *
- * Lighting is a three-point rig — ambient plus key, fill and rim — which is the
- * arrangement the application this replaces used, kept here so the spike looks
- * like the thing it is standing in for. It costs four uniforms and about ten
- * lines, and swapping it for something better later touches nothing else in the
- * file.
+ * Lighting was a three-point rig — ambient plus key, fill and rim — kept here so the
+ * spike would look like the thing it is standing in for. It is now the sun and the moon
+ * and an ambient, read from the day-night cycle: one directional term each, and the hour
+ * carried entirely in their colours. A rig is a rig, and a three-point one has no sun in
+ * it to move, so a day-night cycle over a fixed key direction is a sky that changes over
+ * a world whose shadows do not.
+ *
+ * Fog arrived with it, for a related reason. The chunk window ends four chunks out —
+ * 1280 world units — while the far plane is a hundred thousand, so the terrain's edge is
+ * a line across the horizon at a distance the eye resolves easily. `fog.ts` closes that
+ * gap, and its far distance is the window's radius rather than a number chosen to look
+ * right, because that is not an art decision.
  *
  * There is no raw GLSL escape hatch in this library. Every line below is a node
  * graph that compiles to GLSL ES 3.00, and `compileGLSL` is the way to see what
@@ -31,6 +38,9 @@ import {
   Scene,
   Side,
 } from "@random-mesh/rmsl/scene";
+
+import { Fog } from "./fog";
+import { SkyLight } from "./sky-light";
 
 /**
  * Unfolds an octahedral point of [-1, 1]² back to the unit vector that folds
@@ -77,27 +87,25 @@ export class SurfaceMaterial extends NodeMaterial {
    */
   volumeWorldSize = 1200;
 
-  keyDirection: [number, number, number] = [0.4, 0.8, 0.45];
-  fillDirection: [number, number, number] = [-0.7, 0.1, 0.4];
-  rimDirection: [number, number, number] = [0.1, -0.6, -0.75];
-  /** What a surface receives whatever way it is turned. */
-  ambient: [number, number, number] = [0.18, 0.19, 0.22];
-  keyColour: [number, number, number] = [1.0, 0.97, 0.9];
-  fillColour: [number, number, number] = [0.42, 0.5, 0.62];
-  rimColour: [number, number, number] = [0.3, 0.36, 0.5];
+  /**
+   * The day this surface is lit by, and what it fades into at distance.
+   *
+   * Two objects rather than a dozen fields, because that is what they are: the six
+   * bindings the whole sky shares, and the one colour everything fades towards.
+   * Assigning `material.sky.lighting` once a frame is the entire per-frame lighting work
+   * for every surface in the world.
+   */
+  readonly sky = new SkyLight();
+
+  /** The fog. Its colour is normally the sky's horizon colour. */
+  readonly fog = new Fog();
+
   /** How much the volume's red channel darkens what it does not cover. */
   volumeStrength = 0.75;
 
   private volumeSampler?: UniformNode<"sampler3D">;
   private volumeScaleUniform?: UniformNode<"float">;
   private volumeStrengthUniform?: UniformNode<"float">;
-  private keyUniform?: UniformNode<"vec3">;
-  private fillUniform?: UniformNode<"vec3">;
-  private rimUniform?: UniformNode<"vec3">;
-  private ambientUniform?: UniformNode<"vec3">;
-  private keyColourUniform?: UniformNode<"vec3">;
-  private fillColourUniform?: UniformNode<"vec3">;
-  private rimColourUniform?: UniformNode<"vec3">;
 
   constructor() {
     super();
@@ -113,35 +121,8 @@ export class SurfaceMaterial extends NodeMaterial {
     // builder never sees is one the compiler will not emit.
     void b.varying("vColour", "vec4");
 
-    this.keyUniform = b.materialUniform("uKeyDirection", "vec3", () =>
-      normalizeTuple(this.keyDirection),
-    );
-    this.fillUniform = b.materialUniform("uFillDirection", "vec3", () =>
-      normalizeTuple(this.fillDirection),
-    );
-    this.rimUniform = b.materialUniform("uRimDirection", "vec3", () =>
-      normalizeTuple(this.rimDirection),
-    );
-    this.ambientUniform = b.materialUniform(
-      "uAmbient",
-      "vec3",
-      () => this.ambient,
-    );
-    this.keyColourUniform = b.materialUniform(
-      "uKeyColour",
-      "vec3",
-      () => this.keyColour,
-    );
-    this.fillColourUniform = b.materialUniform(
-      "uFillColour",
-      "vec3",
-      () => this.fillColour,
-    );
-    this.rimColourUniform = b.materialUniform(
-      "uRimColour",
-      "vec3",
-      () => this.rimColour,
-    );
+    this.sky.declare(b);
+    this.fog.declare(b);
     this.volumeScaleUniform = b.materialUniform(
       "uVolumeScale",
       "float",
@@ -209,24 +190,23 @@ export class SurfaceMaterial extends NodeMaterial {
       albedo.mulAssign(darken);
     }
 
-    const key = normal.dot(this.keyUniform!).max(float(0));
-    const fill = normal.dot(this.fillUniform!).max(float(0));
-    // The rim term is measured against the opposite of the direction it comes
-    // from, so a surface facing away from it is the one that lights up.
-    const rim = normal.dot(this.rimUniform!).max(float(0)).pow(2);
+    // Sun, moon, flat ambient. Nothing else, and that is the point: one directional
+    // term per light is all a Lambertian surface needs, and the hour lives in the
+    // colours rather than in an intensity curve — the sun's light is near white at noon
+    // and a fifth of that at midnight, which is the whole of the day/night range in one
+    // number.
+    //
+    // No rim and no fill. Both were there to make a still frame read well under a fixed
+    // key light; under a moving sun they are a second opinion about where the light is,
+    // and a wrong one.
+    const lighting = this.sky.ambient
+      .add(this.sky.sunLight.mul(this.sky.sunOn(normal)))
+      .add(this.sky.moonLight.mul(this.sky.moonOn(normal)));
 
-    const lit = this.ambientUniform!.add(this.keyColourUniform!.mul(key))
-      .add(this.fillColourUniform!.mul(fill))
-      .add(this.rimColourUniform!.mul(rim));
+    const shaded = albedo.mul(lighting).clamp(vec3(0, 0, 0), vec3(1, 1, 1));
 
-    return vec4(albedo.mul(lit).clamp(vec3(0, 0, 0), vec3(1, 1, 1)), float(1));
+    // Fog last, after the lighting and the volume, because it is what the air between
+    // the surface and the eye does to it rather than anything the surface is.
+    return vec4(this.fog.apply(b, shaded), float(1));
   }
 }
-
-/** A direction tuple as the unit vector the shader wants it in. */
-const normalizeTuple = (
-  d: readonly [number, number, number],
-): [number, number, number] => {
-  const length = Math.hypot(d[0], d[1], d[2]) || 1;
-  return [d[0] / length, d[1] / length, d[2] / length];
-};

@@ -49,10 +49,10 @@ bytes — roughly a hundredth of a degree of error rather than four tenths.
 
 **Does a 3D sampler bind?** There is no `Data3DTexture`; a volume is a
 `DataTexture` with a depth, bound through `b.sampler(name, "sampler3D", …)`.
-[`spike-material.test.ts`](src/render/spike-material.test.ts) compiles the
+[`surface-material.test.ts`](src/render/surface-material.test.ts) compiles the
 material on the host and asserts `sampler3D` appears in the emitted GLSL and in
-the program's binding list — the text being the only place the difference between
-a `sampler3D` and a `sampler2D` on the same bytes is visible.
+the program's binding list — the text being the only place the difference between a
+`sampler3D` and a `sampler2D` on the same bytes is visible.
 
 **What precision does this device have?** `highp` is mandatory in the vertex stage
 and optional in the fragment stage, and an unsupported qualifier is dropped
@@ -107,23 +107,115 @@ all of which are JSX-free, run without a compiler at all.
 The architecture decisions, each with its costs and its rejected alternatives,
 are in [`docs/adr/`](docs/adr/README.md):
 
-|                                                                 |                                                       |
-| --------------------------------------------------------------- | ----------------------------------------------------- |
-| [0001](docs/adr/0001-rmsl-over-three.md)                        | Render with rmsl, not three.js                        |
-| [0002](docs/adr/0002-computed-field-never-stored.md)            | The field is computed, never stored                   |
-| [0003](docs/adr/0003-surface-nets.md)                           | Surface Nets per chunk, not marching cubes            |
-| [0004](docs/adr/0004-csg-per-chunk.md)                          | Each chunk evaluates the operations at its own LOD    |
-| [0005](docs/adr/0005-streaming-shape.md)                        | Slot-indexed arrays and a coordinate map              |
-| [0006](docs/adr/0006-field-saturation.md)                       | The field saturates at a fixed distance               |
-| [0007](docs/adr/0007-window-presence-and-lod-reset.md)          | Invalidating a slot invalidates what a query may read |
-| [0008](docs/adr/0008-worker-pool-and-generations.md)            | One chunk per worker, and a generation per request    |
-| [0009](docs/adr/0009-picking-and-history.md)                    | Edits land where the field says, and are undoable     |
-| [0010](docs/adr/0010-suspend-the-pointer-lock-not-the-input.md) | Suspend the pointer lock, not the input               |
+|                                                                      |                                                       |
+| -------------------------------------------------------------------- | ----------------------------------------------------- |
+| [0001](docs/adr/0001-rmsl-over-three.md)                             | Render with rmsl, not three.js                        |
+| [0002](docs/adr/0002-computed-field-never-stored.md)                 | The field is computed, never stored                   |
+| [0003](docs/adr/0003-surface-nets.md)                                | Surface Nets per chunk, not marching cubes            |
+| [0004](docs/adr/0004-csg-per-chunk.md)                               | Each chunk evaluates the operations at its own LOD    |
+| [0005](docs/adr/0005-streaming-shape.md)                             | Slot-indexed arrays and a coordinate map              |
+| [0006](docs/adr/0006-field-saturation.md)                            | The field saturates at a fixed distance               |
+| [0007](docs/adr/0007-window-presence-and-lod-reset.md)               | Invalidating a slot invalidates what a query may read |
+| [0008](docs/adr/0008-worker-pool-and-generations.md)                 | One chunk per worker, and a generation per request    |
+| [0009](docs/adr/0009-picking-and-history.md)                         | Edits land where the field says, and are undoable     |
+| [0010](docs/adr/0010-suspend-the-pointer-lock-not-the-input.md)      | Suspend the pointer lock, not the input               |
+| [0011](docs/adr/0011-the-sun-is-placed-by-a-solar-model.md)          | The sun is placed by a solar model, not a drawn curve |
+| [0012](docs/adr/0012-the-cloud-layer-is-a-raymarched-slab.md)        | The cloud layer is a raymarched slab with a carrier   |
+| [0013](docs/adr/0013-fog-is-exponential-and-closes-at-the-window.md) | Fog is exponential and closes at the window           |
+| [0014](docs/adr/0014-the-sky-dome-is-drawn-first.md)                 | The sky dome is drawn first and ignores depth         |
 
 Phases 1 to 8, in order, are in the project plan. Phases 0 to 5 are the sculpting
 application and are independently shippable; 6 to 8 are an infinite streaming
 world, and because the field is never stored they add no changes to the CSG or the
 mesher — only a `baseField` binding and a camera.
+
+## The sky
+
+The game scene has a sky, and it changes over a twenty-minute cycle. It is four
+pieces that share one parameter and cannot disagree about what hour it is.
+
+|                  |                                                                                                                            |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `sky.ts`         | A dome: a horizon-to-zenith gradient, a hashed starfield, and the sun and moon as soft discs with their glow.              |
+| `day-night.ts`   | Where the sun is and what colour the light is — pure arithmetic over one elapsed-seconds argument, no DOM and no renderer. |
+| `clouds.ts`      | A raymarched slab between 700 and 1400 units, sampling two baked fields at incommensurate periods.                         |
+| `cloud-field.ts` | The CPU bake: a 60³ shape volume and a 240² weather map, pure, and therefore baked in a worker.                            |
+| `fog.ts`         | An exponential that closes at four chunks, which is where the terrain stops.                                               |
+
+One `DayNightState` per frame is built in `app.tsx` and pushed into the sky, the
+clouds, the terrain, the water, the fog and the clear colour. **There is only one
+answer to the question of what hour it is**, and everything asks that one; a system
+that derived its own would be right on a different afternoon from its neighbour.
+
+The sun is placed by the standard solar-position solution for a fixed latitude and
+declination rather than by a drawn arc, and every phase boundary is a statement about
+the sun's elevation rather than a partition of the clock — so the sky cannot be painted
+dusk while the sun is twenty degrees up, which is the failure a drawn curve drifts
+into. [ADR 0011](docs/adr/0011-the-sun-is-placed-by-a-solar-model.md) has the reasoning
+and the phase durations the model actually produces.
+
+Press `/` and `/clock:` drives it:
+
+```
+/clock:day  /clock:sunset  /clock:night  /clock:sunrise   jump to the middle of that phase
+/clock:time <seconds>                                         pin the sky to a second
+/clock:speed <multiplier>                                     0 pauses, 1 is real time
+/clock:live                                                   release the pin
+/clock:state                                                  say where the clock is
+```
+
+The four jumps ask the solar model where the phase is rather than carrying their own
+seconds, so they keep meaning what they say if the latitude or the twilight threshold
+ever moves. The clock itself holds three numbers and no reference to anything that
+draws — `app.tsx` owns it and the materials, and writes the state into them.
+
+`/cloud:` is the other half of the console's sky, and it exists for the same reason: the
+clouds' two constants were reasoned about on paper and never looked at, and looking at
+one used to mean editing it and rebuilding.
+
+```
+/cloud:coverage [0..1]   /cloud:density [n]   /cloud:state
+```
+
+The header also says where the cloud field came from — `baked on the worker` or
+`baked on the main thread` — because the two routes produce identical bytes and a
+fallback would otherwise be invisible except as a stutter.
+
+Two numbers here are the sky's whole budget. The bake is about two and a half seconds
+of arithmetic at the production sizes, which is why it runs in a worker
+(`cloud-bake-worker.ts`) rather than on the frame loop, and the shader's worst case is
+896 texture fetches per pixel of sky. Neither can be measured on the host any other
+way — rmsl has no `renderer.info` and no render-scale plumbing — so
+`cloud-field.test.ts` holds the bake to a ceiling and `clouds.test.ts` derives the
+fetch count from the emitted GLSL and holds it to a budget. Two more tests in that file answer
+questions the others cannot. One transcribes the shader's coverage arithmetic over a real
+bake and asserts the **defaults** put visible cloud in the sky. The other asserts the
+**volume's vertical address** — that the layer's underside addresses zero in the shape
+volume and its top addresses one — which is the assertion whose absence let a layer that
+had never drawn a single cloud ship with a green suite.
+
+### Looking at it
+
+A dev-server page (`pnpm dev`, then `/sky-probe.html` — it is a diagnostic, so it is not
+in the production build). It stands the dome, and with `?clouds` the layer, up on their own, renders
+one frame, reads the framebuffer back and prints **how many pixels each one lit**. Stars
+at midnight should light a few thousand per megapixel at a mean brightness around 0.4; a
+frame with cloud in it should have a peak well above the sky's own.
+
+```
+/sky-probe.html?compile          does this device accept these shaders at all
+/sky-probe.html?t=900            midnight, when the stars are due
+/sky-probe.html?clouds          the layer as well
+/sky-probe.html?box             a red control cube — is anything drawing?
+```
+
+It is here because every fault the sky has had was invisible from a test process: a
+starfield whose stars were sub-pixel, a moon eight pixels wide, and a cloud layer whose
+vertical address was off by 699 units. Each compiled, each had green tests, and each was
+reported by someone looking at the screen. `?compile` is the one a _phone_ can answer and
+no test can — "too big to compile" is a failure mode particular to one GPU, and rmsl
+throws on it from inside the render loop, which looks exactly like a sky that drew
+nothing.
 
 ## The game and its console
 
