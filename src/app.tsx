@@ -52,6 +52,7 @@ import { createWater, SEA_LEVEL } from "./world/water";
 import { createClouds, type Clouds } from "./world/clouds";
 import { createZoneLines, type ZoneLines } from "./places/zones";
 import { PlaceHost } from "./places/host";
+import { MAX_DRAWN_LIGHTS } from "./render/point-lights";
 import { demoPlace } from "./places/demos";
 import { PLACE_MIME_TYPE, type PlaceSpawn } from "./places/place-file";
 import type { LoadedPlace } from "./places/load-place";
@@ -148,6 +149,7 @@ const describePlace = (id: string, host: PlaceHost): string => {
     id,
     `shapes   ${host.places.operationCount} of ${MAX_OPERATIONS_PER_PLACE}`,
     `zones    ${zones.length} of ${MAX_ZONES}`,
+    `lights   ${host.lightCount} (nearest ${Math.min(host.lightCount, MAX_DRAWN_LIGHTS)} drawn)`,
     `timers   ${host.pendingTimerCount}`,
     `events   ${host.events.length}`,
     `data     ${host.storedData.size}`,
@@ -792,6 +794,19 @@ export default function App() {
       // fades to and what the water reflects. One colour, set once, rather than three
       // places that each hold a copy and are each right on a different afternoon.
       host?.step();
+
+      // ---- The lights, once a frame ----
+      //
+      // **One call, one array, three materials.** The host picks the nearest `MAX_DRAWN_LIGHTS`
+      // to the player and the array is shared by reference, so this is a single sort rather than
+      // three — and the count is fixed, so a light appearing never rebuilds a shader (ADR 0023).
+      //
+      // The clouds and the sky are deliberately absent: a cloud is marched through rather than lit
+      // at a surface, and there is no surface at the top of the sky to light. ADR 0023 says why.
+      const lights =
+        host?.visibleLights(game.player.position, MAX_DRAWN_LIGHTS) ?? [];
+      material.lights.lights = lights;
+      water.material.lights.lights = lights;
 
       // A place that changes its zones mid-step has just redrawn the terrain by way of
       // `geometryChanged`, so the overlay is rebuilt after the step rather than before it —

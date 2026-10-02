@@ -40,6 +40,7 @@ import {
 } from "@random-mesh/rmsl/scene";
 
 import { Fog } from "./fog";
+import { PointLights, type PointLightBindings } from "./point-lights";
 import { SkyLight } from "./sky-light";
 
 /**
@@ -100,12 +101,23 @@ export class SurfaceMaterial extends NodeMaterial {
   /** The fog. Its colour is normally the sky's horizon colour. */
   readonly fog = new Fog();
 
+  /**
+   * The lights a place has made, as distinct from the sun.
+   *
+   * **Its own instance, like `sky`, and for the same reason** — `declare` writes the uniform
+   * nodes onto the instance, so two materials sharing one would have both reading whichever
+   * declared last. `app.tsx` assigns each material's list once a frame, and the lists are shared
+   * by reference so the per-frame work is one array rather than a fan-out of light data.
+   */
+  readonly lights = new PointLights();
+
   /** How much the volume's red channel darkens what it does not cover. */
   volumeStrength = 0.75;
 
   private volumeSampler?: UniformNode<"sampler3D">;
   private volumeScaleUniform?: UniformNode<"float">;
   private volumeStrengthUniform?: UniformNode<"float">;
+  private lightBindings?: PointLightBindings;
 
   constructor() {
     super();
@@ -123,6 +135,9 @@ export class SurfaceMaterial extends NodeMaterial {
 
     this.sky.declare(b);
     this.fog.declare(b);
+    // **Declared unconditionally, so a light appearing never rebuilds this program.** See the
+    // header of `point-lights.ts`: the slot count is fixed and unfilled slots read as dead.
+    this.lightBindings = this.lights.declare(b);
     this.volumeScaleUniform = b.materialUniform(
       "uVolumeScale",
       "float",
@@ -201,7 +216,12 @@ export class SurfaceMaterial extends NodeMaterial {
     // and a wrong one.
     const lighting = this.sky.ambient
       .add(this.sky.sunLight.mul(this.sky.sunOn(normal)))
-      .add(this.sky.moonLight.mul(this.sky.moonOn(normal)));
+      .add(this.sky.moonLight.mul(this.sky.moonOn(normal)))
+      // **Point lights last, and additively.** They are the only term here that is not one
+      // directional source, so they cannot be folded into the sun's colour without making the
+      // hour depend on where a place put its lanterns. Clamped with the rest, which is what stops
+      // a lantern's core from being anything but white.
+      .add(this.lightBindings!.contribution(b.positionWorld, normal));
 
     const shaded = albedo.mul(lighting).clamp(vec3(0, 0, 0), vec3(1, 1, 1));
 

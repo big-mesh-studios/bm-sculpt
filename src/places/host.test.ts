@@ -8,6 +8,7 @@ import {
   type RayHit,
 } from "./host";
 import { PlaceRegistry } from "./place-registry";
+import { MAX_LIGHTS } from "./limits";
 import { SculptDocument } from "../edit/document";
 import { FoldOrder } from "../edit/fold-order";
 import { GameWorld } from "../world/game-world";
@@ -930,5 +931,269 @@ describe("the clock a place sets", () => {
     expect(asked).toEqual(["clock:300", "clock-speed:1"]);
     // And the value a place gets is the cycle's own length, not a number this host invented.
     expect(CYCLE_SECONDS).toBe(1200);
+  });
+});
+
+/**
+ * The lights a place makes.
+ *
+ * **What is worth testing is not that a light exists** — that is the effect table's job, and
+ * `effects.test.ts` refuses a malformed one. It is the three things this host adds on top:
+ *
+ * 1. **The colour conversion happens once, here, at the boundary.** A place speaks 0…255 and the
+ *    renderer speaks 0…1; if that conversion lived in a per-draw thunk it would be paid for every
+ *    chunk of the world, every frame.
+ * 2. **Nearest-N selection is deterministic**, which is the whole of ADR 0016 applied to a list
+ *    that has to agree between two machines.
+ * 3. **`MAX_LIGHTS` is enforced**, which is the only reference the constant has and therefore the
+ *    only place it can be shown to bite.
+ */
+describe("lights", () => {
+  /** A place that makes one light and reports what the host holds. */
+  const lamp = async (
+    at: readonly [number, number, number],
+    over: Record<string, unknown> = {},
+  ) =>
+    start({
+      "main.ts": `
+        import { createLight, onTick } from "voxelscape";
+        createLight({
+          id: "lamp",
+          at: [${at[0]}, ${at[1]}, ${at[2]}],
+          colour: { r: 255, g: 128, b: 0 },
+          radius: 40,
+          intensity: 1,
+          ...${JSON.stringify(over)},
+        });
+        onTick(() => {});
+      `,
+    });
+
+  it("keeps what a place asked for", async () => {
+    const { host } = await lamp([10, 20, 30]);
+    const [only] = host.visibleLights(undefined, 8);
+    expect(only).toEqual({
+      id: "lamp",
+      at: { x: 10, y: 20, z: 30 },
+      colour: [1, 128 / 255, 0],
+      radius: 40,
+      intensity: 1,
+    });
+    host.dispose();
+  });
+
+  it("converts the colour to the renderer's 0 to 1, once", async () => {
+    // **The boundary, checked at both ends.** 255 becomes exactly 1, and 128 becomes what 128/255
+    // is rather than being clamped or truncated. A host that passed the bytes through would make
+    // every light nine times too bright and clamp to white immediately.
+    const { host } = await lamp([0, 0, 0]);
+    const [only] = host.visibleLights(undefined, 8);
+    expect(only!.colour[0]).toBe(1);
+    expect(only!.colour[1]).toBeCloseTo(128 / 255, 6);
+    expect(only!.colour[2]).toBe(0);
+    host.dispose();
+  });
+
+  it("refuses a second light with the same id", async () => {
+    const { host, notices } = await start({
+      "main.ts": `
+        import { createLight, onTick } from "voxelscape";
+        const one = (n) => createLight({ id: n, at: [0,0,0], colour: {r:1,g:1,b:1}, radius: 10, intensity: 1 });
+        one("lamp"); one("lamp");
+        onTick(() => {});
+      `,
+    });
+    // **One taken id is a refusal, not a replacement** — the same rule shapes and zones follow, and
+    // for the same reason: silently replacing would let a script's second frame undo its first.
+    expect(notices.join("\n")).toMatch(/exists/);
+    expect(host.lightCount).toBe(1);
+    host.dispose();
+  });
+
+  it("removes a light by id, and taking it away takes it out of the drawn set", async () => {
+    const { host } = await start({
+      "main.ts": `
+        import { createLight, removeLight, onTick } from "voxelscape";
+        createLight({ id: "a", at: [0,0,0], colour: {r:255,g:255,b:255}, radius: 10, intensity: 1 });
+        removeLight("a");
+        createLight({ id: "b", at: [5,0,0], colour: {r:255,g:255,b:255}, radius: 10, intensity: 1 });
+        onTick(() => {});
+      `,
+    });
+    expect(host.visibleLights(undefined, 8).map((light) => light.id)).toEqual([
+      "b",
+    ]);
+    host.dispose();
+  });
+
+  it("removing a light that is not there does nothing at all", async () => {
+    const { host, notices } = await start({
+      "main.ts": `
+        import { removeLight, onTick } from "voxelscape";
+        removeLight("never-existed");
+        onTick(() => {});
+      `,
+    });
+    // **Not a refusal.** Removing something absent is what a handler does when it runs twice, and
+    // zones behave the same way; a script that cleans up must not have to track whether it did.
+    expect(notices).toEqual([]);
+    expect(host.lightCount).toBe(0);
+    host.dispose();
+  });
+
+  it("gives back the nearest lights, in order", async () => {
+    const { host } = await start({
+      "main.ts": `
+        import { createLight, onTick } from "voxelscape";
+        const at = (id, x) => createLight({ id, at: [x,0,0], colour: {r:255,g:255,b:255}, radius: 10, intensity: 1 });
+        at("far", 900); at("near", 10); at("middle", 100);
+        onTick(() => {});
+      `,
+    });
+    // **Nearest first, from the player.** A renderer draws them in this order, so the ones the
+    // player can actually see are the ones that survive the cap.
+    const from = { x: 0, y: 0, z: 0 };
+    expect(host.visibleLights(from, 8).map((light) => light.id)).toEqual([
+      "near",
+      "middle",
+      "far",
+    ]);
+    host.dispose();
+  });
+
+  it("drops the farthest when there are more than fit", async () => {
+    const { host } = await start({
+      "main.ts": `
+        import { createLight, onTick } from "voxelscape";
+        for (let i = 0; i < 12; i++) {
+          createLight({ id: "l" + i, at: [i * 10, 0, 0], colour: {r:255,g:255,b:255}, radius: 5, intensity: 1 });
+        }
+        onTick(() => {});
+      `,
+    });
+    const drawn = host.visibleLights({ x: 0, y: 0, z: 0 }, 8);
+    expect(drawn).toHaveLength(8);
+    // **The eight nearest, and specifically `l7` rather than `l11`** — a selection by insertion
+    // order would keep the first eight and drop the ones in front of the player.
+    expect(drawn.map((light) => light.id)).toEqual([
+      "l0",
+      "l1",
+      "l2",
+      "l3",
+      "l4",
+      "l5",
+      "l6",
+      "l7",
+    ]);
+    host.dispose();
+  });
+
+  it("breaks a tie by id, so two peers draw the same lights", async () => {
+    // **The determinism rule, and the reason the tie-break exists.** Two lights at exactly equal
+    // distance from the player have no geometric order, so `Map` insertion order would decide —
+    // which is the order two scripts happened to run in, and therefore a divergence waiting to
+    // happen (ADR 0016). Adding them in the opposite order on the second host is what makes the
+    // test able to fail.
+    const source = (ids: readonly string[]) => ({
+      "main.ts": `
+        import { createLight, onTick } from "voxelscape";
+        ${ids
+          .map(
+            (id) =>
+              `createLight({ id: "${id}", at: [5,0,0], colour: {r:255,g:255,b:255}, radius: 10, intensity: 1 });`,
+          )
+          .join("\n")}
+        onTick(() => {});
+      `,
+    });
+
+    const forwards = await start(source(["a", "b"]));
+    const backwards = await start(source(["b", "a"]));
+    const from = { x: 0, y: 0, z: 0 };
+    expect(forwards.host.visibleLights(from, 8).map((l) => l.id)).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(backwards.host.visibleLights(from, 8).map((l) => l.id)).toEqual([
+      "a",
+      "b",
+    ]);
+    forwards.host.dispose();
+    backwards.host.dispose();
+  });
+
+  it("measures distance to the player, not to the origin", async () => {
+    // **Two lights a long way apart, and a player who is not at the origin.** Sorted from the
+    // origin, the nearer-to-origin light always wins; from where the player actually is, the other
+    // one does. That difference is the whole test.
+    const { host } = await start({
+      "main.ts": `
+        import { createLight, onTick } from "voxelscape";
+        const at = (id, x) => createLight({ id, at: [x,0,0], colour: {r:255,g:255,b:255}, radius: 10, intensity: 1 });
+        at("near-origin", 10); at("near-player", 1010);
+        onTick(() => {});
+      `,
+    });
+
+    // At the origin, the light ten units away is the one to draw.
+    expect(
+      host.visibleLights({ x: 0, y: 0, z: 0 }, 1).map((l) => l.id),
+    ).toEqual(["near-origin"]);
+
+    // A kilometre along, the same world draws the other one: ten units ahead of the player, and
+    // a kilometre behind them is the other. A host sorting from the origin would fail here.
+    expect(
+      host.visibleLights({ x: 1000, y: 0, z: 0 }, 1).map((l) => l.id),
+    ).toEqual(["near-player"]);
+    host.dispose();
+  });
+
+  it("draws nothing when there is no place loaded", async () => {
+    const { host } = await lamp([0, 0, 0]);
+    host.dispose();
+    expect(host.visibleLights({ x: 0, y: 0, z: 0 }, 8)).toEqual([]);
+  });
+
+  it("takes them all away when it is disposed", async () => {
+    // **Unload is `dispose`, and a light that outlived its place would light a world nothing
+    // built.** The memory leak is small; the lit world that should not be is not.
+    const { host } = await lamp([0, 0, 0]);
+    expect(host.lightCount).toBe(1);
+    host.dispose();
+    expect(host.lightCount).toBe(0);
+  });
+
+  it("refuses a light past MAX_LIGHTS, and says which place has too many", async () => {
+    // **The only reference `MAX_LIGHTS` has**, and therefore the only place it can be shown to
+    // bite. A cap nothing refuses is a cap that reads as safety and is not.
+    const { host, notices } = await start({
+      "main.ts": `
+        import { createLight, onTick } from "voxelscape";
+        for (let i = 0; i <= ${MAX_LIGHTS}; i++) {
+          createLight({ id: "l" + i, at: [0,0,0], colour: {r:255,g:255,b:255}, radius: 5, intensity: 1 });
+        }
+        onTick(() => {});
+      `,
+    });
+    expect(host.lightCount).toBe(MAX_LIGHTS);
+    expect(notices.join("\n")).toContain(`world may hold ${MAX_LIGHTS} lights`);
+    host.dispose();
+  });
+
+  it("accepts a light with no radius, which is how a light is turned off", async () => {
+    // **The property that makes `light-add` with `radius: 0` equivalent to `light-remove`.** It is
+    // how a place dims a lamp without giving up its id, and it works because the renderer's window
+    // is zero at radius zero.
+    const { host, notices } = await start({
+      "main.ts": `
+        import { createLight, onTick } from "voxelscape";
+        createLight({ id: "lamp", at: [0,0,0], colour: {r:255,g:255,b:255}, radius: 0, intensity: 1 });
+        onTick(() => {});
+      `,
+    });
+    expect(notices).toEqual([]);
+    const [only] = host.visibleLights(undefined, 8);
+    expect(only!.radius).toBe(0);
+    host.dispose();
   });
 });

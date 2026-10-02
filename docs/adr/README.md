@@ -138,5 +138,28 @@ test that exists to say a limit is not decorative.
 `jszip` is dynamically imported: `dist/assets/load-place-*.js` is 29 kB gzipped, `pako` appears in
 it and nowhere else, and no session that never opens a place pays for a zip reader.
 
+**0023 closed the last gap in v1's vocabulary, and its tests are the point of the record.** Lights
+were the one thing a place could not make, so a lantern was a coloured box that appeared and stayed.
+Three things are worth carrying forward:
+
+1. **The measurement changed the design, not just the test.** Raw inverse-square means a lantern ten
+   units away contributes `0.01`, and the first test — asserting `toBeGreaterThan(0.5)` — failed.
+   The fix was to scale the falloff by the radius (`r²/d²`), so a place author tunes one number and
+   can predict what it did. A compile-and-shape assertion would have passed throughout.
+2. **Six of my own test premises were wrong and the shader was right each time.** A light level with
+   a surface contributes nothing under a Lambert term; a light overhead contributes nothing to a
+   vertical wall; a fragment at a lamp's centre has no direction. A test that needs correcting
+   towards the physics seven times was measuring something other than what it claimed.
+3. **Three assertions are bounds rather than equalities**, because the correct answer is 4.015 rather
+   than 4: doubling a light's radius _quadruples_ it, but the window is marginally more open at the
+   larger radius. Asserting equality would fail on a correct shader.
+
+Two consequences are recorded rather than hidden. The clouds and the sky deliberately do **not**
+receive lights — a cloud is marched through rather than lit at a surface, and the sky has no surface.
+And **three tests in the suite are wall-clock and fail under load**: the interpreter's 250 ms step
+budget is what makes `demos.test.ts` flaky at load 20. They were seen failing and passing on one
+commit across a session. If they become a nuisance the answer is a budget in interpreter steps, not a
+larger number.
+
 The phases themselves are in the repository history, one commit per phase, each verified
 before the next began.

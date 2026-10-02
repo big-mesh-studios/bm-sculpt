@@ -40,6 +40,7 @@ import {
   CAUSE_LIMIT,
   COMBINES,
   DATA_LIMITS,
+  LIGHT_LIMITS,
   OPACITY_LIMIT,
   PLAYER_LIMITS,
   SOFTNESS_LIMIT,
@@ -68,6 +69,11 @@ export const EFFECT_TAGS = [
   // Triggers. A world-building place needs volumes that report the player entering them.
   "zone-add",
   "zone-remove",
+  // Light. The first effect that is not geometry and not text — it changes how the world is lit
+  // rather than what is in it, which is why it is a separate pair rather than a shape with a
+  // colour on it.
+  "light-add",
+  "light-remove",
   // The clock. `world/day-night-controller.ts` already has the methods these call.
   "clock-set",
   "clock-speed",
@@ -211,6 +217,51 @@ export const EFFECTS: Readonly<Record<EffectTag, EffectSpec>> = {
   "zone-remove": {
     tag: "zone-remove",
     about: "Removes a zone by id.",
+    fields: [nameField("id")],
+  },
+
+  "light-add": {
+    tag: "light-add",
+    about:
+      "Puts a light somewhere. Intensity is how bright it is at the edge of its own " +
+      "radius, so reach and brightness are one number to tune rather than two to " +
+      "reconcile with the distance to whatever it lands on.",
+    fields: [
+      nameField("id"),
+      {
+        name: "at",
+        kind: "vec3",
+        required: true,
+        about: "where the light is, in world units",
+      },
+      {
+        name: "colour",
+        kind: "colour",
+        required: true,
+        about: "its colour, each channel 0 to 255",
+      },
+      {
+        name: "radius",
+        kind: "number",
+        min: 0,
+        max: LIGHT_LIMITS.radius,
+        required: true,
+        about: `how far it reaches, at most ${LIGHT_LIMITS.radius} units`,
+      },
+      {
+        name: "intensity",
+        kind: "number",
+        min: 0,
+        max: LIGHT_LIMITS.intensity,
+        required: true,
+        about: `how bright, up to ${LIGHT_LIMITS.intensity}`,
+      },
+    ],
+  },
+
+  "light-remove": {
+    tag: "light-remove",
+    about: "Removes a light by id.",
     fields: [nameField("id")],
   },
 
@@ -536,6 +587,8 @@ export type ParsedEffect =
   | { readonly tag: "place-clear"; readonly payload: PlaceOnly }
   | { readonly tag: "zone-add"; readonly payload: ZoneAdd }
   | { readonly tag: "zone-remove"; readonly payload: IdOnly }
+  | { readonly tag: "light-add"; readonly payload: LightAdd }
+  | { readonly tag: "light-remove"; readonly payload: IdOnly }
   | { readonly tag: "clock-set"; readonly payload: ClockSet }
   | { readonly tag: "clock-speed"; readonly payload: ClockSpeed }
   | { readonly tag: "player-place"; readonly payload: PlayerPlace }
@@ -582,6 +635,27 @@ export interface ShapeAdd {
   };
   readonly opacity?: number;
 }
+/**
+ * `light-add`.
+ *
+ * **Intensity means "bright at the edge of my own radius"**, and that is worth saying in the type
+ * as well as in the rule: it is the one field whose units are not their name. A caller who reads
+ * `intensity: 1` as "one unit of candela" would get a light a hundred times too dim and no
+ * explanation. The reasoning is in `render/point-lights.ts`.
+ */
+export interface LightAdd {
+  readonly id: string;
+  readonly at: readonly [number, number, number];
+  /** Each channel 0 to 255, as everywhere else a place speaks of colour. */
+  readonly colour: {
+    readonly r: number;
+    readonly g: number;
+    readonly b: number;
+  };
+  readonly radius: number;
+  readonly intensity: number;
+}
+
 /** `zone-add`. */
 export interface ZoneAdd {
   readonly id: string;
@@ -659,6 +733,7 @@ export interface DataDelete {
 export const EFFECT_LIMITS = {
   data: DATA_LIMITS,
   zones: ZONE_LIMITS,
+  lights: LIGHT_LIMITS,
   timers: TIMER_LIMITS,
   players: PLAYER_LIMITS,
   cause: CAUSE_LIMIT,

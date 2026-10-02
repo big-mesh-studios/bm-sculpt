@@ -52,6 +52,9 @@ import {
   MAX_TIMER_MS,
   MAX_ZONE_NAME_LENGTH,
   MAX_ZONE_SIZE,
+  MAX_LIGHT_INTENSITY,
+  MAX_LIGHT_RADIUS,
+  MAX_LIGHTS,
   MAX_ZONES,
   MIN_SHAPE_SIZE,
 } from "./limits";
@@ -450,6 +453,13 @@ export const ZONE_LIMITS = {
   count: MAX_ZONES,
   name: MAX_ZONE_NAME_LENGTH,
   size: MAX_ZONE_SIZE,
+} as const;
+
+/** Re-exported for the same reason. */
+export const LIGHT_LIMITS = {
+  count: MAX_LIGHTS,
+  radius: MAX_LIGHT_RADIUS,
+  intensity: MAX_LIGHT_INTENSITY,
 } as const;
 /** Re-exported for the same reason. */
 export const TIMER_LIMITS = {

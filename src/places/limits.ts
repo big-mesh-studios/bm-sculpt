@@ -161,6 +161,41 @@ export const MAX_PENDING_TIMERS = 10_000;
 export const MAX_ZONES = 256;
 
 /**
+ * How many lights may exist at once, across every place.
+ *
+ * **Far more than are drawn.** `MAX_DRAWN_LIGHTS` in `render/point-lights.ts` is eight, and this
+ * is 256 — so a place may keep a far larger set than any frame can show and the host picks the
+ * nearest few. The gap is deliberate and it is the same reasoning as `MAX_ZONES`: the cost of a
+ * light nobody can see is a sort, while the cost of a limit low enough to need no selection
+ * would be a place that cannot light a corridor and a courtyard at once.
+ *
+ * A cap on the *held* count rather than on lights ever created, for the same reason as
+ * `MAX_PENDING_TIMERS`: only the ones currently existing cost anything.
+ */
+export const MAX_LIGHTS = 256;
+
+/**
+ * How far one light may reach, in world units.
+ *
+ * **A hundred thousand, which is the far plane.** A light reaching further than anything can be
+ * drawn is a light that costs a term in every fragment of the world and reaches no fragment that
+ * is not already past the fog. The same bound as `MAX_ZONE_SIZE`'s cousin `MAX_COORDINATE`, and
+ * chosen so that "a light that covers everything" is expressible without being unbounded.
+ */
+export const MAX_LIGHT_RADIUS = 1e5;
+
+/**
+ * How bright one light may be.
+ *
+ * **Ten, which is about three stops above unity.** Intensity is a multiplier on a falloff already
+ * normalised to the light's own radius (`render/point-lights.ts`), so one is a bright light and
+ * the useful range is small. Ten exists so a place can make a bonfire rather than being told its
+ * fire is exactly as bright as its candle — and no more, because a term that brightens a surface
+ * past one stops being a light and becomes a hole in the image.
+ */
+export const MAX_LIGHT_INTENSITY = 10;
+
+/**
  * The largest a zone's box may be on any axis, in world units.
  *
  * A zone is meant to be a doorway or a platform — tens of units — so this is generous by

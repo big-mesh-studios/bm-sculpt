@@ -27,6 +27,7 @@ import {
 import { DEFAULT_TERRAIN } from "../csg";
 import type { Vec3 } from "../constants";
 import { Fog } from "../render/fog";
+import { PointLights, type PointLightBindings } from "../render/point-lights";
 import { SkyLight } from "../render/sky-light";
 
 /** The world y water settles at — the terrain's own zero, so half the land is dry. */
@@ -46,6 +47,12 @@ const WATER_SNAP = 100;
  * hardcoded — the sky was a literal blue duplicated from the viewport's clear colour,
  * which is the kind of duplication that survives until the clear colour changes at dusk
  * and the sea does not.
+ *
+ * It takes a place's lights, because the sea is a surface a person looks at: a lantern on
+ * the shore with no reflection in the water in front of it is the most obviously wrong
+ * thing a lit world can do. The clouds and the sky deliberately do **not**, and the reasons
+ * are in ADR 0023 — the short version being that a cloud is marched through rather than
+ * lit at a surface, and the sky has no surface at all.
  */
 class WaterMaterial extends NodeMaterial {
   /** The day this reflects, and what it fades into at distance. */
@@ -53,6 +60,11 @@ class WaterMaterial extends NodeMaterial {
 
   /** The fog. Its colour is the sky's horizon colour, which is what it reflects too. */
   readonly fog = new Fog();
+
+  /** The lights a place has made. Its own instance, like `sky` — see `render/point-lights.ts`. */
+  readonly lights = new PointLights();
+
+  private lightBindings?: PointLightBindings;
 
   constructor() {
     super();
@@ -68,6 +80,7 @@ class WaterMaterial extends NodeMaterial {
   protected override setup(b: Builder, _scene: Scene): void {
     this.sky.declare(b);
     this.fog.declare(b);
+    this.lightBindings = this.lights.declare(b);
   }
 
   protected override buildFragmentBody(b: Builder): Node<"vec4"> {
@@ -79,7 +92,13 @@ class WaterMaterial extends NodeMaterial {
       float(0.95).mul(float(1).sub(facing).pow(float(3))),
     );
     const deep = vec3(0.05, 0.22, 0.4);
-    const rgb = deep.mix(this.sky.skyColour, fresnel);
+    const rgb = deep
+      .mix(this.sky.skyColour, fresnel)
+      // **The water's own colour, lifted by the light falling on it.** Before the fog and after
+      // the Fresnel mix, so a lantern at the waterline brightens the water rather than the
+      // reflection of the sky — and the normal passed is the surface's own, so a wave facing away
+      // from the lantern does not pick it up.
+      .add(this.lightBindings!.contribution(b.positionWorld, normal));
 
     // Fogged, and the fog colour is the same sky it reflects — so the plane's far edge
     // and the sky behind it are the same colour and the sea has no edge. The plane runs

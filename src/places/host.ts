@@ -66,7 +66,13 @@ import {
   PlaceRegistry,
   type PlaceHandle,
 } from "./place-registry";
-import { MAX_DATA_KEYS, MAX_PENDING_TIMERS, MAX_ZONES } from "./limits";
+import {
+  MAX_CHANNEL,
+  MAX_DATA_KEYS,
+  MAX_LIGHTS,
+  MAX_PENDING_TIMERS,
+  MAX_ZONES,
+} from "./limits";
 import type { Operation, OperationShape } from "../csg";
 import type { Bounds } from "../edit/document";
 import type { Quat, Vec3 } from "../constants";
@@ -172,6 +178,23 @@ export interface HostEffects {
  */
 export type HostClock = ClockCommands;
 
+/**
+ * A light the host owns, as a renderer would read it.
+ *
+ * **Colour in 0…1, where the effect vocabulary says 0…255.** The conversion happens once, here at
+ * the boundary, so the renderer never has to know that a place speaks in bytes — and so a place
+ * that sends `255` and one that sends `1.0` cannot produce the same light by accident.
+ */
+export interface Light {
+  readonly id: string;
+  readonly at: Vec3;
+  readonly colour: readonly [number, number, number];
+  /** How far it reaches. Zero means it lights nothing. */
+  readonly radius: number;
+  /** How bright, at the edge of its own radius. Zero means it lights nothing. */
+  readonly intensity: number;
+}
+
 /** A zone the host owns, as a renderer would read it. */
 export interface Zone {
   readonly id: string;
@@ -221,6 +244,7 @@ export class PlaceHost {
   private interpreter: Interpreter | undefined;
   private readonly log = new EventLog();
   private readonly zones = new Map<string, Zone>();
+  private readonly lights = new Map<string, Light>();
   /** Zones the player is inside, so a move can tell an entry from a stay. */
   private inside = new Set<string>();
   private timers: PendingTimer[] = [];
@@ -256,6 +280,39 @@ export class PlaceHost {
   /** The zones, in the order they were added. */
   get zoneList(): readonly Zone[] {
     return [...this.zones.values()];
+  }
+
+  /**
+   * The lights a renderer should draw this frame, nearest first.
+   *
+   * **Nearest to the player, truncated to `MAX_DRAWN_LIGHTS`, and ties broken by id.** All three
+   * are about the same thing: two peers must draw the same lights, or the same world is lit
+   * differently on two machines (ADR 0016). Sorting by distance alone would leave a pair at
+   * exactly equal distances to be ordered by `Map` insertion — which is the order the scripts
+   * happened to run in, and is therefore a peer divergence waiting to happen.
+   *
+   * **A copy, sorted, every call.** The alternative is to keep the list sorted as lights are added
+   * and removed, which would need the player's position at mutation time — and the player moves.
+   * `MAX_LIGHTS` is 256 and the sort is by squared distance on plain numbers, so the whole thing
+   * is a few hundred comparisons once a frame.
+   */
+  visibleLights(from: Vec3 | undefined, max: number): readonly Light[] {
+    if (this.lights.size === 0) return [];
+    const at = (light: Light): number =>
+      from === undefined
+        ? 0
+        : (light.at.x - from.x) ** 2 +
+          (light.at.y - from.y) ** 2 +
+          (light.at.z - from.z) ** 2;
+
+    return [...this.lights.values()]
+      .sort((one, other) => at(one) - at(other) || (one.id < other.id ? -1 : 1))
+      .slice(0, Math.max(max, 0));
+  }
+
+  /** How many lights exist, for a readout. */
+  get lightCount(): number {
+    return this.lights.size;
   }
 
   /**
@@ -408,6 +465,7 @@ export class PlaceHost {
     this.interpreter?.dispose();
     this.interpreter = undefined;
     this.zones.clear();
+    this.lights.clear();
     this.inside.clear();
     this.timers = [];
   }
@@ -583,6 +641,35 @@ export class PlaceHost {
       case "zone-remove":
         this.zones.delete(name("id"));
         this.inside.delete(name("id"));
+        return;
+
+      case "light-add": {
+        if (this.lights.has(name("id"))) {
+          throw new Error(`a light called "${name("id")}" exists`);
+        }
+        if (this.lights.size >= MAX_LIGHTS) {
+          throw new Error(`a world may hold ${MAX_LIGHTS} lights at once`);
+        }
+        const at = payload["at"] as [number, number, number];
+        const colour = payload["colour"] as { r: number; g: number; b: number };
+        this.lights.set(name("id"), {
+          id: name("id"),
+          at: { x: at[0], y: at[1], z: at[2] },
+          // **Normalised here, once.** 255 to 1 is the only conversion in the place layer, and it
+          // is at the boundary rather than in a shader or a per-draw thunk.
+          colour: [
+            colour.r / MAX_CHANNEL,
+            colour.g / MAX_CHANNEL,
+            colour.b / MAX_CHANNEL,
+          ],
+          radius: number("radius"),
+          intensity: number("intensity"),
+        });
+        return;
+      }
+
+      case "light-remove":
+        this.lights.delete(name("id"));
         return;
 
       case "clock-set":

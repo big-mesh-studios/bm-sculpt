@@ -105,6 +105,32 @@ describe("every limit is exercised at its edge", () => {
       build: (n) => ({ place: "p".repeat(n) }),
     },
     {
+      limit: limits.MAX_LIGHT_RADIUS,
+      name: "MAX_LIGHT_RADIUS",
+      end: "max",
+      tag: "light-add",
+      build: (n) => ({
+        id: "lamp",
+        at: [0, 0, 0],
+        colour: { r: 255, g: 255, b: 255 },
+        radius: n,
+        intensity: 1,
+      }),
+    },
+    {
+      limit: limits.MAX_LIGHT_INTENSITY,
+      name: "MAX_LIGHT_INTENSITY",
+      end: "max",
+      tag: "light-add",
+      build: (n) => ({
+        id: "lamp",
+        at: [0, 0, 0],
+        colour: { r: 255, g: 255, b: 255 },
+        radius: 10,
+        intensity: n,
+      }),
+    },
+    {
       limit: limits.MAX_TEXT_LENGTH,
       name: "MAX_TEXT_LENGTH",
       end: "max",
@@ -289,6 +315,9 @@ describe("every limit is exercised at its edge", () => {
       "MAX_PLACE_SOURCE",
       "MAX_PENDING_TIMERS",
       "MAX_ZONES",
+      // A host's own collection rather than a payload field, exactly as `MAX_ZONES` is — it is
+      // checked at the limit and one past it in `host.test.ts`, by a place that fills it.
+      "MAX_LIGHTS",
       "MAX_EVENTS",
       "MAX_EVENT_ID_LENGTH",
       "MAX_PRODUCER_LENGTH",

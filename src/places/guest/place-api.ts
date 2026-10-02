@@ -218,6 +218,51 @@ export const removeZone = (id: string): void => {
   ask("zone-remove", { id });
 };
 
+/* ------------------------------------------------------------------- lights */
+
+export interface CreateLightOptions {
+  /** Its name, and how it is referred to when removed. Never generated. */
+  readonly id: string;
+  /** Where it is, in world units. */
+  readonly at: Vec3Like;
+  /** Its colour, each channel 0 to 255 — as everywhere else in this library. */
+  readonly colour: {
+    readonly r: number;
+    readonly g: number;
+    readonly b: number;
+  };
+  /**
+   * How far it reaches, in world units.
+   *
+   * **The same number says how bright it is**, which is what makes it worth stating plainly: the
+   * falloff is scaled so that `intensity` is the brightness *at the edge of this radius*. A light
+   * of radius 100 at intensity 1 is as bright at 100 units as one of radius 20 is at 20. Neither
+   * is bright in the middle — a lamp is hottest at its own centre — and the choice is made so a
+   * place author tunes one number instead of reconciling brightness against whatever distance
+   * the light happens to land on.
+   */
+  readonly radius: number;
+  /**
+   * How bright, up to 10. **Read alongside `radius`, not instead of it**: `1` is a bright light,
+   * and what it looks like from somewhere depends on how far away that somewhere is.
+   */
+  readonly intensity: number;
+}
+
+export const createLight = (options: CreateLightOptions): void => {
+  ask("light-add", {
+    id: options.id,
+    at: options.at,
+    colour: options.colour,
+    radius: options.radius,
+    intensity: options.intensity,
+  });
+};
+
+export const removeLight = (id: string): void => {
+  ask("light-remove", { id });
+};
+
 /* -------------------------------------------------------------------- clock */
 
 /** Jumps the clock to a mark in its cycle. The cycle is 1,200 seconds. */

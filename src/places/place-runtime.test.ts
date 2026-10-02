@@ -62,6 +62,12 @@ const stubHost = (asked: Asked[]) => ({
 const run = async (
   files: Record<string, string>,
   entry = "main.ts",
+  /**
+   * The clock. **A function rather than a number so a test can move it**, which is the only way a
+   * timer comes due under a stub host: `now` fixed at one value means no delay is ever elapsed,
+   * and a test that asserted a timer had fired would be asserting nothing.
+   */
+  now: () => number = () => 1_700_000_000_000,
 ): Promise<{
   asked: Asked[];
   interpreter: Awaited<ReturnType<typeof createInterpreter>>;
@@ -69,7 +75,7 @@ const run = async (
   const asked: Asked[] = [];
   const interpreter = await createInterpreter({
     seed: 20260901,
-    now: () => 1_700_000_000_000,
+    now,
     ...stubHost(asked),
   });
   interpreter.load(bundlePlace(files, entry));
@@ -652,5 +658,135 @@ describe("a place that is not well behaved", () => {
     interpreter.step("3", "[]");
     expect(asked.map((a) => a.payload["text"])).toEqual(["step 1", "step 3"]);
     interpreter.dispose();
+  });
+});
+
+/**
+ * The light functions, through the real interpreter.
+ *
+ * ## Why this file rather than `host.test.ts`
+ *
+ * That one tests the host: given a `light-add` effect, does it keep a light? It cannot catch a
+ * guest function that sends the wrong field name, a bridge that drops the tag, or a bundler that
+ * fails to export the symbol — each of which passes every layer's own test and fails here, and
+ * none of which is visible from either end. This file runs the real compiler, the real bundler and
+ * the real interpreter together, which is the only place the seam itself is under test.
+ */
+describe("a place lights the world", () => {
+  it("sends a light-add with every field the host needs, named as the effect expects", async () => {
+    const { asked } = await run({
+      "main.ts": `
+        import { createLight } from "voxelscape";
+        createLight({
+          id: "lamp",
+          at: [10, 20, 30],
+          colour: { r: 255, g: 128, b: 0 },
+          radius: 40,
+          intensity: 2,
+        });
+      `,
+    });
+
+    expect(asked).toEqual([
+      {
+        tag: "light-add",
+        payload: {
+          id: "lamp",
+          at: [10, 20, 30],
+          colour: { r: 255, g: 128, b: 0 },
+          radius: 40,
+          intensity: 2,
+        },
+      },
+    ]);
+  });
+
+  it("sends a light-remove by id, and one that is absent is not an error", async () => {
+    // **A cleanup path that refuses is a script that cannot be re-run.** Removing something that
+    // is not there is what a handler does on its second call.
+    const { asked, interpreter } = await run({
+      "main.ts": `
+        import { removeLight } from "voxelscape";
+        removeLight("never-existed");
+      `,
+    });
+    expect(asked).toEqual([
+      { tag: "light-remove", payload: { id: "never-existed" } },
+    ]);
+    // Nothing to hand it: the place registered no handler, so a step is a no-op rather than a
+    // throw. That is what "removing something absent does nothing" means from a script's side.
+    expect(() => interpreter.step("1700000000000", "[]")).not.toThrow();
+  });
+
+  it("is sent from inside a handler, which is the only way a place reacts to anything", async () => {
+    // **A place has no promises and no `await` (ADR 0015),** so a lantern cannot simply "come on
+    // in a moment": something has to hand the script an event. This asserts the light a script
+    // builds *in response to one* is as well-formed as one built at load — the case a timer-driven
+    // lantern actually takes.
+    //
+    // The timer is passed in as an event rather than waited for, because this file's stub host
+    // records effects and does not schedule them; which timers are due is `host.test.ts`'s
+    // business and is tested there.
+    const { asked, interpreter } = await run({
+      "main.ts": `
+        import { createLight, log, onTick } from "voxelscape";
+        onTick((info) => {
+          for (const event of info.events) {
+            if (event.kind !== "timer") continue;
+            createLight({
+              id: "lamp",
+              at: [1, 2, 3],
+              colour: { r: 255, g: 214, b: 140 },
+              radius: 90,
+              intensity: 1,
+            });
+            log("lit from " + event.timerId);
+          }
+        });
+      `,
+    });
+
+    interpreter.step(
+      "1700000000000",
+      JSON.stringify([
+        {
+          kind: "timer",
+          at: 1,
+          producer: "peer-a",
+          payload: { timerId: "lantern-0" },
+        },
+      ]),
+    );
+
+    expect(asked.map((one) => one.tag)).toEqual(["light-add", "log"]);
+    expect(asked[0]!.payload).toEqual({
+      id: "lamp",
+      at: [1, 2, 3],
+      colour: { r: 255, g: 214, b: 140 },
+      radius: 90,
+      intensity: 1,
+    });
+    interpreter.dispose();
+  });
+
+  it("refuses a light the vocabulary will not accept, and says so to the place", async () => {
+    // **The all-or-nothing payload rule (ADR 0017), at the seam.** A negative radius is not a dim
+    // light, it is a light the renderer would then have to guard against — so it is refused rather
+    // than clamped, and the refusal is *thrown into the script* rather than logged. A place that
+    // carried on regardless would be a place with a light in it that no renderer honours.
+    await expect(
+      run({
+        "main.ts": `
+          import { createLight } from "voxelscape";
+          createLight({
+            id: "lamp",
+            at: [0, 0, 0],
+            colour: { r: 255, g: 255, b: 255 },
+            radius: -5,
+            intensity: 1,
+          });
+        `,
+      }),
+    ).rejects.toThrow(/light-add/);
   });
 });

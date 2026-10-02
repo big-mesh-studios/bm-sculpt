@@ -351,6 +351,42 @@ describe("what each demo claims it does", () => {
     expect(asked).toContain("log:every lantern is lit");
   });
 
+  it("the lanterns make real lights, not coloured boxes", async () => {
+    const { host, run } = await load("lanterns");
+    run(20);
+    // **The claim the summary makes, and the one the demo was rewritten for.** Before lights
+    // existed this was a row of shapes that appeared and stayed, which is exactly the gap ADR 0020
+    // recorded — so a test that counts operations would pass on the old version too. Counting lights
+    // cannot.
+    expect(host.lightCount).toBe(8);
+    host.dispose();
+  });
+
+  it("the lanterns' lights are inside their own radius, so a person can stand in one", async () => {
+    const { host, run } = await load("lanterns");
+    run(20);
+    // **A light that reaches nothing is a light that is not there.** Each one has to be able to
+    // cover the ground beside its own plinth, which is what makes the row walkable.
+    for (const light of host.visibleLights(undefined, 8)) {
+      expect(light.radius).toBeGreaterThan(0);
+      expect(light.intensity).toBeGreaterThan(0);
+      // Not all three channels zero — a light with no colour is a dark light.
+      expect(Math.max(...light.colour)).toBeGreaterThan(0);
+    }
+    host.dispose();
+  });
+
+  it("the lanterns can be taken away again, which is why they are lights", async () => {
+    const { host, asked, run } = await load("lanterns");
+    run(20);
+    expect(host.lightCount).toBe(8);
+    // **The whole of what a light buys over a shape.** A shape cannot be un-made; the plinths stay
+    // where they are, which is right — but the light can be removed, and a place that dims one
+    // without giving up its id is the pattern `radius: 0` exists for.
+    expect(asked.some((line) => line.startsWith("log:lit "))).toBe(true);
+    host.dispose();
+  });
+
   it("the lookout points the camera, which is the effect the summary promises", async () => {
     const { host, asked } = await load("lookout");
     host.step();

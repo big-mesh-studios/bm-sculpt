@@ -12,12 +12,21 @@
  * The first version of the host replaced instead, and this place silently never lit a lantern
  * at all. ADR 0019 has the measurement.
  *
- * It also shows the thing a place cannot do yet: there is no way to *turn a light off* again,
- * because v1's vocabulary has geometry and zones but no lights. Each lantern is therefore a
- * shape that appears and stays, which is what a smooth-landscape engine can honestly offer.
+ * Each lantern is a **real light** — `createLight`, not a coloured box — so it goes out when the
+ * timer that lit it is answered, and the row can be rebuilt from nothing by loading it again.
+ * The plinths are still geometry, because a lantern with nothing to stand on is a lantern
+ * floating in the air.
+ *
+ * ## The one number worth reading twice
+ *
+ * `radius` and `intensity` are not independent, and the documentation says so twice because it is
+ * the thing a place author gets wrong: the falloff is scaled so that `intensity` is the brightness
+ * **at the edge of its own radius**. A lantern of radius 90 at intensity 1 is as bright at 90 units
+ * as one of radius 20 is at 20 — neither bright in the middle, because a lamp is hottest at its own
+ * centre. So `radius` is how far it reaches and `intensity` is how bright it is where it stops.
  */
 
-import { createShape, log, after, onTick } from "voxelscape";
+import { createLight, createShape, log, after, onTick } from "voxelscape";
 
 /** How many, how far apart, and where. */
 const COUNT = 8;
@@ -26,11 +35,32 @@ const FIRST_X = -((COUNT - 1) * SPACING) / 2;
 const GROUND_Y = 30;
 const EVERY_MS = 400;
 
+/** How far each lantern reaches, and how bright it is where it stops. */
+const RADIUS = 90;
+const INTENSITY = 1;
+
+/**
+ * The light itself.
+ *
+ * **Separate from the plinth because they have opposite fates.** The plinth is geometry and
+ * appears once and stays; the light appears and can be taken away again, which is the thing this
+ * demo exists to show. Keeping them apart also keeps the id namespace honest — a shape and a light
+ * are different kinds of object, and they only share the table they are keyed in.
+ */
+const lamp = (id: string, at: readonly [number, number, number]): void => {
+  createLight({
+    id,
+    at,
+    colour: { r: 255, g: 214, b: 140 },
+    radius: RADIUS,
+    intensity: INTENSITY,
+  });
+};
+
 const box = (
   id: string,
   at: readonly [number, number, number],
   len: { readonly x: number; readonly y: number; readonly z: number },
-  colour?: { readonly r: number; readonly g: number; readonly b: number },
 ): void => {
   createShape({
     place: "lanterns",
@@ -38,7 +68,6 @@ const box = (
     at,
     shape: { type: "Box", len },
     combine: "Add",
-    ...(colour === undefined ? {} : { colour }),
   });
 };
 
@@ -64,12 +93,7 @@ onTick((info) => {
     lit.add(wanted);
 
     const x = FIRST_X + index * SPACING;
-    box(
-      wanted,
-      [x, GROUND_Y, 0],
-      { x: 2, y: 3, z: 2 },
-      { r: 255, g: 214, b: 140 },
-    );
+    lamp(wanted, [x, GROUND_Y, 0]);
     // A plinth under each one, so a lantern is standing on something rather than floating.
     box(`plinth-${wanted}`, [x, GROUND_Y - 8, 0], { x: 4, y: 5, z: 4 });
     log(`lit ${wanted}`);

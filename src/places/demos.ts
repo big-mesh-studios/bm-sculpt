@@ -63,7 +63,8 @@ export const DEMO_PLACES: readonly DemoPlace[] = [
   },
   {
     id: "lanterns",
-    summary: "a row of lanterns, and a timer that turns them on one at a time",
+    summary:
+      "a row of real lights, and a timer that turns them on one at a time",
     files: { "main.ts": LANTERN_SOURCE },
     entry: "main.ts",
   },

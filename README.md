@@ -133,6 +133,7 @@ are in [`docs/adr/`](docs/adr/README.md):
 | [0019](docs/adr/0019-the-host-owns-what-it-can-own.md)                           | The host owns what it can own, and asks for the eight things it cannot             |
 | [0020](docs/adr/0020-a-place-runs-on-the-frame.md)                               | A place runs on the frame, and the console is how a person meets it                |
 | [0021](docs/adr/0021-a-place-arrives-as-a-zip-with-a-manifest.md)                | A place arrives as a zip with a manifest at its root                               |
+| [0023](docs/adr/0023-lights-are-a-fixed-table-of-uniforms.md)                    | Lights are a fixed table of uniforms, and the tests measure light                  |
 
 **The phases after 6 are not in this table, because they are not decided.** Phase 6 was the
 terrain base field and is in: `session.ts` binds the landscape as the field's base, which is
@@ -340,10 +341,16 @@ All of it, and it runs. `/place:load bridge` in the browser builds a bridge you 
   sibling project's, plus an `entry` field because `PlaceHost` is handed one. `jszip` is
   dynamically imported, so the 29 kB of it reaches only the command that needs it.
 
-Still to come: a way to _write_ a place, the two things the engine cannot yet express
-(`getSeatYawAt` needs figures and `getSurfaceVelocityAt` needs moving surfaces, both of
-which the props phase is expected to bring), and lights — v1's vocabulary has geometry
-and zones but no lights, so a lantern is a shape that appears and stays.
+- **Lights.** `createLight` makes one, `removeLight` takes it away, and the falloff is scaled
+  so `intensity` is the brightness _at the edge of its own radius_ — so reach and brightness are
+  one number to tune rather than two to reconcile with a distance. Eight reach the shader as
+  sixteen `vec4` uniforms and the host picks the nearest, so a lantern appearing never rebuilds a
+  shader. The clouds and the sky deliberately do not receive them
+  ([ADR 0023](docs/adr/0023-lights-are-a-fixed-table-of-uniforms.md)).
+
+Still to come: a way to _write_ a place, and the two queries that need systems v1 does not have
+(`getSeatYawAt` needs figures, `getSurfaceVelocityAt` needs moving surfaces — both of which the
+props phase is expected to bring).
 
 ## The game and its console
 
