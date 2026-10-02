@@ -1,0 +1,1 @@
+var e=new URL(`emscripten-module-uFzwHH0Y.wasm`,import.meta.url).href;export{e as default};
