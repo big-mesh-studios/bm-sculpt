@@ -1,0 +1,48 @@
+<!doctype html>
+<!--
+  The page's shell.
+
+  **This file is not the page, and nothing serves it.** `scripts/prerender.ts` reads it,
+  substitutes the rendered markup and the inlined stylesheet, and writes `dist/index.html`.
+  Vite never sees it: the build is `vite build --ssr`, which compiles Solid and produces no
+  HTML of its own.
+
+  It is a real file rather than a template string inside the prerender script for three
+  reasons. It is a `<head>` that can be read and edited as HTML. It is where the viewport
+  meta tag lives, which is the one declaration `packages/ui`'s `viewport.test.ts` reads this
+  repository's application pages from — and that test finding the page here is the reason
+  this is not a string. And a build step that assembles a document out of pieces it reads
+  from disk is a build step whose pieces can be seen.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      **`viewport-fit=cover`, because this page is read on a phone.** The stylesheet pads
+      itself with `env(safe-area-inset-*)` on all four sides, so the page can extend under a
+      notch and a home indicator without anything hiding behind either. Without the tag the
+      insets resolve to `0px` and those four rules are dead — the same silent failure
+      `packages/ui`'s own test exists to prevent, in the one direction this page could
+      repeat it.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>bm-sculpt</title>
+    <meta
+      name="description"
+      content="One signed distance field core, two ways into it: a landscape to walk through and a modeller to build what it wears."
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🧊</text></svg>"
+    />
+    <!-- Filled with the contents of `src/styles.css`, so the page is one request. -->
+    <id:styles />
+  </head>
+  <body>
+    <!-- Replaced with the prerendered markup. -->
+    <id:body />
+  </body>
+</html>

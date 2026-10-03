@@ -7,6 +7,11 @@ pnpm-workspace.yaml
 # Build output, in whichever workspace produced it.
 dist
 dist-*
+# The front page's compiled server bundle, produced by the same build that writes
+# `dist/index.html`. It is a bundle — a build product, not source — so formatting it
+# would mean formatting something the compiler emits and would fail again on every
+# build. `.gitignore` already excludes it; Prettier does not read that.
+.ssr
 node_modules
 *.tsbuildinfo
 .DS_Store

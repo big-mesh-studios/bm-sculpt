@@ -1,4 +1,5 @@
-# One repository, one signed distance field core, two applications.
+# One repository, one signed distance field core, two applications, and the front
+# page that links to them.
 #
 # **Anything that is a library is under `packages/`, and anything that is an
 # application is under `apps/`.** That is the whole structure, and it is enforced by

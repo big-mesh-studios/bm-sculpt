@@ -95,6 +95,7 @@ pnpm workspace:check   # the /apps versus /packages rule
 | `packages/meshing` | Surface Nets, growable buffers, chunk mesh output                   |
 | `packages/picking` | Which primitive a structural ray hits                               |
 | `apps/bm-sculpt`   | The landscape: chunks, streaming, renderer, places, console         |
+| `apps/homepage`    | The front page the site root serves, prerendered to one HTML file   |
 | `tools`            | The checks the workspaces cannot check on each other                |
 
 **Mobile lives in `packages/ui`, not in an application.** `baseline.css` carries

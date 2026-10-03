@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "One signed distance field core, two applications: a landscape and a figure modeller",
+  "description": "One signed distance field core, two applications, and the front page that links to them",
   "engines": {
     "node": ">=24"
   },
@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "pnpm --filter bm-sculpt dev",
     "dev:sdf-modeller": "pnpm --filter @big-mesh-studios/sdf-modeller dev",
+    "dev:homepage": "pnpm --filter @big-mesh-studios/homepage dev",
     "build": "pnpm -r build",
     "check-types": "pnpm -r check-types && pnpm check-types:tools",
     "check-types:tools": "tsc --noEmit -p tsconfig.json",

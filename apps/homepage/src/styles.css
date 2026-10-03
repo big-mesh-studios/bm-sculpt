@@ -1,0 +1,234 @@
+/*
+ * The front page.
+ *
+ * ## The whole design in one sentence
+ *
+ * **A grey page with two coloured cards.** Everything structural is neutral — background,
+ * panel, text, borders — and the only saturated colour on the page is the accent each card
+ * carries. That is what makes two cards on one page read as two entries rather than as one
+ * list.
+ *
+ * ## Why warm greys in light mode and cool greys in dark
+ *
+ * **Because a pure white page and a pure black page both look like an unstyled document.**
+ * The light palette is warm (`#f4f4f2`) and the dark one cool (`#101014`), which is the
+ * convention that stops a dark mode from looking like a photographic negative of the light
+ * one, and it matches the near-black the two applications themselves use.
+ *
+ * ## Why the grid has no media queries
+ *
+ * **`repeat(auto-fit, minmax(17rem, 1fr))` is the whole of the responsive behaviour**, and
+ * there is nothing else to write. The container is capped at 60rem and each card needs at
+ * least 17rem, so the column count falls out of the width on its own: one column on a
+ * phone, three on a desktop, and never more than there are cards. A breakpoint table would
+ * be a second place to get the same arithmetic wrong.
+ *
+ * The one media query here is for colour scheme.
+ */
+
+:root {
+  --bg: #f4f4f2;
+  --panel: #ffffff;
+  --ink: #16161a;
+  --muted: #5c5c66;
+  --line: #dededa;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 8px 24px rgb(0 0 0 / 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101014;
+    --panel: #1a1a20;
+    --ink: #f0f0ee;
+    --muted: #9a9aa6;
+    --line: #2a2a33;
+    /* **Much stronger alphas than the light theme.** A dark panel does not read a shadow
+       naturally, so the same shadow that is a hint in light mode is invisible in dark; these
+       are the same two layers, weighted for the background they sit on. */
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.3);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3rem;
+  /*
+   * **Every side padded with `max()` against a safe-area inset, because the page's viewport
+   * meta tag says `viewport-fit=cover`.**
+   *
+   * That tag is what lets the page extend under a notch and a home indicator rather than
+   * being letterboxed away from them, and it is also what makes `env(safe-area-inset-*)`
+   * return anything at all — without it they are all `0px` and these four `max()` calls
+   * would be writing the constant on their own. So the padding and the tag have to agree,
+   * and `packages/ui` owns a test that catches it when they do not.
+   *
+   * This page does not use `packages/ui`'s baseline — it is one file with a stylesheet of
+   * its own, which is most of why it is worth being explicit here rather than importing
+   * tokens for four declarations.
+   */
+  padding-block: max(4rem, calc(env(safe-area-inset-top) + 1rem))
+    max(4rem, calc(env(safe-area-inset-bottom) + 1rem));
+  padding-inline: max(1.5rem, env(safe-area-inset-left))
+    max(1.5rem, env(safe-area-inset-right));
+  background: var(--bg);
+  color: var(--ink);
+  font:
+    16px/1.6 ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Helvetica,
+    Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * One measure for all three bands, so the header's left edge, the grid's and the footer's
+ * are the same line down the page.
+ */
+header,
+main,
+footer {
+  width: 100%;
+  max-width: 60rem;
+  margin-inline: auto;
+}
+
+h1 {
+  margin: 0 0 0.4rem;
+  font-size: clamp(2rem, 6vw, 3rem);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+header p {
+  margin: 0;
+  max-width: 34rem;
+  color: var(--muted);
+  font-size: clamp(1rem, 2.5vw, 1.15rem);
+}
+
+main {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1.25rem;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.75rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  color: inherit;
+  text-decoration: none;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.card:hover,
+.card:focus-visible {
+  transform: translateY(-3px);
+  border-color: var(--accent);
+}
+
+/*
+ * **A ring as well as a border colour**, offset so it does not sit on the border it is
+ * confirming. A card's whole surface is the target, so the thing that says "this is
+ * focused" has to be visible against the card and not only against the page.
+ */
+.card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.card svg {
+  width: 52px;
+  height: 52px;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+/*
+ * The workspace directory, which is also where this card's link goes.
+ *
+ * **Monospace, smaller, and closer to the title than to the prose** — because it is a label
+ * on the card rather than a sentence. It shares the muted colour, so it reads as metadata
+ * without needing a colour of its own.
+ */
+.path {
+  margin: -0.35rem 0 0;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+.blurb {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+/*
+ * **Pushed to the bottom of the card**, so two cards whose blurbs are different lengths
+ * still put their calls to action on the same line. That is the only reason the card is a
+ * flex column rather than a block.
+ */
+.call {
+  margin-top: auto;
+  padding-top: 0.5rem;
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.call::after {
+  content: " →";
+}
+
+footer {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+footer p {
+  margin: 0 0 0.5rem;
+}
+
+footer a {
+  color: inherit;
+}
+
+/*
+ * A person who has asked the system for less motion gets none of it. **The lift is the
+ * motion** — there is no transition on the page — so removing the transition alone would
+ * leave the card jumping.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition: none;
+  }
+
+  .card:hover,
+  .card:focus-visible {
+    transform: none;
+  }
+}

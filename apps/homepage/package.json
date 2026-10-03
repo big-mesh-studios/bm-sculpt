@@ -1,0 +1,23 @@
+{
+  "name": "@big-mesh-studios/homepage",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "The front page: names the applications and links to each",
+  "scripts": {
+    "dev": "node scripts/prerender.ts && vite preview",
+    "build": "vite build --ssr src/entry-server.tsx --outDir .ssr && node scripts/prerender.ts",
+    "serve": "vite preview",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solidjs/web": "catalog:",
+    "solid-js": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plugin-solid": "catalog:"
+  }
+}

@@ -42,6 +42,11 @@ recorded cost is a decision nobody thought about.
 | [0022](0022-a-field-is-a-box-that-moves-the-player.md)                  | A medium is a box the physics reads, and the host supplies it                          | accepted |
 | [0023](0023-lights-are-a-fixed-table-of-uniforms.md)                    | Lights are a fixed table of uniforms, not per-object state                             | accepted |
 | [0024](0024-packages-is-what-has-no-opinion.md)                         | `/packages` is what has no opinion, and `/apps` is what does                           | accepted |
+| [0025](0025-a-primitive-is-one-table-entry.md)                          | A primitive is one table entry, and the capsule points up                              | accepted |
+| [0026](0026-the-mobile-rules-live-in-a-package.md)                      | The mobile rules live in a package, because they were never this application's         | accepted |
+| [0027](0027-the-modeller-is-a-flat-list-of-placed-primitives.md)        | The modeller is a flat list of placed primitives, meshed not marched                   | accepted |
+| [0028](0028-a-colour-is-a-property-of-the-operation.md)                 | A colour is a property of the operation, and the model is a boolean fold               | accepted |
+| [0029](0029-the-site-root-is-a-front-page.md)                           | The site root is a front page, and the applications sit beside it                      | accepted |
 
 ## What is decided so far
 
