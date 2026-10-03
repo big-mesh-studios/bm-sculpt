@@ -273,9 +273,13 @@ describe("flatten is the only fold order", () => {
     // which looked right until a place kept building: it then sat at the end of the list
     // holding indices above the document's later ones, so the field folded
     // chronologically (`bvh.ts` sorts candidates by index) while `bvh.evalPaint`
-    // resolved colour in plain list order. The two orders disagreed, and a user painting
+    // settled colour by list order. The two orders disagreed, and a user painting
     // over a script's painted wall lost because the script's operations came later in
     // the list despite having been made first.
+    //
+    // **List order is still what settles colour between coincident surfaces**, which is what
+    // the next test is about: `evalPaint` now gives it to whichever surface is *nearest*, and
+    // only a tie falls to the order.
     const document = new SculptDocument();
     const registry = registryOver(document);
     const ids = shapeIds();
@@ -294,9 +298,12 @@ describe("flatten is the only fold order", () => {
   });
 
   it("resolves paint in fold order, so a later operation wins even across owners", () => {
-    // The claim above, made to discriminate. `bvh.evalPaint` takes the last writer in
-    // **list** order, so whichever colour survives is a direct read-out of the order
-    // `flatten` returned.
+    // The claim above, made to discriminate.
+    //
+    // **The two paints are coincident**, which is what makes list order decide anything:
+    // `evalPaint` gives a colour to the nearest surface and settles a tie by order, and two
+    // boxes at the same place with the same size are as near as each other can be. So
+    // whichever colour survives is a direct read-out of the order `flatten` returned.
     //
     // Set up so the two orders give opposite answers: the place paints red first and the
     // document paints blue second, so index order says blue wins, while a

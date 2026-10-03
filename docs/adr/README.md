@@ -48,6 +48,7 @@ recorded cost is a decision nobody thought about.
 | [0028](0028-a-colour-is-a-property-of-the-operation.md)                 | A colour is a property of the operation, and the model is a boolean fold               | accepted |
 | [0029](0029-the-site-root-is-a-front-page.md)                           | The site root is a front page, and the applications sit beside it                      | accepted |
 | [0030](0030-two-meshers-and-a-report.md)                                | The modeller offers two meshers, and reports what came back                            | accepted |
+| [0031](0031-the-nearest-surface-carries-a-points-colour.md)             | The nearest surface carries a point's colour, not the last one in the list             | accepted |
 
 ## What is decided so far
 
@@ -342,3 +343,9 @@ roughly the right volume**, and only a test that put every vertex against the fi
 And the report welded vertices at a fixed four decimal places until the modeller's own
 finest-resolution mesh came back with an edge 7.6e-5 long and was called non-manifold — a
 resolution that cannot serve two scales at once.
+
+And one more, on the other application: **a colour's reach was one world unit, which is a
+fraction of a landscape and the whole of a figure.** `0031` is the short version — the nearest
+surface takes a point's colour, and the reach is left doing the one job it is good at, which
+is rejecting a query that is nowhere near anything. It supersedes one sentence of `0028`,
+which was right about its own decision and wrong about the rule underneath it.

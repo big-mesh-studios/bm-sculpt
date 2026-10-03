@@ -667,3 +667,145 @@ describe("the resolution control", () => {
     ).toBeLessThanOrEqual(fine.voxelSize * 1.001);
   });
 });
+
+/**
+ * Colour through the mesher, because that is where a colour is actually seen.
+ *
+ * **The rule under test is `bvh.evalPaint`'s and is pinned there**, in `packages/csg`. What this
+ * covers is that it survives the journey: a vertex is on a crossing between two samples, the field
+ * is asked once per vertex, and the answer is written into the packed attribute the renderer reads.
+ * A model of two coloured parts is the shortest way to ask all of that at once.
+ */
+describe("colour, through the mesh", () => {
+  const RED = { r: 255, g: 0, b: 0 };
+  const BLUE = { r: 0, g: 0, b: 255 };
+
+  /** Every distinct colour in a finished mesh, with how many vertices carry it. */
+  const coloursOf = (
+    mesh: ReturnType<typeof meshModel>,
+  ): Map<string, number> => {
+    const seen = new Map<string, number>();
+    for (let i = 0; i < mesh!.mesh.vertexCount; i++) {
+      const at = i * 4;
+      const key = `${mesh!.mesh.colours[at]},${mesh!.mesh.colours[at + 1]},${mesh!.mesh.colours[at + 2]}`;
+      seen.set(key, (seen.get(key) ?? 0) + 1);
+    }
+    return seen;
+  };
+
+  /** The colour of the vertex nearest a world point, as `r,g,b`. */
+  const colourNearest = (
+    mesh: NonNullable<ReturnType<typeof meshModel>>,
+    at: { x: number; y: number; z: number },
+  ): string => {
+    let best = Infinity;
+    let index = 0;
+    for (let i = 0; i < mesh.mesh.vertexCount; i++) {
+      const d = Math.hypot(
+        (mesh.mesh.positions[i * 3] as number) - at.x,
+        (mesh.mesh.positions[i * 3 + 1] as number) - at.y,
+        (mesh.mesh.positions[i * 3 + 2] as number) - at.z,
+      );
+      if (d < best) {
+        best = d;
+        index = i;
+      }
+    }
+    const at4 = index * 4;
+    return `${mesh.mesh.colours[at4]},${mesh.mesh.colours[at4 + 1]},${mesh.mesh.colours[at4 + 2]}`;
+  };
+
+  it("keeps a union of two coloured parts as two colours", () => {
+    /**
+     * **A figure a unit or two across, which is the scale this bug lived at.**
+     *
+     * The rule used to be "the last operation within a unit of the point", which is the same as
+     * "the last operation within the model" for a figure this size — and the modeller's parts are
+     * about a unit across. The red sphere and the blue box were close enough that the box covered
+     * the sphere, the box came later in the list, and the sphere came out entirely blue.
+     *
+     * **Asserted by asking for the vertex nearest a known point on each surface** rather than by
+     * counting colours, because the counts are not comparable: marching cubes puts a vertex on every
+     * crossed edge, so a flat face emits four a cell and a sphere's curvature emits about one, and
+     * the box legitimately comes out with three or four times the sphere's vertex count. A ratio
+     * would be measuring the algorithms. Asking what colour a particular place *is* cannot be.
+     */
+    const sphere = placedPart(
+      "a",
+      { type: "Sphere", radius: 0.7 },
+      { x: 0, y: 0, z: 0 },
+      { colour: RED, opacity: 1 },
+    );
+    const box = placedPart(
+      "b",
+      { type: "Box", len: { x: 1, y: 1, z: 1 } },
+      { x: 1.4, y: 0, z: 0 },
+      { colour: BLUE, opacity: 1 },
+    );
+    const mesh = meshModel([sphere, box], budgetFor(0.125), "marching-cubes");
+    expect(mesh).toBeDefined();
+    const built = mesh!;
+
+    // The far side of the sphere from the box, where the old rule was worst: the box is nearly two
+    // units away and came later in the list, and the sphere was blue here too.
+    expect(colourNearest(built, { x: -0.7, y: 0, z: 0 })).toBe(
+      `${RED.r},${RED.g},${RED.b}`,
+    );
+    expect(colourNearest(built, { x: 0, y: 0.7, z: 0 })).toBe(
+      `${RED.r},${RED.g},${RED.b}`,
+    );
+    expect(colourNearest(built, { x: 0, y: 0, z: 0.7 })).toBe(
+      `${RED.r},${RED.g},${RED.b}`,
+    );
+    // And the box keeps its own colour, which is the other half of a union being two colours.
+    expect(colourNearest(built, { x: 1.9, y: 0, z: 0 })).toBe(
+      `${BLUE.r},${BLUE.g},${BLUE.b}`,
+    );
+    expect(colourNearest(built, { x: 1.4, y: 0, z: 0.5 })).toBe(
+      `${BLUE.r},${BLUE.g},${BLUE.b}`,
+    );
+
+    // Both colours present somewhere, which is what "two colours" means before anything else.
+    const seen = coloursOf(built);
+    expect(seen.get(`${RED.r},${RED.g},${RED.b}`) ?? 0).toBeGreaterThan(0);
+    expect(seen.get(`${BLUE.r},${BLUE.g},${BLUE.b}`) ?? 0).toBeGreaterThan(0);
+  });
+
+  it("gives each part of a chain its own colour, in order", () => {
+    // Three parts end to end, so the middle one is within reach of both its neighbours and has to
+    // win against one on each side. This is the case that shows the rule is about distance rather
+    // than about being first or last in the list.
+    const parts = [
+      placedPart(
+        "a",
+        { type: "Sphere", radius: 0.5 },
+        { x: 0, y: 0, z: 0 },
+        { colour: { r: 255, g: 0, b: 0 }, opacity: 1 },
+      ),
+      placedPart(
+        "b",
+        { type: "Sphere", radius: 0.5 },
+        { x: 0.9, y: 0, z: 0 },
+        { colour: { r: 0, g: 255, b: 0 }, opacity: 1 },
+      ),
+      placedPart(
+        "c",
+        { type: "Sphere", radius: 0.5 },
+        { x: 1.8, y: 0, z: 0 },
+        { colour: { r: 0, g: 0, b: 255 }, opacity: 1 },
+      ),
+    ];
+    const mesh = meshModel(parts, budgetFor(0.125), "marching-cubes");
+    const seen = coloursOf(mesh);
+    for (const colour of [
+      { r: 255, g: 0, b: 0 },
+      { r: 0, g: 255, b: 0 },
+      { r: 0, g: 0, b: 255 },
+    ]) {
+      expect(
+        seen.get(`${colour.r},${colour.g},${colour.b}`) ?? 0,
+        `colour ${colour.r},${colour.g},${colour.b}`,
+      ).toBeGreaterThan(0);
+    }
+  });
+});

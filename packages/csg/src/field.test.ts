@@ -475,10 +475,10 @@ describe("colour", () => {
     });
   });
 
-  it("lets a later operation's colour win over an earlier one, whatever either combines", () => {
-    // Last writer wins, and the combine mode no longer takes part in that. Two
-    // overlapping solids of different colours is the case a model of coloured parts
-    // is made of.
+  it("lets a later operation's colour win over an earlier one where the two coincide", () => {
+    // **Overlapping solids of different colours is the case a model of coloured parts is made
+    // of**, and here the two are coincident, so the nearest surface is a tie and the later one
+    // takes it. The combine mode takes no part in that either.
     const field = new Field(
       new OperationBVH([
         makeOperation(
@@ -499,6 +499,95 @@ describe("colour", () => {
     );
     expect(field.colourAt(0, 0, 0).colour).toEqual({ r: 0, g: 0, b: 255 });
     expect(field.colourAt(40, 0, 0).colour).toEqual({ r: 255, g: 0, b: 0 });
+  });
+
+  it("does not let a neighbour's colour reach across a model", () => {
+    /**
+     * **The bug this records, at the scale where it appeared.**
+     *
+     * The rule used to be "the last operation within a unit of the point", which is the same as
+     * "the last operation within the model" for a figure a unit or two across — and a figure
+     * modeller's parts are about a unit across. A red sphere and a blue box a unit and a bit
+     * apart both satisfied it, the box came later in the list, and the sphere came out entirely
+     * blue. Every vertex of the sphere, including the far side from the box, was blue.
+     *
+     * So the numbers here are deliberately tiny. Everything in this file's other colour tests is
+     * tens of units across, which is why they all passed while the modeller's own model did not.
+     */
+    const field = new Field(
+      new OperationBVH([
+        makeOperation(
+          0,
+          { x: 0, y: 0, z: 0 },
+          { type: "Sphere", radius: 0.7 },
+          "Add",
+          { colour: { r: 255, g: 0, b: 0 }, opacity: 1 },
+        ),
+        makeOperation(
+          1,
+          { x: 1.2, y: 0, z: 0 },
+          { type: "Box", len: { x: 0.5, y: 0.5, z: 0.5 } },
+          "Add",
+          { colour: { r: 0, g: 0, b: 255 }, opacity: 1 },
+        ),
+      ]),
+    );
+    const red = { r: 255, g: 0, b: 0 };
+    const blue = { r: 0, g: 0, b: 255 };
+
+    // **The far side of the sphere, the point the bug was worst at.** The box is 1.9 units away
+    // and comes later in the list; the sphere's own surface is here.
+    expect(
+      field.colourAt(-0.7, 0, 0).colour,
+      "the far side of the sphere",
+    ).toEqual(red);
+    expect(field.colourAt(0, 0.7, 0).colour, "the top of the sphere").toEqual(
+      red,
+    );
+    expect(field.colourAt(0, 0, 0.7).colour, "the front of the sphere").toEqual(
+      red,
+    );
+    // And the box keeps its own colour, which is the other half of a union being two colours.
+    expect(field.colourAt(1.7, 0, 0).colour, "the box's own surface").toEqual(
+      blue,
+    );
+  });
+
+  it("gives a nested shape its own colour rather than the one enclosing it", () => {
+    /**
+     * **The same bug, in its other form, and it is the more alarming one.** An enclosing solid is
+     * *deeply inside* rather than merely nearby, so it satisfied the old reach by a wide margin and
+     * the outer colour reached all the way in. Here the shell comes first and the sphere second, so
+     * list order happened to save it; the test is here because that was luck rather than a rule, and
+     * with the shell second it was the sphere that came out the wrong colour.
+     */
+    const field = new Field(
+      new OperationBVH([
+        makeOperation(
+          0,
+          { x: 0, y: 0, z: 0 },
+          { type: "Box", len: { x: 2, y: 2, z: 2 } },
+          "Add",
+          { colour: { r: 0, g: 255, b: 0 }, opacity: 1 },
+        ),
+        makeOperation(
+          1,
+          { x: 0, y: 0, z: 0 },
+          { type: "Sphere", radius: 0.5 },
+          "Add",
+          { colour: { r: 255, g: 0, b: 0 }, opacity: 1 },
+        ),
+      ]),
+    );
+    expect(field.colourAt(2, 0, 0).colour, "the shell's own surface").toEqual({
+      r: 0,
+      g: 255,
+      b: 0,
+    });
+    expect(
+      field.colourAt(0.5, 0, 0).colour,
+      "the sphere's own surface",
+    ).toEqual({ r: 255, g: 0, b: 0 });
   });
 
   it("asks the tile only once per call, and passes the point through", () => {

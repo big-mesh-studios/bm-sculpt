@@ -69,6 +69,20 @@ const BLOCKS = 8;
 const BLOCK_COUNT = BLOCKS * BLOCKS * BLOCKS;
 
 /**
+ * How near an operation's own surface a point has to be for its colour to have a say.
+ *
+ * **This only decides whether an operation is *near*, never *which* of the near ones wins** — the
+ * nearest surface does that, and the distance it compares is the same one. That is stated here
+ * because the two were once the same decision, and an absolute number doing both is how a red sphere
+ * a unit across ended up painted entirely by the blue box beside it.
+ *
+ * So it can stay a unit. A mesher's vertex is on the surface it was interpolated from, so the
+ * operation that owns a vertex is always at distance zero and always wins; this only rejects a query
+ * that is nowhere near anything, and any positive reach rejects the same queries.
+ */
+const PAINT_REACH = 1;
+
+/**
  * Which block a coordinate falls in along one axis, or `-1` if it is outside.
  *
  * `-1` rather than a clamp, because outside is not the same as at the edge: a point
@@ -520,7 +534,7 @@ export class OperationBVH {
   }
 
   /**
-   * The colour of the surface at a point, from whichever operation carries one.
+   * The colour of the surface at a point, from whichever operation's surface is **nearest** it.
    *
    * **Any operation with a colour, not only a `Paint`.** Before this, only
    * `combine === "Paint"` was consulted, which made a solid operation unable to
@@ -535,23 +549,43 @@ export class OperationBVH {
    * only where one is meant. `docs/adr/` records the change and the version bump it
    * forced.
    *
-   * Last writer wins among the operations whose own surface is within a unit of
-   * the point. "Within a unit" rather than "at" because a point is generally not on
-   * the surface exactly — a vertex is offset from it by the mesher's own
-   * interpolation — and a colour that only applied on an exact zero would apply
-   * nowhere.
+   * ## Nearest wins, not last
    *
-   * Returns undefined where no operation applies, which is what lets the caller
-   * fall through to a paint tile and then to a default rather than having this
-   * invent one.
+   * **This was "last writer wins among the operations within a unit of the point", and on a small
+   * model that meant every shape repainted every other one.** A figure modeller's parts are about a
+   * unit across, so *within a unit* is *within the model*: a red sphere and a blue box a unit and a
+   * bit apart both satisfied it, and because the box came later in the list it answered for the
+   * sphere's whole surface. The sphere came out entirely blue.
+   *
+   * The reach is not the thing that was wrong, though. It has to exist — a point nowhere near any
+   * shape has no colour, which is what lets the caller fall through to a paint tile and then to a
+   * default. What was wrong is that the reach was also deciding *which* colour, so a shape merely
+   * being nearby out-voted the shape the point is actually on.
+   *
+   * So the rule is now: among the operations near enough to have a say, **the one whose own surface
+   * is closest takes it**. At a point on a shape's surface that shape's distance is zero and nothing
+   * beats it, however large the model or however late the other shape appears in the list. The reach
+   * is left doing the one job it is good at, which is rejecting a point that is nowhere near anything.
+   *
+   * **Ties go to the later operation**, so two coincident surfaces still resolve in list order and the
+   * answer stays deterministic.
    */
   evalPaint(x: number, y: number, z: number): SurfaceColour | undefined {
+    const point = { x, y, z };
     let found: SurfaceColour | undefined;
+    let nearest = Infinity;
     for (const indexed of this.all) {
       const operation = indexed.operation;
       if (operation.colour === undefined) continue;
-      if (!boundsContain(indexed.bounds, { x, y, z })) continue;
-      if (operationDistance(indexed, { x, y, z }) <= 1) {
+      if (!boundsContain(indexed.bounds, point)) continue;
+      const distance = operationDistance(indexed, point);
+      // `PAINT_REACH`, not `<= 1` written out — see the note on the constant for what the reach is
+      // and is not deciding.
+      if (distance > PAINT_REACH) continue;
+      const away = Math.abs(distance);
+      // `<=`, so a tie is the later operation's — see the note on ties above.
+      if (away <= nearest) {
+        nearest = away;
         found = { colour: operation.colour, opacity: operation.opacity };
       }
     }

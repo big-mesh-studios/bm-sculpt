@@ -297,8 +297,10 @@ export class PlaceRegistry {
    *   `byIndex`, commented "List order, which is the order the fold has to run in",
    *   because the combine is a smooth minimum: symmetric, not associative. So the fold
    *   order is *index* order whatever this function returns.
-   * - **Paint resolution** — `bvh.evalPaint` walks `this.all` in plain list order and
-   *   takes the last writer. So *this function's* order is what decides which paint wins.
+   * - **Paint resolution** — `bvh.evalPaint` gives the colour to the operation whose own
+   *   surface is *nearest* the point, and settles a tie by list order. So for the
+   *   coincident surfaces this document is about, *this function's* order is what decides
+   *   which paint wins.
    *
    * Concatenating document-then-places made those two disagree: a place that kept
    * building would sit at the end of the list while holding indices above the document's
