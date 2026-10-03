@@ -196,6 +196,36 @@ export const MAX_LIGHT_RADIUS = 1e5;
 export const MAX_LIGHT_INTENSITY = 10;
 
 /**
+ * How many mediums may exist at once, across every place.
+ *
+ * **Sixty-four, a quarter of `MAX_ZONES`, and the difference is what a medium does.** A zone is
+ * read and produces an event; a medium is read and *moves the player*, so two overlapping ones
+ * are not merely ambiguous but produce a frame the person in them has to feel. Sixty-four is far
+ * more than a conveyor network needs, and the resolution rule below ("the first whose box holds
+ * the point") only stays cheap while the count is small enough that "first" is obvious.
+ */
+export const MAX_MEDIUMS = 64;
+
+/**
+ * How fast a medium may push, in world units per second, on any axis.
+ *
+ * **Two hundred, which is a little over three times a walking player.** `DEFAULT_PLAYER_CONFIG`
+ * walks at 60, so this is a fast belt rather than a gentle one — and it is a ceiling on the
+ * *target velocity* the field pulls toward, not on the player's speed, so a place cannot use a
+ * medium to make someone move faster than the cap by combining it with a large `speedScale`.
+ */
+export const MAX_MEDIUM_PUSH = 200;
+
+/**
+ * What a medium may multiply a walking player's speed by.
+ *
+ * **Ten, and the floor is zero.** Zero is the quicksand case and is the reason the field is
+ * separate from a push at all: a slow medium and a fast one differ only in this number, and
+ * clamping the floor at something above zero would make "slow" mean "slightly slow".
+ */
+export const MAX_MEDIUM_SPEED_SCALE = 10;
+
+/**
  * The largest a zone's box may be on any axis, in world units.
  *
  * A zone is meant to be a doorway or a platform — tens of units — so this is generous by

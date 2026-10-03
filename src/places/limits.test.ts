@@ -77,6 +77,27 @@ describe("every limit is referenced somewhere", () => {
 
 describe("every limit is exercised at its edge", () => {
   /**
+   * A well-formed `medium-add` with one field replaced, for the rows below.
+   *
+   * **Written once because there are three rows and the payload is six fields**, and a builder
+   * that had to be spelled out per row would be the sort of repetition where one row quietly
+   * differs from the other two and nobody notices which.
+   */
+  const mediumWith = (
+    over: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    id: "belt",
+    box: [
+      [-10, 0, -5],
+      [10, 4, 5],
+    ],
+    pushVx: 0,
+    pushVz: 40,
+    speedScale: 1,
+    ...over,
+  });
+
+  /**
    * Each row: a limit, and a payload built around a value that is supposed to sit on it.
    *
    * `at` and `over` are the whole test. A limit that nothing rejects a value for is a limit
@@ -116,6 +137,20 @@ describe("every limit is exercised at its edge", () => {
         radius: n,
         intensity: 1,
       }),
+    },
+    {
+      limit: limits.MAX_MEDIUM_PUSH,
+      name: "MAX_MEDIUM_PUSH",
+      end: "max",
+      tag: "medium-add",
+      build: (n) => mediumWith({ pushVz: n }),
+    },
+    {
+      limit: limits.MAX_MEDIUM_SPEED_SCALE,
+      name: "MAX_MEDIUM_SPEED_SCALE",
+      end: "max",
+      tag: "medium-add",
+      build: (n) => mediumWith({ speedScale: n }),
     },
     {
       limit: limits.MAX_LIGHT_INTENSITY,
@@ -318,6 +353,9 @@ describe("every limit is exercised at its edge", () => {
       // A host's own collection rather than a payload field, exactly as `MAX_ZONES` is — it is
       // checked at the limit and one past it in `host.test.ts`, by a place that fills it.
       "MAX_LIGHTS",
+      // A host's own collection, like `MAX_LIGHTS` — checked at the limit and one past it in
+      // `host.test.ts`, by a place that fills it.
+      "MAX_MEDIUMS",
       "MAX_EVENTS",
       "MAX_EVENT_ID_LENGTH",
       "MAX_PRODUCER_LENGTH",

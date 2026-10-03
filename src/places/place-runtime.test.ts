@@ -27,7 +27,22 @@ interface Asked {
 }
 
 /**
- * A stub host: records effects, answers four queries from a flat world, and counts steps.
+ * What `getMediumAt` answers above `z = 0`, so a test can stand in a field or out of one.
+ *
+ * **A real field rather than a stub shape**, because the point of these tests is the seam and a
+ * field with the right keys but no meaning would pass a check that a field with the wrong keys
+ * fails.
+ */
+const MEDIUM = {
+  pushVx: 0,
+  pushVz: 25,
+  pushVy: null,
+  speedScale: 1,
+  sink: 0,
+};
+
+/**
+ * A stub host: records effects, answers five queries from a flat world, and counts steps.
  *
  * **The world is deliberately trivial** — a floor at `y = 0` and water below `y = -10` —
  * because what is being tested is that a question reaches the host and an answer comes back,
@@ -51,6 +66,12 @@ const stubHost = (asked: Asked[]) => ({
         return JSON.stringify(args[1] < -10);
       case "raycast":
         return JSON.stringify(null);
+      // **A push field beyond `x = 100`, and null before it.** A stub that answered "null"
+      // everywhere would leave the "there is a field" branch of every test unreachable, and one
+      // that answered everywhere would make "none here" unreachable — so the answer varies with
+      // the point asked about, which is what makes one step cover both branches.
+      case "getMediumAt":
+        return JSON.stringify(args[0] > 100 ? MEDIUM : null);
       // The one query that reads a place's own state. "null" here is enough for the query to
       // be *asked for*, which is what the bridge's closed set is about.
       case "getData":
@@ -788,5 +809,156 @@ describe("a place lights the world", () => {
         `,
       }),
     ).rejects.toThrow(/light-add/);
+  });
+});
+
+/**
+ * The field functions, through the real interpreter.
+ *
+ * ## Why this file and not `host.test.ts`
+ *
+ * That file proves the host keeps what it is given. It cannot catch a guest function that sends
+ * the wrong field name, a bridge that drops the tag, or a bundler that fails to export the symbol
+ * — each of which passes its own layer's test and fails here, and none of which is visible from
+ * either end.
+ *
+ * ## And the one that is about the *absence* of a field
+ *
+ * `getMediumAt` returns `undefined` where no field stands, and that is a value the guest library
+ * has to recognise rather than pass on. A field object with four of its five numbers would be added
+ * to a velocity and produce a NaN that travels; the check is here so that cannot happen at the
+ * boundary.
+ */
+describe("a place declares a field", () => {
+  it("sends a medium-add with every field the host needs", async () => {
+    const { asked } = await run({
+      "main.ts": `
+        import { createMedium } from "voxelscape";
+        createMedium({
+          id: "belt",
+          box: [[-10, 0, -5], [10, 4, 5]],
+          pushVx: 0,
+          pushVz: 60,
+          speedScale: 1,
+          sink: 8,
+        });
+      `,
+    });
+
+    expect(asked).toEqual([
+      {
+        tag: "medium-add",
+        payload: {
+          id: "belt",
+          box: [
+            [-10, 0, -5],
+            [10, 4, 5],
+          ],
+          pushVx: 0,
+          pushVz: 60,
+          speedScale: 1,
+          sink: 8,
+        },
+      },
+    ]);
+  });
+
+  it("leaves pushVy and sink out entirely when they were not asked for", async () => {
+    // **Absent rather than zero or null.** A field that named no vertical pull must not fight the
+    // fall, and a payload that spelled out `pushVy: 0` would be an updraft that pins the player to
+    // the ground — which is the whole difference between a conveyor and a conveyor in a lift shaft.
+    const { asked } = await run({
+      "main.ts": `
+        import { createMedium } from "voxelscape";
+        createMedium({ id: "flat", box: [[0,0,0],[4,4,4]], pushVx: 0, pushVz: 10, speedScale: 1 });
+      `,
+    });
+
+    expect(asked[0]!.payload).not.toHaveProperty("pushVy");
+    expect(asked[0]!.payload).not.toHaveProperty("sink");
+  });
+
+  it("sends a medium-remove by id, and one that is absent is not an error", async () => {
+    const { asked } = await run({
+      "main.ts": `
+        import { removeMedium } from "voxelscape";
+        removeMedium("never-existed");
+      `,
+    });
+    expect(asked).toEqual([
+      { tag: "medium-remove", payload: { id: "never-existed" } },
+    ]);
+  });
+
+  it("refuses a field the vocabulary will not accept, and says so to the place", async () => {
+    // **The all-or-nothing payload rule (ADR 0017) at the seam.** A negative push is not a belt
+    // going the other way, it is a number that would carry the player backwards off the map; the
+    // rule is refused rather than clamped, and thrown into the script rather than logged, because a
+    // place that carried on would have a field no renderer or physics agrees about.
+    await expect(
+      run({
+        "main.ts": `
+          import { createMedium } from "voxelscape";
+          createMedium({ id: "belt", box: [[0,0,0],[4,4,4]], pushVx: 0, pushVz: -9999, speedScale: 1 });
+        `,
+      }),
+    ).rejects.toThrow(/medium-add/);
+  });
+
+  it("reads a field back, and reports none where there is none", async () => {
+    const { asked, interpreter } = await run({
+      "main.ts": `
+        import { getMediumAt, log, onTick } from "voxelscape";
+        onTick(() => {
+          const inside = getMediumAt(200, 2, 5);
+          const outside = getMediumAt(0, 2, 5);
+          log(inside === undefined ? "none" : "push " + inside.pushVz);
+          log(outside === undefined ? "none" : "push " + outside.pushVz);
+        });
+      `,
+    });
+    // The stub answers with a field beyond `x = 100` and nothing before it, so both branches are
+    // covered by one step — and `undefined` rather than a null-ish object is what the script sees.
+    interpreter.step("1700000000000", "[]");
+    expect(asked.map((one) => one.payload["text"])).toEqual([
+      "push 25",
+      "none",
+    ]);
+    interpreter.dispose();
+  });
+
+  it("refuses to hand back a field that is missing one of its numbers", async () => {
+    // **The check at the boundary.** The host's own `Medium` has five fields and the physics adds
+    // every one of them to something; four would produce `undefined` in a velocity and a NaN that
+    // then travels through the frame. If the bridge ever answered with a partial object, the script
+    // must see `undefined` rather than something that looks usable.
+    const asked: Asked[] = [];
+    const interpreter = await createInterpreter({
+      seed: 1,
+      now: () => 1_700_000_000_000,
+      onDispatch: (tag, payloadJson) => {
+        const parsed = parseEffect(tag, JSON.parse(payloadJson));
+        if (parsed === null) return `${tag}: refused`;
+        asked.push({ tag, payload: parsed.payload as Record<string, unknown> });
+        return "";
+      },
+      // **Four of the five**, and the missing one is `sink`.
+      onQuery: () =>
+        JSON.stringify({ pushVx: 0, pushVz: 10, pushVy: null, speedScale: 1 }),
+    });
+    interpreter.load(
+      bundlePlace(
+        {
+          "main.ts": `
+            import { getMediumAt, log, onTick } from "voxelscape";
+            onTick(() => { log(getMediumAt(0, 0, 0) === undefined ? "none" : "a field"); });
+          `,
+        },
+        "main.ts",
+      ),
+    );
+    interpreter.step("1700000000000", "[]");
+    expect(asked.map((one) => one.payload["text"])).toEqual(["none"]);
+    interpreter.dispose();
   });
 });

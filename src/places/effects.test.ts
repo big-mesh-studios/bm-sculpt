@@ -60,6 +60,17 @@ const validFor = (tag: EffectTag): Record<string, unknown> => {
       intensity: 1,
     },
     "light-remove": { id: "lamp" },
+    "medium-add": {
+      id: "belt",
+      box: [
+        [-10, 0, -5],
+        [10, 4, 5],
+      ],
+      pushVx: 0,
+      pushVz: 40,
+      speedScale: 1,
+    },
+    "medium-remove": { id: "belt" },
     "clock-set": { seconds: 300 },
     "clock-speed": { multiplier: 1 },
     "player-place": { at: [1, 2, 3] },

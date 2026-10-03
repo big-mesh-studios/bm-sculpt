@@ -50,6 +50,15 @@ export const GUEST_QUERIES = [
   "getHeightAt",
   /** `getWaterAt(x, y, z)` → boolean. */
   "getWaterAt",
+  /**
+   * `getMediumAt(x, y, z)` → a field or null.
+   *
+   * **A spatial query rather than "the medium the player is in",** because a place building a
+   * conveyor wants to know whether the player is standing on *its* belt, which is a question
+   * about a box and a position. `MAX_PLAYERS` is 1 today, so the two would be the same answer;
+   * they would not be once there were more.
+   */
+  "getMediumAt",
   /** `raycast(origin, direction, maxDistance)` → a hit or null. */
   "raycast",
   /**

@@ -161,5 +161,24 @@ budget is what makes `demos.test.ts` flaky at load 20. They were seen failing an
 commit across a session. If they become a nuisance the answer is a budget in interpreter steps, not a
 larger number.
 
+**0022's whole finding is that half of it already existed.** `PlayerWorld` has declared
+`getMediumAt`, `getSeatYawAt` and `getSurfaceVelocityAt` since before the places layer was written,
+and `updatePlayer` consumes all three — speed scaling, both pushes, the sink, a moving platform's
+velocity, a seat's heading. `GameWorld implements PlayerWorld` and supplied none of them. So the
+phase was a wiring job, not a feature, and what it added was three functions between a place's box
+and physics that was already written and already correct.
+
+Two things follow that are worth carrying forward. **A reader rather than a stored collection**,
+because a place adds and removes fields while the game runs and a world holding a snapshot would
+keep pushing a player standing on a belt that no longer exists. And **`HostMedium` is a re-export of
+`player.ts`'s own `Medium`**, for the same reason `HostClock` is `ClockCommands`: one type, so the
+compiler checks that the host produces what the physics consumes.
+
+The remaining two queries are now waiting on one decision rather than two. Their physics is written;
+they need a thing to sit on and a thing that moves. If props become a _declared_ seat and a
+_declared_ surface, both are a few lines each with no change to `player.ts`. If props are made of real
+SDF geometry, both need the geometry side built first — which is the props question, and it is not
+answered here.
+
 The phases themselves are in the repository history, one commit per phase, each verified
 before the next began.

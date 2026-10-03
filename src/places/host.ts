@@ -70,6 +70,7 @@ import {
   MAX_CHANNEL,
   MAX_DATA_KEYS,
   MAX_LIGHTS,
+  MAX_MEDIUMS,
   MAX_PENDING_TIMERS,
   MAX_ZONES,
 } from "./limits";
@@ -77,6 +78,7 @@ import type { Operation, OperationShape } from "../csg";
 import type { Bounds } from "../edit/document";
 import type { Quat, Vec3 } from "../constants";
 import type { ClockCommands } from "../console/commands";
+import type { Medium } from "../player/player";
 
 /**
  * How deep one step may cascade.
@@ -134,6 +136,14 @@ export interface HostWorld {
   solidAt(x: number, y: number, z: number): boolean;
   /** Whether a point is underwater. */
   waterAt(x: number, y: number, z: number): boolean;
+  /**
+   * The scripted field at a point, or undefined where none stands.
+   *
+   * **Optional, and absent means the application has no places at all** rather than "no field
+   * here" — the same distinction `GameWorld` makes for `getMediumAt`, and for the same reason: a
+   * query cannot fail, but it should still be honest about what it does not know.
+   */
+  mediumAt?(x: number, y: number, z: number): HostMedium | undefined;
   /**
    * Traces a ray against the same field the picker does.
    *
@@ -195,6 +205,25 @@ export interface Light {
   readonly intensity: number;
 }
 
+/**
+ * The field the player is standing in, in the shape the physics already reads.
+ *
+ * **A re-export of `player.ts`'s own `Medium`, and the reason is the same as `HostClock`'s.** The
+ * host hands this straight to `PlayerWorld.getMediumAt`, so a second declaration here would be a
+ * second thing that has to agree with the first — and a stub shaped like a copy rather than like
+ * the real interface would compile happily while proving nothing about the wiring. One type, and
+ * the compiler checks that the host really does produce what the physics consumes.
+ */
+export type HostMedium = Medium;
+
+/** A box the host owns that the player is inside, as the physics asks for it. */
+interface OwnedMedium {
+  readonly id: string;
+  readonly min: readonly [number, number, number];
+  readonly max: readonly [number, number, number];
+  readonly medium: HostMedium;
+}
+
 /** A zone the host owns, as a renderer would read it. */
 export interface Zone {
   readonly id: string;
@@ -245,6 +274,16 @@ export class PlaceHost {
   private readonly log = new EventLog();
   private readonly zones = new Map<string, Zone>();
   private readonly lights = new Map<string, Light>();
+  /**
+   * The fields, in insertion order.
+   *
+   * **A `Map` rather than a sorted collection, because the order *is* the rule.** Where two boxes
+   * overlap, the one added first wins — which is deterministic, because it is the same order the
+   * effects were dispatched in, which is the same order on every peer running the same script
+   * (ADR 0016). Sorting them would make the precedence a function of position instead, which is
+   * less predictable and no more deterministic.
+   */
+  private readonly mediums = new Map<string, OwnedMedium>();
   /** Zones the player is inside, so a move can tell an entry from a stay. */
   private inside = new Set<string>();
   private timers: PendingTimer[] = [];
@@ -314,6 +353,40 @@ export class PlaceHost {
   get lightCount(): number {
     return this.lights.size;
   }
+
+  /** How many fields exist, for a readout. */
+  get mediumCount(): number {
+    return this.mediums.size;
+  }
+
+  /**
+   * The field at a point, or `undefined` where none stands.
+   *
+   * **The first box that contains the point, and it is a bound method on purpose** — this is
+   * `PlayerWorld.getMediumAt`, handed to the physics, which asks once a frame at the player's
+   * centre. With `MAX_MEDIUMS` at 64 that is 64 box tests a frame, which is nothing, and it is the
+   * reason the count is capped well below `MAX_ZONES`.
+   *
+   * **Inclusive on both corners.** A player standing exactly on the edge of a conveyor is on the
+   * conveyor, and a half-open box would make the belt drop them the moment they reached its far
+   * end — the single most obvious way for this feature to look broken.
+   */
+  mediumAt = (x: number, y: number, z: number): HostMedium | undefined => {
+    for (const owned of this.mediums.values()) {
+      const { min, max } = owned;
+      if (
+        x >= min[0] &&
+        x <= max[0] &&
+        y >= min[1] &&
+        y <= max[1] &&
+        z >= min[2] &&
+        z <= max[2]
+      ) {
+        return owned.medium;
+      }
+    }
+    return undefined;
+  };
 
   /**
    * How many timers are waiting, for a readout.
@@ -466,6 +539,7 @@ export class PlaceHost {
     this.interpreter = undefined;
     this.zones.clear();
     this.lights.clear();
+    this.mediums.clear();
     this.inside.clear();
     this.timers = [];
   }
@@ -672,6 +746,50 @@ export class PlaceHost {
         this.lights.delete(name("id"));
         return;
 
+      case "medium-add": {
+        if (this.mediums.has(name("id"))) {
+          throw new Error(`a medium called "${name("id")}" exists`);
+        }
+        if (this.mediums.size >= MAX_MEDIUMS) {
+          throw new Error(`a world may hold ${MAX_MEDIUMS} fields at once`);
+        }
+        const [a, b] = payload["box"] as [
+          [number, number, number],
+          [number, number, number],
+        ];
+        this.mediums.set(name("id"), {
+          id: name("id"),
+          // **Corners sorted, as a zone's are.** A place author writes two opposite corners in
+          // whatever order they think of them, and a box whose min is above its max contains
+          // nothing — which would be a conveyor that silently does not push.
+          min: [
+            Math.min(a[0], b[0]),
+            Math.min(a[1], b[1]),
+            Math.min(a[2], b[2]),
+          ],
+          max: [
+            Math.max(a[0], b[0]),
+            Math.max(a[1], b[1]),
+            Math.max(a[2], b[2]),
+          ],
+          medium: {
+            pushVx: number("pushVx"),
+            pushVz: number("pushVz"),
+            // **`undefined` becomes `null`, because that is what the physics asks for.** A field
+            // that did not name a vertical pull should not be fighting the fall at all, and the
+            // type says `null` for "none" rather than zero.
+            pushVy: optionalNumber("pushVy") ?? null,
+            speedScale: number("speedScale"),
+            sink: optionalNumber("sink") ?? 0,
+          },
+        });
+        return;
+      }
+
+      case "medium-remove":
+        this.mediums.delete(name("id"));
+        return;
+
       case "clock-set":
         // The seconds are already checked to `0..1200` by the effect's rule, so this is a
         // whole number of seconds into the cycle rather than a mark that needs reducing.
@@ -777,6 +895,18 @@ export class PlaceHost {
             Number(values[2]),
           ),
         );
+      case "getMediumAt": {
+        // **`undefined` becomes `null`,** because that is what the guest library's type says and
+        // `JSON.stringify(undefined)` is `undefined`, which is not JSON and would reach the
+        // interpreter as the string "undefined" rather than as a missing value.
+        const medium = world.mediumAt?.(
+          Number(values[0]),
+          Number(values[1]),
+          Number(values[2]),
+        );
+        return JSON.stringify(medium ?? null);
+      }
+
       case "raycast":
         return JSON.stringify(
           world.raycast(triple(0), triple(1), Number(values[2])) ?? null,

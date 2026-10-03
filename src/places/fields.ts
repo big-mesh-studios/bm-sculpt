@@ -55,6 +55,9 @@ import {
   MAX_LIGHT_INTENSITY,
   MAX_LIGHT_RADIUS,
   MAX_LIGHTS,
+  MAX_MEDIUM_PUSH,
+  MAX_MEDIUM_SPEED_SCALE,
+  MAX_MEDIUMS,
   MAX_ZONES,
   MIN_SHAPE_SIZE,
 } from "./limits";
@@ -453,6 +456,13 @@ export const ZONE_LIMITS = {
   count: MAX_ZONES,
   name: MAX_ZONE_NAME_LENGTH,
   size: MAX_ZONE_SIZE,
+} as const;
+
+/** Re-exported for the same reason. */
+export const MEDIUM_LIMITS = {
+  count: MAX_MEDIUMS,
+  push: MAX_MEDIUM_PUSH,
+  speedScale: MAX_MEDIUM_SPEED_SCALE,
 } as const;
 
 /** Re-exported for the same reason. */

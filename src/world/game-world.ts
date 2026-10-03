@@ -21,7 +21,7 @@
 
 import { VOXEL_SIZE } from "../constants";
 import type { PickField } from "../pick";
-import type { PlayerWorld } from "../player/player";
+import type { Medium, PlayerWorld } from "../player/player";
 
 /** The live field, as this adapter reads it. `Field` from the CSG satisfies it. */
 export type GameField = PickField;
@@ -41,6 +41,20 @@ export interface GameWorldOptions {
    * function of position and is defined everywhere, so the world does not run out.
    */
   readonly halfExtent?: number;
+  /**
+   * The scripted field at a point, for `PlayerWorld.getMediumAt`.
+   *
+   * **Optional, and read once at construction rather than held as a live reference**, because
+   * the host that owns the fields is built after this world is: `app.tsx` creates the session,
+   * the session creates the world, and the place host comes later still. So the world is handed a
+   * *reader* rather than the collection — a function that reaches into the host on every call, and
+   * answers "none" until one exists.
+   *
+   * `undefined` rather than a function that always says "none", because the two are different
+   * claims: the first is "this world has no fields", the second is "this world has fields and
+   * there are none here". The physics reads both as null today and would not tomorrow.
+   */
+  readonly mediumAt?: (x: number, y: number, z: number) => Medium | undefined;
 }
 
 /** How close a step counts as reaching the surface, in world units. */
@@ -64,6 +78,13 @@ export class GameWorld implements PlayerWorld {
     this.heightAt = options.heightAt;
     this.seaLevel = options.seaLevel;
     this.halfExtent = options.halfExtent ?? 1e9;
+    // **`undefined` stays `undefined`.** Assigning a reader that always answered "none" would make
+    // every world's `getMediumAt` defined, and the physics would pay an optional call and a null
+    // check on every frame of every world in exchange for telling it nothing.
+    this.getMediumAt =
+      options.mediumAt === undefined
+        ? undefined
+        : (x, y, z) => options.mediumAt!(x, y, z) ?? null;
   }
 
   /**
@@ -77,6 +98,18 @@ export class GameWorld implements PlayerWorld {
   /** Whether a point is inside material. Water is not material. */
   readonly getSolidAt = (x: number, y: number, z: number): boolean =>
     this.field().distance(x, y, z) < 0;
+
+  /**
+   * The field standing at a point, or null where none does — **absent entirely when the world was
+   * given no reader.**
+   *
+   * Assigned in the constructor rather than as a property initializer because it depends on
+   * `options`. It is an own property rather than a method that always returned null, so the
+   * physics's optional chaining (`world.getMediumAt?.(...)`) reads honestly: absent means this
+   * world has no fields at all, which is not the same claim as "none here".
+   */
+  readonly getMediumAt:
+    ((x: number, y: number, z: number) => Medium | null) | undefined;
 
   /**
    * The surface to stand on at (`x`, `z`) nearest `y`.

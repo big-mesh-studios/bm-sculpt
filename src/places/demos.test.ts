@@ -140,8 +140,8 @@ describe("the shipped places", () => {
     // **The number, because the console lists them by iteration.** A fourth demo
     // that forgot its `DemoPlace` entry would be invisible to this file and
     // visible to a person, which is backwards.
-    expect(DEMO_PLACES).toHaveLength(3);
-    expect(demoIds()).toEqual(["bridge", "lanterns", "lookout"]);
+    expect(DEMO_PLACES).toHaveLength(4);
+    expect(demoIds()).toEqual(["bridge", "lanterns", "conveyor", "lookout"]);
   });
 
   it("each have an entry that is one of their own files", () => {
@@ -313,6 +313,40 @@ describe("what each demo claims it does", () => {
     // One shape would make `combine` untestable by eye, and the add-then-subtract
     // doorway is the reason this demo exists.
     expect(host.places.operationCount).toBeGreaterThan(1);
+    host.dispose();
+  });
+
+  it("the conveyor makes a field, which is the effect the summary promises", async () => {
+    const { host } = await load("conveyor");
+    // **Counting fields, not operations** — a box that only looked like a belt would pass an
+    // operation count, which is the mistake the lanterns tests are careful not to make.
+    expect(host.mediumCount).toBe(2);
+    host.dispose();
+  });
+
+  it("the conveyor's belt pushes, and its quicksand does not", async () => {
+    const { host } = await load("conveyor");
+    const belt = host.mediumAt(0, 1, 0);
+    const quicksand = host.mediumAt(100, 0, 0);
+
+    // **The two halves of the same effect, and neither is the other.** A conveyor is a push;
+    // quicksand is a speed scale and a sink. A demo that got the numbers the wrong way round would
+    // still have two fields and would still pass a count.
+    expect(belt!.pushVz).toBeGreaterThan(0);
+    expect(belt!.speedScale).toBe(1);
+    expect(quicksand!.pushVz).toBe(0);
+    expect(quicksand!.speedScale).toBeLessThan(1);
+    expect(quicksand!.sink).toBeGreaterThan(0);
+    host.dispose();
+  });
+
+  it("the conveyor's two fields do not overlap", async () => {
+    const { host } = await load("conveyor");
+    // **Overlap resolution is "first one added wins"**, so two fields on top of each other make
+    // the second one unreachable and the demo would quietly be only half of what it says. The belt
+    // is at x -30..30 and the quicksand at x 60..140, and the gap between them is what proves it.
+    const between = host.mediumAt(45, 0, 0);
+    expect(between).toBeUndefined();
     host.dispose();
   });
 

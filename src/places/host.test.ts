@@ -8,7 +8,7 @@ import {
   type RayHit,
 } from "./host";
 import { PlaceRegistry } from "./place-registry";
-import { MAX_LIGHTS } from "./limits";
+import { MAX_LIGHTS, MAX_MEDIUMS } from "./limits";
 import { SculptDocument } from "../edit/document";
 import { FoldOrder } from "../edit/fold-order";
 import { GameWorld } from "../world/game-world";
@@ -149,6 +149,11 @@ const start = async (
     clock: stubClock(asked),
     onNotice: (message) => notices.push(message),
   });
+  // **The same wiring `app.tsx` does, and for the same reason.** The stub world is a plain object
+  // with no route to the host that owns the fields, so without this a `getMediumAt` query would be
+  // answered by a stub that cannot answer — and the test would pass for the wrong reason. The
+  // host exists now, so the reader can close over it exactly as the application does.
+  (world as Partial<HostWorld>).mediumAt = (x, y, z) => host.mediumAt(x, y, z);
   await host.load();
   return { host, world, asked, notices };
 };
@@ -1194,6 +1199,240 @@ describe("lights", () => {
     expect(notices).toEqual([]);
     const [only] = host.visibleLights(undefined, 8);
     expect(only!.radius).toBe(0);
+    host.dispose();
+  });
+});
+
+/**
+ * The fields a place declares.
+ *
+ * **The physics already existed.** `PlayerWorld` has declared `getMediumAt` and `updatePlayer`
+ * has consumed it since before this phase — speed scaling, both pushes, the sink — so what is new
+ * is the place-facing half and the wire between it and that already-written code. Which makes the
+ * tests here mostly about the seam:
+ *
+ * 1. **The overlap rule is the first one added wins**, and it has to be stated rather than left to
+ *    `Map` iteration order being what it happens to be.
+ * 2. **`MAX_MEDIUMS` is enforced**, which is the only reference that constant has.
+ * 3. **The query and the physics get the same answer**, because they are the same method and a
+ *    place that disagreed with its own player would be undebuggable.
+ */
+describe("fields", () => {
+  /** A place that declares one field and reports what the host holds. */
+  const belt = async (
+    box: readonly [
+      readonly [number, number, number],
+      readonly [number, number, number],
+    ],
+    over: Record<string, unknown> = {},
+  ) =>
+    start({
+      "main.ts": `
+        import { createMedium, onTick } from "voxelscape";
+        createMedium({
+          id: "belt",
+          box: ${JSON.stringify(box)},
+          pushVx: 0,
+          pushVz: 40,
+          speedScale: 1,
+          ...${JSON.stringify(over)},
+        });
+        onTick(() => {});
+      `,
+    });
+
+  /** The belt of these tests: from `z = -5` to `z = 5`, `y` 0 to 4, x -10 to 10. */
+  const BELT: readonly [
+    readonly [number, number, number],
+    readonly [number, number, number],
+  ] = [
+    [-10, 0, -5],
+    [10, 4, 5],
+  ];
+
+  it("answers for a point inside it", async () => {
+    const { host } = await belt(BELT);
+    expect(host.mediumAt(0, 2, 0)).toEqual({
+      pushVx: 0,
+      pushVz: 40,
+      // **Absent means `null`, not zero.** A field that named no vertical pull must not fight the
+      // fall, and zero would be an updraft that pins the player to the ground.
+      pushVy: null,
+      speedScale: 1,
+      sink: 0,
+    });
+    host.dispose();
+  });
+
+  it("answers nothing for a point outside it", async () => {
+    const { host } = await belt(BELT);
+    expect(host.mediumAt(0, 2, 50)).toBeUndefined();
+    expect(host.mediumAt(0, 50, 0)).toBeUndefined();
+    expect(host.mediumAt(500, 2, 0)).toBeUndefined();
+    host.dispose();
+  });
+
+  it("treats the box corners as unordered", async () => {
+    // **A place author writes two opposite corners in whichever order they think of them**, and a
+    // box whose min is above its max contains nothing — which would be a conveyor that silently
+    // does not push. Same rule as `zone-add`.
+    const { host } = await belt([
+      [10, 4, 5],
+      [-10, 0, -5],
+    ]);
+    expect(host.mediumAt(0, 2, 0)).toBeDefined();
+    host.dispose();
+  });
+
+  it("includes its own edges, so a player does not step off the far end", async () => {
+    // **Inclusive on both corners.** Half-open would drop the player the moment they reached the
+    // belt's far edge, which is the most obvious way this feature could look broken.
+    const { host } = await belt(BELT);
+    expect(host.mediumAt(0, 0, 5)).toBeDefined();
+    expect(host.mediumAt(0, 0, -5)).toBeDefined();
+    expect(host.mediumAt(10, 4, 5)).toBeDefined();
+    host.dispose();
+  });
+
+  it("keeps a vertical push and a sink that were named", async () => {
+    const { host } = await belt(BELT, { pushVy: 30, sink: 12 });
+    const medium = host.mediumAt(0, 2, 0)!;
+    expect(medium.pushVy).toBe(30);
+    expect(medium.sink).toBe(12);
+    host.dispose();
+  });
+
+  it("quicksand, which is a speed scale of zero and a sink", async () => {
+    const { host } = await belt(BELT, { speedScale: 0, sink: 4, pushVz: 0 });
+    const medium = host.mediumAt(0, 2, 0)!;
+    expect(medium.speedScale).toBe(0);
+    expect(medium.sink).toBe(4);
+    host.dispose();
+  });
+
+  it("removes a field by id, and the player stops feeling it", async () => {
+    const { host } = await start({
+      "main.ts": `
+        import { createMedium, removeMedium, onTick } from "voxelscape";
+        createMedium({ id: "a", box: [[-10,0,-5],[10,4,5]], pushVx: 0, pushVz: 40, speedScale: 1 });
+        removeMedium("a");
+        onTick(() => {});
+      `,
+    });
+    expect(host.mediumAt(0, 2, 0)).toBeUndefined();
+    host.dispose();
+  });
+
+  it("removing a field that is not there does nothing", async () => {
+    const { host, notices } = await start({
+      "main.ts": `
+        import { removeMedium, onTick } from "voxelscape";
+        removeMedium("never-existed");
+        onTick(() => {});
+      `,
+    });
+    expect(notices).toEqual([]);
+    host.dispose();
+  });
+
+  it("refuses a second field with the same id", async () => {
+    const { host, notices } = await start({
+      "main.ts": `
+        import { createMedium, onTick } from "voxelscape";
+        const one = (n) => createMedium({ id: n, box: [[0,0,0],[4,4,4]], pushVx: 0, pushVz: 10, speedScale: 1 });
+        one("belt"); one("belt");
+        onTick(() => {});
+      `,
+    });
+    expect(notices.join("\n")).toMatch(/exists/);
+    expect(host.mediumCount).toBe(1);
+    host.dispose();
+  });
+
+  it("gives whichever was added first where two overlap, not whichever sorts first", async () => {
+    // **Insertion order, stated as the rule rather than inherited from `Map`.** Two fields
+    // overlapping is a real thing a place does — a fast current inside a slow one — and which one
+    // applies has to be a decision someone made rather than a property of a hash table.
+    //
+    // The determinism claim is not that the answer is `"a"` either way: it is that a *script*
+    // produces the same answer every time, because the effects arrive in the script's own order on
+    // every peer (ADR 0016). So the test asserts the order changes the answer, and that it does
+    // not change between two runs of the same script.
+    const source = (ids: readonly string[]) => ({
+      "main.ts": `
+        import { createMedium, onTick } from "voxelscape";
+        ${ids
+          .map(
+            (id) =>
+              `createMedium({ id: "${id}", box: [[-10,0,-10],[10,4,10]], pushVz: ${id === "a" ? 10 : 90}, pushVx: 0, speedScale: 1 });`,
+          )
+          .join("\n")}
+        onTick(() => {});
+      `,
+    });
+
+    const forwards = await start(source(["a", "b"]));
+    const backwards = await start(source(["b", "a"]));
+    const forwardsAgain = await start(source(["a", "b"]));
+
+    // "a" first, so "a" wins. "b" first, so "b" wins — which is the whole point: the answer
+    // follows the order the script wrote them in, and sorting by id would have answered 10 both
+    // times and looked correct while being the wrong rule.
+    expect(forwards.host.mediumAt(0, 2, 0)!.pushVz).toBe(10);
+    expect(backwards.host.mediumAt(0, 2, 0)!.pushVz).toBe(90);
+    // And the same script twice is the same answer twice.
+    expect(forwardsAgain.host.mediumAt(0, 2, 0)!.pushVz).toBe(10);
+
+    for (const host of [forwards.host, backwards.host, forwardsAgain.host])
+      host.dispose();
+  });
+
+  it("answers a query the same way the physics is answered", async () => {
+    // **One method, so one answer.** A place asking `getMediumAt` and the player standing in the
+    // field must not be told different things; there is one `mediumAt` and both reach it.
+    const { host, asked } = await start({
+      "main.ts": `
+        import { createMedium, getMediumAt, log, onTick } from "voxelscape";
+        createMedium({ id: "belt", box: [[-10,0,-5],[10,4,5]], pushVx: 0, pushVz: 40, speedScale: 1 });
+        onTick(() => {
+          const inside = getMediumAt(0, 2, 0);
+          const outside = getMediumAt(0, 2, 900);
+          log(inside === undefined ? "none" : "push " + inside.pushVz);
+          log(outside === undefined ? "none" : "push " + outside.pushVz);
+        });
+      `,
+    });
+    host.step();
+    expect(asked).toEqual(["log:push 40", "log:none"]);
+    host.dispose();
+  });
+
+  it("takes them all away when it is disposed", async () => {
+    const { host } = await belt(BELT);
+    expect(host.mediumCount).toBe(1);
+    host.dispose();
+    expect(host.mediumCount).toBe(0);
+    // **And nothing is left standing under the player's feet**, which is the part that matters:
+    // a field that outlived its place would hold a player in quicksand forever.
+    expect(host.mediumAt(0, 2, 0)).toBeUndefined();
+  });
+
+  it("refuses a field past MAX_MEDIUMS, and says how many a world may hold", async () => {
+    // **The only reference `MAX_MEDIUMS` has**, and therefore the only place it can be shown to
+    // bite. A cap nothing refuses is a cap that reads as safety and is not.
+    const { host, notices } = await start({
+      "main.ts": `
+        import { createMedium, onTick } from "voxelscape";
+        for (let i = 0; i <= ${MAX_MEDIUMS}; i++) {
+          createMedium({ id: "m" + i, box: [[0,0,0],[2,2,2]], pushVx: 0, pushVz: 1, speedScale: 1 });
+        }
+        onTick(() => {});
+      `,
+    });
+    expect(host.mediumCount).toBe(MAX_MEDIUMS);
+    expect(notices.join("\n")).toContain(
+      `world may hold ${MAX_MEDIUMS} fields`,
+    );
     host.dispose();
   });
 });

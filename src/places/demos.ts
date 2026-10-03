@@ -37,6 +37,7 @@ import BRIDGE_SOURCE from "./demo/bridge.ts?raw";
 import SPAN_SOURCE from "./demo/span.ts?raw";
 import LANTERN_SOURCE from "./demo/lanterns.ts?raw";
 import LOOKOUT_SOURCE from "./demo/lookout.ts?raw";
+import CONVEYOR_SOURCE from "./demo/conveyor.ts?raw";
 
 /** One of the places this build ships. */
 export interface DemoPlace {
@@ -66,6 +67,13 @@ export const DEMO_PLACES: readonly DemoPlace[] = [
     summary:
       "a row of real lights, and a timer that turns them on one at a time",
     files: { "main.ts": LANTERN_SOURCE },
+    entry: "main.ts",
+  },
+  {
+    id: "conveyor",
+    summary:
+      "a belt you can stand on and be carried by, and quicksand beside it",
+    files: { "main.ts": CONVEYOR_SOURCE },
     entry: "main.ts",
   },
   {

@@ -263,6 +263,104 @@ export const removeLight = (id: string): void => {
   ask("light-remove", { id });
 };
 
+/* ------------------------------------------------------------------ fields */
+
+export interface CreateMediumOptions {
+  /** Its name, and how it is referred to when removed. Never generated. */
+  readonly id: string;
+  /** Two opposite corners, in any order — the field sorts them. */
+  readonly box: readonly [Vec3Like, Vec3Like];
+  /**
+   * Sideways pull, in world units per second. **Zero on one axis makes it a one-way belt.**
+   */
+  readonly pushVx: number;
+  /** Forward pull, in world units per second. */
+  readonly pushVz: number;
+  /**
+   * Upward pull, positive is up. **Left out, the field does not touch falling at all** — which is
+   * what makes one conveyor definition also a floor, rather than also being an updraft.
+   */
+  readonly pushVy?: number;
+  /**
+   * What walking speed becomes while inside. **0 is quicksand**: the player moves at a fraction
+   * of their own speed, or not at all, and `sink` decides how fast they go down.
+   */
+  readonly speedScale: number;
+  /**
+   * The fastest this field lets a player fall, in world units per second. Left out or zero, they
+   * fall at their own gravity — so a slow belt is `speedScale` alone and quicksand is this too.
+   */
+  readonly sink?: number;
+}
+
+export const createMedium = (options: CreateMediumOptions): void => {
+  ask("medium-add", {
+    id: options.id,
+    box: options.box,
+    pushVx: options.pushVx,
+    pushVz: options.pushVz,
+    speedScale: options.speedScale,
+    ...(options.pushVy === undefined ? {} : { pushVy: options.pushVy }),
+    ...(options.sink === undefined ? {} : { sink: options.sink }),
+  });
+};
+
+export const removeMedium = (id: string): void => {
+  ask("medium-remove", { id });
+};
+
+/**
+ * What a scripted field at a point does to whoever is inside it, or `undefined` where none sits.
+ *
+ * **A query about a place rather than about the player.** "Am I standing on my belt" is a question
+ * about a box and a position, and asking it that way means the answer does not change when there
+ * is more than one player. There is one today (`MAX_PLAYERS`), so the two would agree; they would
+ * not after.
+ */
+export const getMediumAt = (
+  x: number,
+  y: number,
+  z: number,
+): Medium | undefined => {
+  const found = askAbout("getMediumAt", [x, y, z]);
+  return isMedium(found) ? found : undefined;
+};
+
+/** What a field does to a player inside it. The same five numbers the physics reads. */
+export interface Medium {
+  /** Sideways pull, in world units per second. */
+  readonly pushVx: number;
+  readonly pushVz: number;
+  /** Upward pull, positive is up. `null` when the field does not touch falling. */
+  readonly pushVy: number | null;
+  /** What walking speed becomes. */
+  readonly speedScale: number;
+  /** The fastest this field lets a player fall. Zero does not hold them down. */
+  readonly sink: number;
+}
+
+/**
+ * Whether an answer off the bridge is a field.
+ *
+ * **Every field checked, because a field with four of its five numbers is not a field** — the
+ * physics would add `undefined` to a velocity and produce a NaN that travels. A query that cannot
+ * fail should still refuse to hand back something that would.
+ */
+const isMedium = (value: unknown): value is Medium => {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  const isNumber = (key: string): boolean =>
+    typeof candidate[key] === "number" &&
+    Number.isFinite(candidate[key] as number);
+  return (
+    isNumber("pushVx") &&
+    isNumber("pushVz") &&
+    isNumber("speedScale") &&
+    isNumber("sink") &&
+    (candidate["pushVy"] === null || isNumber("pushVy"))
+  );
+};
+
 /* -------------------------------------------------------------------- clock */
 
 /** Jumps the clock to a mark in its cycle. The cycle is 1,200 seconds. */

@@ -41,6 +41,7 @@ import {
   COMBINES,
   DATA_LIMITS,
   LIGHT_LIMITS,
+  MEDIUM_LIMITS,
   OPACITY_LIMIT,
   PLAYER_LIMITS,
   SOFTNESS_LIMIT,
@@ -74,6 +75,11 @@ export const EFFECT_TAGS = [
   // colour on it.
   "light-add",
   "light-remove",
+  // Fields the player is inside. A medium is a box that moves whoever stands in it — a conveyor,
+  // a current, quicksand — and it is the one effect family that changes physics rather than what
+  // the world looks like.
+  "medium-add",
+  "medium-remove",
   // The clock. `world/day-night-controller.ts` already has the methods these call.
   "clock-set",
   "clock-speed",
@@ -262,6 +268,67 @@ export const EFFECTS: Readonly<Record<EffectTag, EffectSpec>> = {
   "light-remove": {
     tag: "light-remove",
     about: "Removes a light by id.",
+    fields: [nameField("id")],
+  },
+
+  "medium-add": {
+    tag: "medium-add",
+    about:
+      "A box the player is inside that moves them: a conveyor pushes them, quicksand slows " +
+      "them, a current carries them. Where two boxes overlap, the one added first wins.",
+    fields: [
+      nameField("id"),
+      {
+        name: "box",
+        kind: "box",
+        required: true,
+        about: `two opposite corners, each within ${ZONE_LIMITS.size} units of the origin`,
+      },
+      {
+        name: "pushVx",
+        kind: "number",
+        min: -MEDIUM_LIMITS.push,
+        max: MEDIUM_LIMITS.push,
+        required: true,
+        about: `a sideways pull in units per second, up to ${MEDIUM_LIMITS.push}`,
+      },
+      {
+        name: "pushVz",
+        kind: "number",
+        min: -MEDIUM_LIMITS.push,
+        max: MEDIUM_LIMITS.push,
+        required: true,
+        about: `a forward pull in units per second, up to ${MEDIUM_LIMITS.push}`,
+      },
+      {
+        name: "pushVy",
+        kind: "number",
+        min: -MEDIUM_LIMITS.push,
+        max: MEDIUM_LIMITS.push,
+        about:
+          "upward pull, positive is up. Left out, the field does not touch falling at all.",
+      },
+      {
+        name: "speedScale",
+        kind: "number",
+        min: 0,
+        max: MEDIUM_LIMITS.speedScale,
+        required: true,
+        about: `what walking speed becomes, up to ${MEDIUM_LIMITS.speedScale}; 0 is quicksand`,
+      },
+      {
+        name: "sink",
+        kind: "number",
+        min: 0,
+        max: MEDIUM_LIMITS.push,
+        about: `the fastest this field lets a player fall, up to ${MEDIUM_LIMITS.push}; 0 does not hold them down`,
+      },
+    ],
+  },
+
+  "medium-remove": {
+    tag: "medium-remove",
+    about: "Removes a medium by id.",
     fields: [nameField("id")],
   },
 
@@ -589,6 +656,8 @@ export type ParsedEffect =
   | { readonly tag: "zone-remove"; readonly payload: IdOnly }
   | { readonly tag: "light-add"; readonly payload: LightAdd }
   | { readonly tag: "light-remove"; readonly payload: IdOnly }
+  | { readonly tag: "medium-add"; readonly payload: MediumAdd }
+  | { readonly tag: "medium-remove"; readonly payload: IdOnly }
   | { readonly tag: "clock-set"; readonly payload: ClockSet }
   | { readonly tag: "clock-speed"; readonly payload: ClockSpeed }
   | { readonly tag: "player-place"; readonly payload: PlayerPlace }
@@ -654,6 +723,26 @@ export interface LightAdd {
   };
   readonly radius: number;
   readonly intensity: number;
+}
+
+/**
+ * `medium-add`.
+ *
+ * **`pushVy` and `sink` are absent rather than null**, and a field that omits both is one that
+ * does not touch falling. Making them null-on-the-wire would mean every payload has to spell out
+ * "none" for two of its six fields, and a field's job is to say what it does.
+ */
+export interface MediumAdd {
+  readonly id: string;
+  readonly box: readonly [
+    readonly [number, number, number],
+    readonly [number, number, number],
+  ];
+  readonly pushVx: number;
+  readonly pushVz: number;
+  readonly pushVy?: number;
+  readonly speedScale: number;
+  readonly sink?: number;
 }
 
 /** `zone-add`. */
@@ -734,6 +823,7 @@ export const EFFECT_LIMITS = {
   data: DATA_LIMITS,
   zones: ZONE_LIMITS,
   lights: LIGHT_LIMITS,
+  mediums: MEDIUM_LIMITS,
   timers: TIMER_LIMITS,
   players: PLAYER_LIMITS,
   cause: CAUSE_LIMIT,

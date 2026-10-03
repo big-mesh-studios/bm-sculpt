@@ -133,6 +133,7 @@ are in [`docs/adr/`](docs/adr/README.md):
 | [0019](docs/adr/0019-the-host-owns-what-it-can-own.md)                           | The host owns what it can own, and asks for the eight things it cannot             |
 | [0020](docs/adr/0020-a-place-runs-on-the-frame.md)                               | A place runs on the frame, and the console is how a person meets it                |
 | [0021](docs/adr/0021-a-place-arrives-as-a-zip-with-a-manifest.md)                | A place arrives as a zip with a manifest at its root                               |
+| [0022](docs/adr/0022-a-field-is-a-box-that-moves-the-player.md)                  | A field is a box that moves the player, and the physics was already there          |
 | [0023](docs/adr/0023-lights-are-a-fixed-table-of-uniforms.md)                    | Lights are a fixed table of uniforms, and the tests measure light                  |
 
 **The phases after 6 are not in this table, because they are not decided.** Phase 6 was the
@@ -348,9 +349,13 @@ All of it, and it runs. `/place:load bridge` in the browser builds a bridge you 
   shader. The clouds and the sky deliberately do not receive them
   ([ADR 0023](docs/adr/0023-lights-are-a-fixed-table-of-uniforms.md)).
 
-Still to come: a way to _write_ a place, and the two queries that need systems v1 does not have
-(`getSeatYawAt` needs figures, `getSurfaceVelocityAt` needs moving surfaces — both of which the
-props phase is expected to bring).
+- **Fields.** `createMedium` makes a box the player is inside that moves them: a conveyor
+  (`pushVz`), quicksand (`speedScale: 0` with a `sink`), an updraft (`pushVy`). The physics for all
+  three was written before the vocabulary existed and was waiting for this
+  ([ADR 0022](docs/adr/0022-a-field-is-a-box-that-moves-the-player.md)).
+
+Still to come: a way to _write_ a place, and `getSeatYawAt` and `getSurfaceVelocityAt` — whose physics
+also already exists, and which now wait only on the props decision.
 
 ## The game and its console
 

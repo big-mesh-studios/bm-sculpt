@@ -46,6 +46,7 @@ import { SculptSession } from "./sculpt";
 import { DEFAULT_BRUSH } from "./edit/brush";
 import { buildSpikeScene, type SpikeScene } from "./spike-scene";
 import { createInput } from "./player/input";
+import type { Medium } from "./player/player";
 import { TouchControls } from "./player/touch-controls";
 import { Game } from "./engine/game";
 import { createWater, SEA_LEVEL } from "./world/water";
@@ -198,6 +199,18 @@ export default function App() {
    * box on the screen saying nothing about what it is for.
    */
   const [placePicker] = createSignal<HTMLInputElement>();
+  /**
+   * The loaded place's field lookup, for the player's physics.
+   *
+   * **A signal rather than a field, because `Game` is built before the host exists** and the
+   * world's reader has to close over *something* that will be. `undefined` while no place is
+   * loaded and `host.mediumAt` once one is — which is what lets the reader passed to `Game` be
+   * `undefined` too, so a world with no place genuinely has no `getMediumAt` rather than one
+   * that always answers "none".
+   */
+  const [placeMedium, setPlaceMedium] = createSignal<
+    ((x: number, y: number, z: number) => Medium | undefined) | undefined
+  >();
   const [cloudStatus, setCloudStatus] = createSignal<CloudStatus>({
     state: "baking",
   });
@@ -442,6 +455,11 @@ export default function App() {
       viewport,
       input,
       seaLevel: SEA_LEVEL,
+      // **Reaches into the place host, which does not exist yet.** Declared above this line and
+      // assigned inside the settled effect, so at this moment it is `undefined` and the physics
+      // reads that as "this world has no fields" — the honest answer, and cheaper than a reader
+      // that always returns null. See `GameOptions.mediumAt`.
+      mediumAt: (x, y, z) => placeMedium()?.(x, y, z),
     });
     const water = createWater(viewport.scene, SEA_LEVEL);
     // The clouds, built once their field has been baked — on a worker, because the bake
@@ -595,6 +613,10 @@ export default function App() {
       host?.dispose();
       host = undefined;
       loadedName = undefined;
+      // **Taken away with the place, not left behind.** A reader closing over a disposed host would
+      // answer from an empty collection — which is right by luck — and keep the whole host
+      // reachable from the frame loop for as long as the application lives.
+      setPlaceMedium(undefined);
       notices.length = 0;
       setPlaceBanner(undefined);
       setPlaceToast(undefined);
@@ -624,7 +646,12 @@ export default function App() {
       // the second's fold order.
       dropPlace();
 
-      const next = new PlaceHost({
+      // **Annotated, because the initializer now mentions `next`.** `mediumAt` below closes over
+      // `next.mediumAt` so that a script's top-level code can ask what field it is standing in,
+      // and without the annotation TypeScript cannot infer a value from an initializer that
+      // refers to the value — it gives up and says `any`, which then loses every narrowing the
+      // rest of this function depends on.
+      const next: PlaceHost = new PlaceHost({
         files,
         entry,
         seed,
@@ -634,6 +661,10 @@ export default function App() {
           terrainHeight: sculpt.terrainHeight,
           solidAt: (x, y, z) => game.world.getSolidAt(x, y, z),
           waterAt: (x, y, z) => game.world.getInWaterAt(x, y, z),
+          // **The same answer the physics gets**, by the same method, so a place asking "what am
+          // I standing in" and a player standing in it cannot get different replies. Assigned
+          // before `load()` runs, because a script's top-level code is allowed to ask.
+          mediumAt: (x, y, z) => next.mediumAt(x, y, z),
           raycast: (origin, direction, maxDistance) =>
             game.raycast(origin, direction, maxDistance),
           // The seam that makes a place visible: without it a shape a script made would be
@@ -665,6 +696,16 @@ export default function App() {
 
       host = next;
       loadedName = name;
+      // **The physics can now feel this place.** One assignment, and every frame's collision run
+      // asks the host directly rather than being handed a snapshot that could be a frame old.
+      //
+      // **Wrapped in an arrow because a Solid setter treats a bare function as an updater.** Given
+      // `next.mediumAt` directly, the setter would call it with one argument — `prev` — and read
+      // the result as the new value, so the signal would hold whatever a three-argument query
+      // returned when called with a single `undefined`. Wrapping it says "the new value is a
+      // function" rather than "the new value is what this function returns", which is the
+      // difference between a working conveyor and a signal holding `undefined` forever.
+      setPlaceMedium(() => next.mediumAt);
       zoneLines.update(host.zoneList);
 
       // **A place's own spawn, honoured or there is no point in the field.** The manifest

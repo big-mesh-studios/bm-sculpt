@@ -30,6 +30,7 @@ import {
   DEFAULT_PLAYER_CONFIG,
   placeCamera,
   updatePlayer,
+  type Medium,
   type Player,
   type PlayerConfig,
 } from "../player/player";
@@ -54,6 +55,16 @@ export interface GameOptions {
   readonly seaLevel?: number;
   /** Movement settings for this world; anything omitted takes its default. */
   readonly player?: Partial<PlayerConfig>;
+  /**
+   * The scripted field at a point, for the player's physics — a conveyor, a current, quicksand.
+   *
+   * **A reader rather than the collection, and the reason is the order things are built in.**
+   * `Game` makes its `GameWorld` in its constructor, and the place host that owns the fields does
+   * not exist until a person types `/place:load`. So this is a function that reaches into the host
+   * when it is asked, and answers "none" while there is no host — which is the state the
+   * application spends its whole life in before anyone loads a place.
+   */
+  readonly mediumAt?: (x: number, y: number, z: number) => Medium | undefined;
 }
 
 /** What `Game.raycast` reports, and what a place's guest library receives. */
@@ -130,6 +141,10 @@ export class Game {
 
     this.world = new GameWorld({
       field: () => this.sculpt.collisionField,
+      // **Only when the caller has one.** Passing a reader that always said "none" would make
+      // `getMediumAt` defined on every world and cost the physics an optional call per frame for
+      // the privilege of telling it nothing.
+      ...(options.mediumAt === undefined ? {} : { mediumAt: options.mediumAt }),
       ...(this.sculpt.terrainHeight !== undefined
         ? { heightAt: this.sculpt.terrainHeight }
         : {}),
