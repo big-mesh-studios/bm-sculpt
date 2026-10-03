@@ -38,7 +38,12 @@ export {
   shapePadding,
 } from "@big-mesh-studios/sdf";
 
-export type { Combine, IndexedOperation, Operation } from "./operations";
+export type {
+  Combine,
+  IndexedOperation,
+  Operation,
+  SurfaceColour,
+} from "./operations";
 export {
   CANDIDATE_MARGIN,
   COMBINE,

@@ -13,7 +13,8 @@
  * needs and does not have is something that implementation would be missing too.
  */
 
-import type { Bounds, Rgb8, Vec3 } from "@big-mesh-studios/core";
+import type { Bounds, Vec3 } from "@big-mesh-studios/core";
+import type { SurfaceColour } from "@big-mesh-studios/csg";
 import { BLOCK_WORLD, VOXEL_SIZE } from "../constants";
 import type { CellCoord, Lod, SkirtMask } from "../world";
 import { lodSampleSize, lodSamples } from "../world";
@@ -140,7 +141,16 @@ export interface MeshField {
   distance(x: number, y: number, z: number): number;
   distanceForStepping(x: number, y: number, z: number): number;
   gradient(x: number, y: number, z: number, step?: number): Vec3;
-  colourAt(x: number, y: number, z: number): Rgb8;
+  /**
+   * The surface's colour and how opaque it is.
+   *
+   * **Both, rather than the colour alone, because the terrain discards the second.**
+   * The landscape's material writes `vec4(albedo, 1)` — an opaque world has nothing
+   * to blend — so the opacity is read here and thrown away. It is still part of the
+   * interface so that a field carrying transparency does not need a second method to
+   * expose it, and so a mesher does not have to know which of the two it is meshing.
+   */
+  colourAt(x: number, y: number, z: number): SurfaceColour;
   /**
    * Declares a region about to be sampled, so one candidate cache serves all of it, and
    * returns the function that ends it.
@@ -214,8 +224,8 @@ export class SurfaceNetsChunkMesher implements ChunkMesher {
           // have to know about fields at all.
           const normal = this.field.gradient(x, y, z);
           this.builder.setNormal(index, normal.x, normal.y, normal.z);
-          const colour = this.field.colourAt(x, y, z);
-          this.builder.setColour(index, colour);
+          const { colour, opacity } = this.field.colourAt(x, y, z);
+          this.builder.setColour(index, colour, Math.round(opacity * 255));
         },
       });
     } finally {

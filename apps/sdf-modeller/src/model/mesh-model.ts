@@ -94,19 +94,30 @@ export const samplesFor = (
 };
 
 /**
- * The model as CSG operations: one `Add` per part.
+ * The model as CSG operations, one per part, in list order.
  *
- * **A union, and nothing else.** Subtraction, intersection and paint are all things the
- * `Combine` type can say and none of them are things this model says, so the mapping is
- * total in one direction: every part is an `Add`. The indices are the parts' positions in
- * the list, which is what makes the fold order the order the parts are listed in — and
- * therefore the order a person can rely on.
+ * **The list order is the fold order, and that now means something.** With every part an
+ * `Add` the fold came out the same however the list was arranged, so a part's position was
+ * bookkeeping. A `Subtract` in the list makes it not: `A`, `B`, then a difference of `C`
+ * is a different solid from the same three parts in another order, and nothing recovers
+ * which was meant. So the indices are the parts' positions deliberately, and reordering a
+ * model is editing it.
+ *
+ * **`Paint` is deliberately not reachable from here.** It adds no material — it only
+ * colours — and a part's colour counts whatever its boolean is, so a coloured `Add`
+ * already covers it. Mapping it would offer a mode that does strictly less than `Add`.
  */
 export const partsToOperations = (parts: readonly Part[]): Operation[] =>
   parts.map((part, index) =>
-    makeOperation(index, part.origin, part.shape, "Add", {
+    makeOperation(index, part.origin, part.shape, part.combine, {
       orientation: part.orientation,
-      softness: 0,
+      softness: part.softness,
+      // **Both or neither.** An opacity with no colour is a number nothing reads, so it is
+      // not passed — which keeps `Operation.colour` the single thing that decides whether a
+      // part has an appearance of its own.
+      ...(part.colour === undefined
+        ? {}
+        : { colour: part.colour, opacity: part.opacity ?? 1 }),
     }),
   );
 
@@ -182,6 +193,44 @@ export interface MeshResult {
 }
 
 /**
+ * Meshes one part on its own, centred on the origin, for a preview.
+ *
+ * ## Why this is not `meshModel([part])`
+ *
+ * **Because a single-part model is not the part.** `meshModel` folds the list, and a lone
+ * `Subtract` folded against a base of `Infinity` comes out as nothing at all — so a preview
+ * of a difference would have been an empty scene, which is a very confusing thing to show
+ * somebody who is dragging it somewhere. Forcing `Add` and a hard edge gives the primitive's
+ * own surface, which is what a preview of a move is: the shape that is going somewhere, not
+ * the effect it currently has on the model.
+ *
+ * ## Why the origin is dropped and the orientation is not
+ *
+ * **So the mesh comes out in the part's own frame, with its turn already in it.** The caller
+ * then only has to set a position to place it, and a drag costs one position write per
+ * frame. Keeping the orientation in the mesh rather than on the object also means the
+ * preview cannot drift out of step with the part: there is one turn, and it is baked into
+ * the vertices.
+ *
+ * ## Why it is built once rather than per frame of a drag
+ *
+ * **Because a drag along one axis cannot change a shape**, so after the first build the
+ * vertices are exactly right for every remaining frame. See `view/ghost.ts`.
+ */
+export const primitiveMesh = (
+  part: Part,
+  budget: MeshBudget = DEFAULT_BUDGET,
+): MeshResult | undefined => {
+  const local: Part = {
+    ...part,
+    origin: { x: 0, y: 0, z: 0 },
+    combine: "Add",
+    softness: 0,
+  };
+  return meshModel([local], budget);
+};
+
+/**
  * Meshes a whole model.
  *
  * **`undefined` for a model with no parts**, which is different from a model that meshes
@@ -206,6 +255,26 @@ export const meshModel = (
     sampler: field,
     out: builder,
     scratch: scratchFor(region.samples),
+    /**
+     * **The normal and the colour of every vertex, from the field.**
+     *
+     * This was absent, and its absence was not a cosmetic bug. `ChunkMeshBuilder.vertex`
+     * fills an unset normal with `+Y` and an unset colour with white — and the builder's
+     * own comment says the `+Y` was chosen to be "a real direction rather than an obvious
+     * sentinel", so that a vertex whose normal was never set would shade as though it were
+     * right. Which is exactly what happened: this model was being drawn with every normal
+     * pointing up and every vertex white.
+     *
+     * Both come from the field rather than from the mesh, because both are properties of
+     * the surface and the mesher knows nothing about fields — `SurfaceSampler` is one
+     * method, a distance.
+     */
+    onVertex: (index, x, y, z) => {
+      const normal = field.gradient(x, y, z);
+      builder.setNormal(index, normal.x, normal.y, normal.z);
+      const { colour, opacity } = field.colourAt(x, y, z);
+      builder.setColour(index, colour, Math.round(opacity * 255));
+    },
   });
 
   return {

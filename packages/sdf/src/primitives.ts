@@ -336,11 +336,47 @@ export const sdHexPrism = (len: number, r: number, p: Vec3): number => {
 // The table
 // ---------------------------------------------------------------------------
 
-/** One parameter of a primitive: a name, and whether it is one float or three. */
+/**
+ * One parameter of a primitive: a name, whether it is one float or three, and enough for a
+ * panel to put an input next to it.
+ *
+ * ## Why the label lives here rather than in the panel
+ *
+ * **Because "the corner radius of a rounded box" and "the radius of a sphere" are both
+ * `radius`, and only the shape knows which is which.** A panel that labelled the field
+ * `radius` for a `RoundBox` would be describing the wrong number — the corner fillet, not
+ * the size — and there is no way to tell the two apart from the name. So the name stays
+ * `radius` for the serialiser and the human name is carried beside it.
+ *
+ * The same goes for `len`, which is a full extent on a box and the length of the straight
+ * segment between two cap centres on a capsule: identical name, different thing, and the
+ * panel has to say which.
+ *
+ * ## Why there is a `min` and no `max`
+ *
+ * **Every parameter here is a size, and no size is negative** — that is a property of the
+ * geometry rather than of a user interface, so it belongs in the table. A maximum is not: how
+ * big a person is willing to make a limb is a question about the application and about the
+ * mesh budget, not about what a capsule is, so a panel may impose one and this does not.
+ */
 export interface PrimitiveParameter {
   readonly name: string;
   /** Three for a `Vec3`, one for a number. Also the number of floats it occupies. */
   readonly arity: 1 | 3;
+  /** What a panel calls it. */
+  readonly label: string;
+  /**
+   * What the three components of a `Vec3` parameter are called, in x, y, z order.
+   *
+   * **`Width`, `Height` and `Depth` rather than `x`, `y` and `z` for the box family**,
+   * because a person's box has a width and a depth whichever way up it is on screen, and an
+   * axis letter only means something once you know which way the part is rotated.
+   */
+  readonly axes?: readonly [string, string, string];
+  /** Smallest value that still describes a shape. */
+  readonly min: number;
+  /** A sensible increment for a number field or a drag. */
+  readonly step: number;
 }
 
 /**
@@ -397,7 +433,9 @@ export const PRIMITIVES = {
     type: "Sphere",
     exact: true,
     code: 3,
-    parameters: [{ name: "radius", arity: 1 }],
+    parameters: [
+      { name: "radius", arity: 1, label: "Radius", min: 0, step: 0.01 },
+    ],
     halfExtents: (shape: { type: "Sphere"; radius: number }) => ({
       x: shape.radius,
       y: shape.radius,
@@ -410,7 +448,16 @@ export const PRIMITIVES = {
     type: "Ellipsoid",
     exact: false,
     code: 0,
-    parameters: [{ name: "radius", arity: 3 }],
+    parameters: [
+      {
+        name: "radius",
+        arity: 3,
+        label: "Radius",
+        axes: ["Width", "Height", "Depth"],
+        min: 0,
+        step: 0.01,
+      },
+    ],
     halfExtents: (shape: { type: "Ellipsoid"; radius: Vec3 }) => shape.radius,
     sdf: (shape: { type: "Ellipsoid"; radius: Vec3 }, p: Vec3) =>
       sdEllipsoid(shape.radius, p),
@@ -419,7 +466,16 @@ export const PRIMITIVES = {
     type: "Box",
     exact: true,
     code: 1,
-    parameters: [{ name: "len", arity: 3 }],
+    parameters: [
+      {
+        name: "len",
+        arity: 3,
+        label: "Size",
+        axes: ["Width", "Height", "Depth"],
+        min: 0,
+        step: 0.05,
+      },
+    ],
     halfExtents: (shape: { type: "Box"; len: Vec3 }) => shape.len,
     sdf: (shape: { type: "Box"; len: Vec3 }, p: Vec3) => sdBox(shape.len, p),
   },
@@ -428,8 +484,15 @@ export const PRIMITIVES = {
     exact: true,
     code: 4,
     parameters: [
-      { name: "len", arity: 3 },
-      { name: "radius", arity: 1 },
+      {
+        name: "len",
+        arity: 3,
+        label: "Size",
+        axes: ["Width", "Height", "Depth"],
+        min: 0,
+        step: 0.05,
+      },
+      { name: "radius", arity: 1, label: "Corner", min: 0, step: 0.01 },
     ],
     halfExtents: (shape: { type: "RoundBox"; len: Vec3; radius: number }) => ({
       x: shape.len.x + shape.radius,
@@ -444,8 +507,8 @@ export const PRIMITIVES = {
     exact: true,
     code: 2,
     parameters: [
-      { name: "len", arity: 1 },
-      { name: "radius", arity: 1 },
+      { name: "len", arity: 1, label: "Length", min: 0, step: 0.05 },
+      { name: "radius", arity: 1, label: "Radius", min: 0, step: 0.01 },
     ],
     halfExtents: (shape: { type: "Capsule"; len: number; radius: number }) => ({
       x: shape.radius,
@@ -460,8 +523,8 @@ export const PRIMITIVES = {
     exact: true,
     code: 5,
     parameters: [
-      { name: "len", arity: 1 },
-      { name: "radius", arity: 1 },
+      { name: "len", arity: 1, label: "Height", min: 0, step: 0.05 },
+      { name: "radius", arity: 1, label: "Radius", min: 0, step: 0.01 },
     ],
     halfExtents: (shape: { type: "Cone"; len: number; radius: number }) => ({
       x: shape.radius,
@@ -476,8 +539,8 @@ export const PRIMITIVES = {
     exact: true,
     code: 6,
     parameters: [
-      { name: "len", arity: 1 },
-      { name: "radius", arity: 1 },
+      { name: "len", arity: 1, label: "Height", min: 0, step: 0.05 },
+      { name: "radius", arity: 1, label: "Radius", min: 0, step: 0.01 },
     ],
     halfExtents: (shape: {
       type: "Cylinder";
@@ -496,8 +559,20 @@ export const PRIMITIVES = {
     exact: true,
     code: 7,
     parameters: [
-      { name: "majorRadius", arity: 1 },
-      { name: "minorRadius", arity: 1 },
+      {
+        name: "majorRadius",
+        arity: 1,
+        label: "Major radius",
+        min: 0,
+        step: 0.01,
+      },
+      {
+        name: "minorRadius",
+        arity: 1,
+        label: "Minor radius",
+        min: 0,
+        step: 0.01,
+      },
     ],
     halfExtents: (shape: {
       type: "Torus";
@@ -518,8 +593,8 @@ export const PRIMITIVES = {
     exact: true,
     code: 8,
     parameters: [
-      { name: "len", arity: 1 },
-      { name: "radius", arity: 1 },
+      { name: "len", arity: 1, label: "Height", min: 0, step: 0.05 },
+      { name: "radius", arity: 1, label: "Radius", min: 0, step: 0.01 },
     ],
     halfExtents: (shape: {
       type: "HexPrism";
@@ -566,6 +641,18 @@ export const sdShape = (shape: OperationShape, p: Vec3): number =>
 /** A primitive's half-extents along its own axes. */
 export const primitiveHalfExtents = (shape: OperationShape): Vec3 =>
   specOf(shape).halfExtents(shape as never);
+
+/**
+ * A primitive's parameters, in file order, with the labels and bounds a panel needs.
+ *
+ * **This is the seventh reader the table replaced.** A picker that wanted one input per
+ * dimension used to switch over `shape.type` itself, which is the thing ADR 0025 set out to
+ * stop — and it would have had to learn that a `RoundBox`'s `radius` is its corner and a
+ * capsule's `len` is its straight segment, which is what `parameters` now says outright.
+ */
+export const primitiveParameters = (
+  shape: OperationShape,
+): readonly PrimitiveParameter[] => specOf(shape).parameters;
 
 /** The float count a primitive's parameters occupy in the file format. */
 export const parameterFloats = (shape: OperationShape): number => {
@@ -619,6 +706,111 @@ export const shapeFromFloats = (
     }
   }
   return shape as OperationShape;
+};
+
+/**
+ * One editable number of a shape: a scalar parameter's own value, or one component of a
+ * three-number one.
+ *
+ * **`axis` is `undefined` for a scalar and set for a `Vec3`,** rather than there being two
+ * kinds of field. One kind means a panel can loop over one list, and the axis is what tells
+ * a reader which of the two it is looking at.
+ */
+export interface DimensionField {
+  /** The parameter's name in the shape. */
+  readonly name: string;
+  /** Which component of a `Vec3`, or `undefined` when the parameter is a number. */
+  readonly axis: "x" | "y" | "z" | undefined;
+  /** What to call this input: `Width` for a box's x, `Radius` for a sphere's only number. */
+  readonly label: string;
+  /** What it is now. */
+  readonly value: number;
+  /** The table's floor. No size here is negative. */
+  readonly min: number;
+  /** A sensible increment. */
+  readonly step: number;
+}
+
+/** One parameter of a shape, with the inputs it needs. */
+export interface DimensionGroup {
+  readonly name: string;
+  readonly label: string;
+  /** One entry for a number, three for a `Vec3`. Never two. */
+  readonly fields: readonly DimensionField[];
+}
+
+const AXES = ["x", "y", "z"] as const;
+
+/**
+ * A shape's editable numbers, grouped by parameter and in file order.
+ *
+ * **The eighth reader the table replaced, and the one that had been a `switch`.** A panel
+ * that wanted an input per dimension had to enumerate the nine shapes itself to learn that a
+ * box has three numbers and a capsule has two — which is exactly the duplication ADR 0025
+ * set out to remove, and the reason the first version of this panel rendered nothing.
+ *
+ * Grouping by parameter rather than returning one flat list of numbers is what lets a panel
+ * put a border around the three of a `Vec3`; the shape really does treat them as one value,
+ * and a border is the cheapest way to say so.
+ */
+export const dimensionGroups = (
+  shape: OperationShape,
+): readonly DimensionGroup[] => {
+  const values = shape as unknown as Record<string, unknown>;
+  return specOf(shape).parameters.map((parameter) => ({
+    name: parameter.name,
+    label: parameter.label,
+    fields:
+      parameter.arity === 3
+        ? AXES.map((axis, index) => ({
+            name: parameter.name,
+            axis,
+            label: (parameter.axes ?? ["x", "y", "z"])[index],
+            value: (values[parameter.name] as Vec3)[axis],
+            min: parameter.min,
+            step: parameter.step,
+          }))
+        : [
+            {
+              name: parameter.name,
+              axis: undefined,
+              label: parameter.label,
+              value: values[parameter.name] as number,
+              min: parameter.min,
+              step: parameter.step,
+            },
+          ],
+  }));
+};
+
+/**
+ * A copy of `shape` with one of its parameters changed.
+ *
+ * **A new object, never a mutation.** The store decides whether an edit deserves a history
+ * entry by comparing, and a panel that edited a shape in place would produce an edit the
+ * store cannot see and an undo that does not undo. The union cannot be narrowed by name
+ * without the same single cast `specOf` documents, so it is here once rather than in every
+ * panel.
+ *
+ * Returns `shape` unchanged when the named parameter is not one of its own — which is what a
+ * caller gets if it asks for a field the table does not have, and is why the read side and
+ * the write side cannot disagree about what a shape contains.
+ */
+export const withParameter = (
+  shape: OperationShape,
+  name: string,
+  axis: "x" | "y" | "z" | undefined,
+  value: number,
+): OperationShape => {
+  const values = shape as unknown as Record<string, unknown>;
+  if (values[name] === undefined) return shape;
+  if (axis === undefined) {
+    return { ...values, [name]: value } as OperationShape;
+  }
+  return {
+    ...values,
+    [name]: { ...(values[name] as Vec3), [axis]: value },
+  } as OperationShape;
 };
 
 /**

@@ -388,11 +388,38 @@ describe("a brush stroke", () => {
     const document = new SculptDocument();
     const stroke = beginStroke(document, {
       ...DEFAULT_BRUSH,
+      mode: "paint",
       colour: { r: 999, g: -5, b: 12.6 },
     });
     stroke.extendTo({ x: 0, y: 0, z: 0 });
     stroke.end();
     expect(document.list[0].colour).toEqual({ r: 255, g: 0, b: 13 });
+  });
+
+  it("gives a colour only to a paint stroke, and no colour at all to the others", () => {
+    // **This is the guard that keeps the landscape one colour.** An operation's colour
+    // is what decides the colour of the surface there, whatever the operation does to the
+    // geometry — so an `Add` or a `Subtract` carrying the palette's current colour would
+    // repaint the terrain with it. The brush writes a colour only when painting.
+    const document = new SculptDocument();
+    for (const mode of ["add", "subtract", "paint"] as const) {
+      const stroke = beginStroke(document, {
+        ...DEFAULT_BRUSH,
+        mode,
+        colour: { r: 1, g: 2, b: 3 },
+      });
+      stroke.extendTo({ x: 0, y: 0, z: 0 });
+      stroke.end();
+      const operation = document.list[document.count - 1]!;
+      if (mode === "paint") {
+        expect(operation.colour, mode).toEqual({ r: 1, g: 2, b: 3 });
+      } else {
+        expect(
+          operation.colour,
+          `${mode} must carry no colour`,
+        ).toBeUndefined();
+      }
+    }
   });
 
   it("survives a pointer jump without spinning", () => {

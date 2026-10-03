@@ -38,6 +38,7 @@ import {
   operationDistance,
   type IndexedOperation,
   type Operation,
+  type SurfaceColour,
 } from "./operations";
 
 /** Operations per leaf before the build splits one. */
@@ -519,31 +520,39 @@ export class OperationBVH {
   }
 
   /**
-   * The colour of the surface at a point, from the paint operations.
+   * The colour of the surface at a point, from whichever operation carries one.
    *
-   * Last writer wins among the paints whose own surface is within a unit of the
-   * point. "Within a unit" rather than "at" because a point is generally not on
+   * **Any operation with a colour, not only a `Paint`.** Before this, only
+   * `combine === "Paint"` was consulted, which made a solid operation unable to
+   * carry colour at all: `applyOperation` makes `Paint` a no-op on the distance, so
+   * `Paint` was coloured but invisible and `Add` was visible but colourless. A
+   * model of coloured parts could not be expressed.
+   *
+   * The rule is now that `combine` decides geometry and `colour` decides
+   * appearance, and an operation with no colour simply has no say in the second.
+   * **That places the obligation on whoever builds an operation** — an `Add` that
+   * carries a brush's current colour would paint, so the producers set a colour
+   * only where one is meant. `docs/adr/` records the change and the version bump it
+   * forced.
+   *
+   * Last writer wins among the operations whose own surface is within a unit of
+   * the point. "Within a unit" rather than "at" because a point is generally not on
    * the surface exactly — a vertex is offset from it by the mesher's own
-   * interpolation — and a paint that only applies on an exact zero would apply
+   * interpolation — and a colour that only applied on an exact zero would apply
    * nowhere.
    *
-   * Returns undefined where no paint applies, which is what lets the caller fall
-   * through to a paint tile and then to a default rather than having this invent
-   * one.
+   * Returns undefined where no operation applies, which is what lets the caller
+   * fall through to a paint tile and then to a default rather than having this
+   * invent one.
    */
-  evalPaint(
-    x: number,
-    y: number,
-    z: number,
-  ): { r: number; g: number; b: number } | undefined {
-    let found: { r: number; g: number; b: number } | undefined;
+  evalPaint(x: number, y: number, z: number): SurfaceColour | undefined {
+    let found: SurfaceColour | undefined;
     for (const indexed of this.all) {
       const operation = indexed.operation;
-      if (operation.combine !== "Paint" || operation.colour === undefined)
-        continue;
+      if (operation.colour === undefined) continue;
       if (!boundsContain(indexed.bounds, { x, y, z })) continue;
       if (operationDistance(indexed, { x, y, z }) <= 1) {
-        found = operation.colour;
+        found = { colour: operation.colour, opacity: operation.opacity };
       }
     }
     return found;

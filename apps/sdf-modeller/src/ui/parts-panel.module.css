@@ -4,7 +4,13 @@
 
 .panel {
   position: absolute;
-  top: 0;
+  /* **Below the header, not level with it.** Both this and the header are absolutely
+   * positioned into the top-left corner, so with both at `top: 0` they do not sit side by
+   * side — they sit on top of each other, and the first heading of the picker draws through
+   * the title. An absolute box has no relationship with another absolute box, which is the
+   * same reason the two panels overlapped on a phone; here it is solved by giving them
+   * different corners' worth of offset rather than by a layout that stacks them. */
+  top: 6.5rem;
   left: 0;
   bottom: 0;
   width: 16rem;
@@ -165,16 +171,31 @@
  */
 @media (max-width: 640px) {
   .panel {
-    top: auto;
-    right: 0;
-    bottom: 3.5rem;
+    /* **Static, not positioned.** In the narrow layout the root is a flex column and this
+       panel is a sibling of the canvas below the tab bar, so it takes height from the
+       canvas rather than being laid over it. `top`/`right`/`bottom` are what made the two
+       panels overlap: two absolutely-positioned boxes on opposite edges of a short screen
+       have no relationship, so a growing one grows into the other. See `app.module.css`. */
+    position: static;
+    order: 3;
     width: auto;
     max-width: none;
-    max-height: 45dvh;
+    max-height: 42dvh;
+
+    /* **`min-height: 0` so the panel can actually shrink.** A flex item defaults to
+       `min-height: auto`, which refuses to go below its content — so with a long parts
+       list this would push itself past the bottom of the window instead of scrolling. */
+    min-height: 0;
+    padding: var(--ui-margin);
     padding-top: var(--ui-margin);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
   }
 
-  /* The list is what gets scrolled away first; the picker is what gets used. */
+  /*
+   * **Three across rather than one.** The list is what gets scrolled away first and the
+   * picker is what gets used, so with a `42dvh` panel the picker is the row a thumb
+   * actually reaches for — and one column of nine would be nine rows of it.
+   */
   .picker {
     grid-template-columns: repeat(3, 1fr);
   }

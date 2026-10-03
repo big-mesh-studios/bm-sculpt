@@ -16,7 +16,8 @@
 import { For } from "solid-js";
 import type { ShapeType } from "@big-mesh-studios/sdf";
 
-import { barePart, MAX_PARTS, type ModelStore } from "../model/model-store";
+import { MAX_PARTS, type ModelStore } from "../model/model-store";
+import { placedPart } from "../model/part";
 import type { Part } from "../model/part";
 import styles from "./parts-panel.module.css";
 
@@ -78,7 +79,7 @@ export function PartsPanel(props: {
               disabled={full()}
               onClick={() => {
                 props.store.add(
-                  barePart(nextId(), defaultShape(primitive), {
+                  placedPart(nextId(), defaultShape(primitive), {
                     x: 0,
                     y: 0,
                     z: 0,

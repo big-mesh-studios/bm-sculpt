@@ -212,11 +212,21 @@ export class BrushStroke {
       combineOf(this.settings.mode),
       {
         softness,
-        colour: {
-          r: clampByte(this.settings.colour.r),
-          g: clampByte(this.settings.colour.g),
-          b: clampByte(this.settings.colour.b),
-        },
+        // **The colour only on a paint stroke, and that is now load-bearing rather
+        // than tidiness.** An operation's colour is what decides the colour of the
+        // surface there, whatever the operation does to the geometry — so an `Add`
+        // carrying this would paint the terrain with whichever colour the palette
+        // happened to be on. This was harmless while a colour was only read off a
+        // `Paint`, and it is a full-terrain repaint the moment that stops being true.
+        ...(this.settings.mode === "paint"
+          ? {
+              colour: {
+                r: clampByte(this.settings.colour.r),
+                g: clampByte(this.settings.colour.g),
+                b: clampByte(this.settings.colour.b),
+              },
+            }
+          : {}),
       },
     );
 

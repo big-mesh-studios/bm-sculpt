@@ -30,7 +30,12 @@ import {
   type Vec3,
 } from "@big-mesh-studios/core";
 import { OperationBVH } from "./bvh";
-import { emptyField, foldOperations, type Operation } from "./operations";
+import {
+  emptyField,
+  foldOperations,
+  type Operation,
+  type SurfaceColour,
+} from "./operations";
 
 /** A field everything else is carved out of. */
 export type BaseField = (x: number, y: number, z: number) => number;
@@ -183,18 +188,25 @@ export class Field {
   }
 
   /**
-   * The colour of the surface at a point.
+   * The colour of the surface at a point, and how opaque it is.
    *
-   * A painted tile wins over a paint operation. The tile is the direct record of a
+   * A painted tile wins over an operation. The tile is the direct record of a
    * paint stroke and the operation is the shape it was drawn through, so when both
    * cover a point the stroke is the more recent statement about it — and choosing
    * otherwise would make a hard paint vanish the moment a soft paint covered the
    * same ground.
+   *
+   * **A tile is opaque, so a tile's answer carries no opacity.** Tiles store three
+   * bytes per sample and there is nowhere in that layout for a fourth, so a tile
+   * found here is reported at full opacity rather than the layout being widened to
+   * carry a value nothing ever wrote.
    */
-  colourAt(x: number, y: number, z: number): Rgb8 {
+  colourAt(x: number, y: number, z: number): SurfaceColour {
     const painted = this.paint?.at(x, y, z);
-    if (painted !== undefined) return painted;
-    return this.bvh.evalPaint(x, y, z) ?? DEFAULT_COLOUR;
+    if (painted !== undefined) return { colour: painted, opacity: 1 };
+    return (
+      this.bvh.evalPaint(x, y, z) ?? { colour: DEFAULT_COLOUR, opacity: 1 }
+    );
   }
 
   /**

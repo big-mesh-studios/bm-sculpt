@@ -40,21 +40,33 @@ import {
 /**
  * The version this build writes, and the only one it can read.
  *
- * **Version 2, because there are six new primitives and one changed one.** The six
- * new ones need type bytes this version did not have. The changed one is the capsule:
- * it was `lenX`, along the X axis, and is now `len`, along Y — which this repository's
- * gravity and its player both agree is up. Reading the old bytes as the new ones would
- * put a capsule's length where its radius was, so the version went up rather than the
- * reader trying to notice.
+ * ## Why 3
  *
- * The three original primitives kept their bytes across the bump (Ellipsoid 0, Box 1,
+ * **Because a colour now means something on any operation, not only on a `Paint`.**
+ * Every operation this build wrote before version 3 carries a `colour` field, and on
+ * the brush that produced it was the brush's current colour — set on `Add` and
+ * `Subtract` operations as well, with a comment saying the other modes ignored it.
+ * They did ignore it. Under version 3 they do not, so **opening a version 2 file
+ * would paint the entire model with whatever colour the brush happened to be
+ * holding.** The bytes are all still there and all still parse; what changed is what
+ * they mean, which is the one thing a version byte cannot leave ambiguous.
+ *
+ * ## The two earlier bumps
+ *
+ * **Version 2 was six new primitives and one changed one.** The six needed type bytes
+ * version 1 did not have. The changed one was the capsule: it was `lenX`, along X, and
+ * is now `len`, along Y — which this repository's gravity and its player both agree is
+ * up. Reading the old bytes as the new ones would put a capsule's length where its
+ * radius was.
+ *
+ * The three original primitives kept their bytes across that bump (Ellipsoid 0, Box 1,
  * Capsule 2), which the table's test asserts. That does **not** make a version 1 file
- * readable: a v1 operation is 34 or 30 bytes depending on its shape and a v2 one is
- * 40 or 36, so the counts disagree and the reader refuses the version before it reads
- * an operation. Keeping the bytes means a reader can be told what the numbers meant,
- * not that the files are interchangeable.
+ * readable: a v1 operation is 34 or 30 bytes depending on its shape and a v2 one is 40
+ * or 36, so the counts disagree and the reader refuses the version before it reads an
+ * operation. Keeping the bytes means a reader can be told what the numbers meant, not
+ * that the files are interchangeable.
  */
-export const FORMAT_VERSION = 2;
+export const FORMAT_VERSION = 3;
 
 /**
  * Bytes one operation takes, apart from its shape's parameters: the combine mode,

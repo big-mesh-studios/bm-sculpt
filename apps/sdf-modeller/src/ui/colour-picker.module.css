@@ -1,0 +1,192 @@
+/*
+ * The colour picker: a chart, two sliders, four fields and a swatch.
+ *
+ * **Ported from rm-stacker's `ColorPicker.module.css`**, with the tokens renamed for this
+ * repository's baseline and the two text colours defined here rather than added to the
+ * baseline for one consumer.
+ *
+ * **The grid is chart-and-sliders over fields-and-swatch**, which is the sibling's layout
+ * and the right one: the chart and the two sliders are all "put a finger somewhere", and
+ * the four fields and the swatch are all "read a value". Grouping them that way means a
+ * thumb reaching for a slider never lands on a number.
+ */
+
+.colourPicker {
+  display: grid;
+  grid-template-columns: 1fr 25px 25px;
+  grid-template-rows: 200px auto;
+  grid-template-areas:
+    "chart  brightness alpha "
+    "fields output     output";
+  gap: var(--ui-margin) calc(var(--ui-margin) * 2);
+  padding: var(--ui-margin);
+  background: #111114;
+  color: #e6e6ea;
+}
+
+/* Hue across x, saturation down y, darkened by value.
+   Layers are listed topmost first: a flat black veil over white over hue. */
+.hueSaturation {
+  grid-area: chart;
+  position: relative;
+  min-width: 200px;
+  overflow: hidden;
+
+  /* **The element owns its gestures.** Without this a drag on the chart is a gesture the
+     page is free to interpret, which on a touch device means the page scrolls halfway
+     through picking a colour — and `overscroll-behavior` in the baseline stops the *page*
+     from bouncing but cannot stop this, because this gesture belongs to the chart. */
+  touch-action: none;
+
+  background-image:
+    linear-gradient(rgb(0 0 0 / var(--darken)), rgb(0 0 0 / var(--darken))),
+    linear-gradient(to bottom, rgb(255 255 255 / 0), rgb(255 255 255 / 1)),
+    linear-gradient(
+      to right,
+      #f00 0%,
+      #ff0 16.667%,
+      #0f0 33.333%,
+      #0ff 50%,
+      #00f 66.667%,
+      #f0f 83.333%,
+      #f00 100%
+    );
+  border-radius: 2px;
+}
+
+.slider {
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.brightness {
+  composes: slider;
+  grid-area: brightness;
+  background-image: linear-gradient(to top, #000, var(--full-value-colour));
+  border-radius: 2px;
+}
+
+/* `--overlay` is the only layer that differs between the alpha slider and the output
+   swatch, so both share one background stack. */
+.checkered {
+  background-image:
+    var(--overlay), linear-gradient(45deg, #808080 25%, transparent 25%),
+    linear-gradient(-45deg, #808080 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #808080 75%),
+    linear-gradient(-45deg, transparent 75%, #808080 75%);
+  background-size:
+    auto,
+    20px 20px,
+    20px 20px,
+    20px 20px,
+    20px 20px;
+  background-position:
+    0 0,
+    0 0,
+    0 10px,
+    10px -10px,
+    -10px 0px;
+}
+
+.alpha {
+  composes: slider;
+  composes: checkered;
+  grid-area: alpha;
+  border-radius: 2px;
+  --overlay: linear-gradient(to top, transparent, var(--opaque-colour));
+}
+
+.output {
+  composes: checkered;
+  grid-area: output;
+  aspect-ratio: 1;
+  align-self: end;
+  border-radius: 2px;
+  --overlay: linear-gradient(var(--colour), var(--colour));
+}
+
+.fields {
+  font-size: 0.7rem;
+  grid-area: fields;
+  display: grid;
+  grid-template-columns: auto 1fr auto 1fr auto 1fr auto 1fr;
+  justify-content: space-between;
+  align-items: center;
+  gap: calc(var(--ui-margin) / 2) var(--ui-margin);
+}
+
+.label {
+  justify-self: end;
+  color: #a9a9a9;
+}
+
+/* **A number field, so the browser brings up a number pad rather than a keyboard** — and
+   `min-height: var(--ui-size)` because the baseline raises that to 44px under a coarse
+   pointer, which is the whole reason these are targets and not text. */
+.channel {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--ui-size);
+  padding: 0 calc(var(--ui-margin) / 2);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: calc(var(--ui-size) / 4);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+  touch-action: manipulation;
+}
+
+.channel:focus {
+  color: #fff;
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.label {
+  transition: color 0.1s;
+}
+
+.channels:focus-within + .label,
+.label:has(+ .channel:focus) {
+  color: #fff;
+}
+
+/* The handles are decorative. The track below takes the pointer, so a 10px handle that
+   caught the event would make the drag start somewhere other than where it was pressed. */
+.chartHandle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #000;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.sliderHandle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 12px;
+  border: 2px solid #000;
+  transform: translateY(50%);
+  pointer-events: none;
+}
+
+/*
+ * **On a narrow screen the chart loses its fixed 200px height and the sliders move under
+ * it**, because a 200px chart plus a 200px-tall row of fields is more height than a phone
+ * has once the keyboard is up.
+ */
+@media (max-width: 640px) {
+  .colourPicker {
+    grid-template-columns: 1fr 20px 20px;
+    grid-template-rows: minmax(140px, 32dvh) auto;
+  }
+
+  .fields {
+    grid-template-columns: auto 1fr auto 1fr;
+    grid-template-areas: none;
+  }
+}

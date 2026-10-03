@@ -374,7 +374,10 @@ describe("gradients", () => {
 describe("colour", () => {
   it("falls back to the default where nothing has been painted", () => {
     const field = new Field(new OperationBVH([]));
-    expect(field.colourAt(0, 0, 0)).toEqual(DEFAULT_COLOUR);
+    expect(field.colourAt(0, 0, 0)).toEqual({
+      colour: DEFAULT_COLOUR,
+      opacity: 1,
+    });
   });
 
   it("takes a painted tile ahead of a paint operation", () => {
@@ -396,7 +399,12 @@ describe("colour", () => {
       ]),
       { paint },
     );
-    expect(field.colourAt(0, 0, 0)).toEqual({ r: 1, g: 2, b: 3 });
+    // **A tile is opaque**, because a tile stores three bytes per sample and there
+    // is nowhere in that layout for a fourth.
+    expect(field.colourAt(0, 0, 0)).toEqual({
+      colour: { r: 1, g: 2, b: 3 },
+      opacity: 1,
+    });
   });
 
   it("takes a paint operation's colour where there is no tile", () => {
@@ -413,8 +421,84 @@ describe("colour", () => {
         ),
       ]),
     );
-    expect(field.colourAt(0, 0, 0)).toEqual({ r: 200, g: 100, b: 50 });
-    expect(field.colourAt(500, 0, 0)).toEqual(DEFAULT_COLOUR);
+    expect(field.colourAt(0, 0, 0)).toEqual({
+      colour: { r: 200, g: 100, b: 50 },
+      opacity: 1,
+    });
+    expect(field.colourAt(500, 0, 0)).toEqual({
+      colour: DEFAULT_COLOUR,
+      opacity: 1,
+    });
+  });
+
+  it("takes a solid operation's colour, because a colour no longer needs a Paint", () => {
+    // **The change this whole arrangement exists for.** `Paint` is a no-op on the
+    // distance — it colours and adds no material — so before this, a coloured *solid*
+    // operation could not be expressed at all: `Add` was visible but colourless, and
+    // `Paint` was coloured but invisible. A model of coloured parts had nowhere to go.
+    const field = new Field(
+      new OperationBVH([
+        makeOperation(
+          0,
+          { x: 0, y: 0, z: 0 },
+          { type: "Box", len: { x: 50, y: 50, z: 50 } },
+          "Add",
+          { colour: { r: 12, g: 34, b: 56 }, opacity: 0.5 },
+        ),
+      ]),
+    );
+    expect(field.colourAt(0, 0, 0)).toEqual({
+      colour: { r: 12, g: 34, b: 56 },
+      opacity: 0.5,
+    });
+    // And it is still solid, which is the part `Paint` could not do.
+    expect(field.distance(0, 0, 0)).toBeLessThan(0);
+  });
+
+  it("says nothing for a solid operation with no colour", () => {
+    // **The half of the rule that keeps a landscape from turning one colour.** An
+    // operation with no colour has no say in appearance, so the answer falls through
+    // to the default rather than inventing a white to fill the gap.
+    const field = new Field(
+      new OperationBVH([
+        makeOperation(
+          0,
+          { x: 0, y: 0, z: 0 },
+          { type: "Box", len: { x: 50, y: 50, z: 50 } },
+          "Add",
+        ),
+      ]),
+    );
+    expect(field.colourAt(0, 0, 0)).toEqual({
+      colour: DEFAULT_COLOUR,
+      opacity: 1,
+    });
+  });
+
+  it("lets a later operation's colour win over an earlier one, whatever either combines", () => {
+    // Last writer wins, and the combine mode no longer takes part in that. Two
+    // overlapping solids of different colours is the case a model of coloured parts
+    // is made of.
+    const field = new Field(
+      new OperationBVH([
+        makeOperation(
+          0,
+          { x: 0, y: 0, z: 0 },
+          { type: "Box", len: { x: 50, y: 50, z: 50 } },
+          "Add",
+          { colour: { r: 255, g: 0, b: 0 } },
+        ),
+        makeOperation(
+          1,
+          { x: 0, y: 0, z: 0 },
+          { type: "Box", len: { x: 25, y: 25, z: 25 } },
+          "Add",
+          { colour: { r: 0, g: 0, b: 255 } },
+        ),
+      ]),
+    );
+    expect(field.colourAt(0, 0, 0).colour).toEqual({ r: 0, g: 0, b: 255 });
+    expect(field.colourAt(40, 0, 0).colour).toEqual({ r: 255, g: 0, b: 0 });
   });
 
   it("asks the tile only once per call, and passes the point through", () => {

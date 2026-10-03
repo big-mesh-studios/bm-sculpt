@@ -37,17 +37,21 @@
  * union — the thing it has been careful to *replace* with a table everywhere else.
  */
 export type {
+  DimensionField,
+  DimensionGroup,
   OperationShape,
   PrimitiveParameter,
   PrimitiveSpec,
   ShapeType,
 } from "./primitives";
 export {
+  dimensionGroups,
   MIN_RADIUS,
   parameterFloats,
   parametersToFloats,
   primitiveFromCode,
   primitiveHalfExtents,
+  primitiveParameters,
   PRIMITIVE_NAMES,
   PRIMITIVES,
   sdBox,
@@ -60,6 +64,7 @@ export {
   sdShape,
   sdSphere,
   sdTorus,
+  withParameter,
   shapeFromFloats,
   shapePadding,
 } from "./primitives";

@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { flush } from "solid-js";
 
-import { fromEuler, type Part } from "./part";
-import {
-  HISTORY_LIMIT,
-  MAX_PARTS,
-  barePart,
-  createModelStore,
-} from "./model-store";
+import { fromEuler, placedPart, type Part } from "./part";
+import { HISTORY_LIMIT, MAX_PARTS, createModelStore } from "./model-store";
 
 /**
  * Lets pending writes land, so an assertion can read them.
@@ -39,7 +34,7 @@ const settle = (): void => {
 };
 
 const sphereAt = (id: string, x: number): Part =>
-  barePart(id, { type: "Sphere", radius: 1 }, { x, y: 0, z: 0 });
+  placedPart(id, { type: "Sphere", radius: 1 }, { x, y: 0, z: 0 });
 
 /** Reads the parts as `id@x` strings, so an assertion reads as a list. */
 const shape = (store: ReturnType<typeof createModelStore>): string[] =>

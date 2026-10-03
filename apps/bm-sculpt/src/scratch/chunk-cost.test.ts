@@ -107,7 +107,7 @@ describe("what a chunk costs to mesh", () => {
                 vertices++;
                 const n = field.gradient(x, y, z);
                 builder.setNormal(i, n.x, n.y, n.z);
-                builder.setColour(i, field.colourAt(x, y, z));
+                builder.setColour(i, field.colourAt(x, y, z).colour);
               },
       });
       end?.();
@@ -268,7 +268,7 @@ describe("what a chunk costs to mesh", () => {
           vertexCount++;
           const n = field.gradient(x, y, z);
           builder.setNormal(i, n.x, n.y, n.z);
-          builder.setColour(i, field.colourAt(x, y, z));
+          builder.setColour(i, field.colourAt(x, y, z).colour);
         },
       });
       end?.();

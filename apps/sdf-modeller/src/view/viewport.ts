@@ -139,6 +139,17 @@ export const DEFAULT_ORBIT: OrbitLimits = {
 
 export interface OrbitController {
   readonly state: () => OrbitState;
+  /**
+   * Whether the camera answers the pointer.
+   *
+   * **This is how the move tool and the camera share one canvas.** Both want the same
+   * pointer, and there is no event a handle drag can claim exclusively — so the move tool
+   * turns the camera off for the duration of a drag and turns it back on when the finger
+   * lifts. Early-returns inside the controller rather than an `enabled` flag read at the top
+   * of `onMove`, because a flag that is only checked on move still lets the controller take
+   * the pointer capture on the way down, and two captures on one element fight.
+   */
+  readonly setInteractive: (interactive: boolean) => void;
   /** Points the camera at a model of this size, framing it. */
   readonly frame: (
     centre: { x: number; y: number; z: number },
@@ -160,6 +171,7 @@ export const createOrbit = (
     radius: 6,
     target: { x: 0, y: 0, z: 0 },
   };
+  let interactive = true;
 
   const apply = (): void => {
     const sinPhi = Math.sin(state.phi);
@@ -173,6 +185,10 @@ export const createOrbit = (
 
   const controller: OrbitController = {
     state: () => state,
+
+    setInteractive: (on) => {
+      interactive = on;
+    },
 
     frame: (centre, size) => {
       const reach = Math.max(size, limits.minRadius * 4);
@@ -211,12 +227,14 @@ export const createOrbit = (
       };
 
       const onDown = (event: PointerEvent): void => {
+        if (!interactive) return;
         element.setPointerCapture(event.pointerId);
         pointers.set(event.pointerId, local(event));
         pinch = spread();
       };
 
       const onMove = (event: PointerEvent): void => {
+        if (!interactive) return;
         const previous = pointers.get(event.pointerId);
         if (previous === undefined) return;
         const current = local(event);

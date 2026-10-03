@@ -625,14 +625,26 @@ export class PlaceHost {
     switch (effect.tag) {
       case "shape-add": {
         const place = this.place(name("place"));
+        const combine = name("combine") as Operation["combine"];
         const operation: Operation = {
           origin: vec3("at"),
           orientation: quat("orientation") ?? IDENTITY,
           shape: shape("shape"),
           softness: optionalNumber("softness") ?? 0,
-          combine: name("combine") as Operation["combine"],
-          colour: (payload["colour"] as Operation["colour"]) ?? WHITE,
+          combine,
+          // Opacity is carried either way — it is a number every operation has and the
+          // serialiser always writes it — but it only means anything where a colour is
+          // painted, and an unpainted operation's opacity is read and discarded.
           opacity: optionalNumber("opacity") ?? 1,
+          // **The colour only where the effect is painting**, and this is the same rule
+          // the brush follows. A colour on any operation decides the colour of the surface
+          // there, so a bridge built with `combine: "Add"` and the default white would paint
+          // itself white rather than take the world's material — and a place author who set
+          // a colour on an `Add` would get a coloured solid, which is a thing worth being
+          // able to ask for and not worth having as a side effect of leaving it out.
+          ...(combine === "Paint"
+            ? { colour: (payload["colour"] as Operation["colour"]) ?? WHITE }
+            : {}),
           // **A placeholder, not a value.** `PlaceHandle.add` overwrites the index — it is
           // the only thing that may set one, because an index is a position in the fold and
           // the fold's order has to come from the shared counter (ADR 0016). Anything else here

@@ -199,6 +199,40 @@ describe("a host applies a place's effects", () => {
     host.dispose();
   });
 
+  it("gives a colour only to a shape that paints, and no colour to one that does not", async () => {
+    // **The same guard as the brush's, on the other producer.** An operation's colour
+    // decides the colour of the surface there whatever the operation does to the
+    // geometry, so a place that built a solid with the default white would paint itself
+    // white instead of taking the world's material. A place author who *wants* a
+    // coloured solid has a way to ask — that is what a `Paint` over an `Add` is — but
+    // leaving the colour out of an `Add` must not be a way of getting white.
+    const { host, world } = await start({
+      "main.ts": `
+        import { createShape, log } from "voxelscape";
+        createShape({ place: "p", id: "solid", at: [0, 10, 0],
+          shape: { type: "Box", len: { x: 1, y: 1, z: 1 } }, combine: "Add" });
+        createShape({ place: "p", id: "painted", at: [0, 10, 0],
+          shape: { type: "Box", len: { x: 1, y: 1, z: 1 } }, combine: "Paint",
+          colour: { r: 4, g: 5, b: 6 } });
+        log("built");
+      `,
+    });
+
+    expect(world.places.get("p")?.ids()).toEqual(["solid", "painted"]);
+
+    // `flatten` is how a place's operations come back out, and it is where the two
+    // ids are gone — the fold is a flat list with no names on it, which is the whole
+    // arrangement (ADR 0016). So the two are told apart by the order they were added.
+    const operations = world.places.flatten([]);
+    expect(operations.map((operation) => operation.combine)).toEqual([
+      "Add",
+      "Paint",
+    ]);
+    expect(operations[0].colour, "an Add must carry no colour").toBeUndefined();
+    expect(operations[1].colour).toEqual({ r: 4, g: 5, b: 6 });
+    host.dispose();
+  });
+
   it("creates the place when a shape names one that does not exist", async () => {
     // No `place-add` tag: a place is a name for a group of shapes, and the group appearing and
     // the name appearing are the same moment. A separate tag would mean a script that created

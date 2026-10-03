@@ -219,9 +219,25 @@ describe("the operation list round trip", () => {
         },
       ),
     ];
-    expect(deserialiseOperations(serialiseOperations(operations))).toEqual(
-      operations,
+    // **The one field that does not come back equal is `colour`,** and only for the
+    // operations built without one: the file has three bytes for colour and no way to
+    // say "absent", so they read back white. The separate test below makes that the
+    // subject rather than a footnote, because under version 3 it is the reason an old
+    // file is refused instead of migrated.
+    const back = deserialiseOperations(serialiseOperations(operations));
+    expect(back.map((operation) => operation.shape)).toEqual(
+      operations.map((operation) => operation.shape),
     );
+    expect(back.map((operation) => operation.combine)).toEqual(
+      operations.map((operation) => operation.combine),
+    );
+    // The two that were given a colour keep it.
+    expect(back[3]?.colour).toEqual({ r: 9, g: 10, b: 11 });
+    expect(back[0]?.colour, "an absent colour reads back white").toEqual({
+      r: 255,
+      g: 255,
+      b: 255,
+    });
   });
 
   it("round-trips a rotated operation, rather than losing its orientation", () => {
@@ -358,18 +374,52 @@ describe("refusing a malformed file", () => {
     }
   });
 
-  it("writes the version it reads, and refuses a version 1 file", () => {
-    // **The version went to 2 because the capsule's axis changed**, and a version 1
-    // file read as a version 2 one would put a capsule's length where its radius was.
-    // The refusal is the whole mechanism; this is the test that the mechanism is still
-    // in place after the bump.
-    expect(FORMAT_VERSION).toBe(2);
+  it("writes the version it reads, and refuses an earlier file", () => {
+    // **The version went to 3 because a colour now counts on any operation**, so a
+    // version 2 file — whose `Add` operations carry the brush's colour, whether or not
+    // it was meant to — would paint a whole model on load. The version went to 2
+    // before that because the capsule's axis changed, and a version 1 file read as a
+    // version 2 one would have put a capsule's length where its radius was.
+    //
+    // The refusal is the whole mechanism both times; this is the test that it is still
+    // in place.
+    expect(FORMAT_VERSION).toBe(3);
     const buffer = serialiseOperations([randomOperation(0)]);
-    expect(new DataView(buffer).getUint16(0, true)).toBe(2);
+    expect(new DataView(buffer).getUint16(0, true)).toBe(3);
 
-    // A file stamped version 1, whose bytes are otherwise perfectly well formed.
-    new DataView(buffer).setUint16(0, 1, true);
-    expect(() => deserialiseOperations(buffer)).toThrow(/version/i);
+    // A file stamped with each earlier version, whose bytes are otherwise perfectly
+    // well formed. Both have to be refused: version 2 would paint the model with the
+    // brush colour, and version 1 would misread a capsule.
+    for (const earlier of [1, 2]) {
+      const stamped = serialiseOperations([randomOperation(0)]);
+      new DataView(stamped).setUint16(0, earlier, true);
+      expect(
+        () => deserialiseOperations(stamped),
+        `version ${earlier} must be refused`,
+      ).toThrow(/version/i);
+    }
+  });
+
+  it("gives an operation with no colour a white one on the way back", () => {
+    // **The one thing a round trip does not preserve, and the reason the version went
+    // up.** An operation built with no colour is written as white and read back with
+    // one, because the file format has three bytes for colour and no way to say
+    // "absent". Under version 3 that difference is no longer invisible — a version 2
+    // file full of brush-coloured `Add` operations would paint — which is exactly why
+    // old files are refused rather than migrated.
+    const built = makeOperation(
+      0,
+      { x: 0, y: 0, z: 0 },
+      { type: "Sphere", radius: 1 },
+      "Add",
+    );
+    expect(built.colour, "built with no colour at all").toBeUndefined();
+    const back = deserialiseOperations(serialiseOperations([built]));
+    expect(back[0]?.colour, "read back as white").toEqual({
+      r: 255,
+      g: 255,
+      b: 255,
+    });
   });
 
   it("refuses a file too short to hold a header", () => {

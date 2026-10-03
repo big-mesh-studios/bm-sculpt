@@ -291,3 +291,33 @@ And one about the camera: **neither `packages/ui`'s `pointer()` nor the landscap
 controller was reused**, and both refusals are recorded with reasons. A pinch needs pointer
 positions in the canvas's own coordinates and one pointer followed per call is the wrong
 shape for it.
+
+**0028 is the record where a colour stopped being a `Paint`'s business**, and its cost was
+paid in a file format version. The gap it closed was one sentence — `applyOperation` makes
+`Paint` a no-op on the distance, so a solid operation could not carry colour at all — but the
+obvious fix would have **painted the entire landscape with the brush colour**, because the
+brush wrote a colour onto every operation with a comment saying the other modes ignored it.
+They did ignore it. So the rule became "a colour means something wherever it is written", and
+two producers had to stop writing one.
+
+Three things are worth carrying forward:
+
+1. **A default can enforce the opposite of what it looks like it enforces.**
+   `makeOperation` defaulted `colour` to white so that no reader would have to check for
+   absence — and under the new rule a default of white means every `Add` in the model paints.
+   The absence had to become the default, and the one reader that cares now checks.
+2. **A default change is a format change when the bytes still parse.** Version 2 files carry
+   a brush colour on their `Add` operations; read under version 3's rule they would paint.
+   The bytes are fine. What changed is what they _mean_, which is the one thing a version byte
+   cannot leave ambiguous.
+3. **Two absolutely-positioned boxes on opposite edges of a short screen have no relationship
+   to each other**, which is why the transform panel grew into the parts panel and no
+   adjustment to either fixed it. Making the canvas a flex child and the panels its siblings
+   makes overlap structurally impossible — and the `min-height: 0` that goes with it is the
+   line most likely to be dropped, because a flex item that will not shrink looks exactly like
+   a layout that is merely too tall.
+
+And one found on the way: **the modeller had been meshed with no `onVertex` at all**, so every
+vertex carried the builder's `+Y` normal placeholder. The builder's comment says that
+placeholder was chosen to be "a real direction rather than an obvious sentinel" — so the model
+shaded as though its normals were right.

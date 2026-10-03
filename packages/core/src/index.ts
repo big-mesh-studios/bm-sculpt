@@ -37,6 +37,22 @@ export {
   type Vec3,
 } from "./constants";
 
+export type { HSVA, RGBA } from "./colour";
+export {
+  byteToOpacity,
+  hsvaEquals,
+  hsvaToCss,
+  hsvaToRgba,
+  opacityToByte,
+  rgbEquals,
+  rgbToCss,
+  rgbToRgba,
+  rgbaEquals,
+  rgbaToHsva,
+  rgbaToRgb,
+  rgbaToCss,
+} from "./colour";
+
 export {
   SNORM16_MAX,
   decodeOctahedral,

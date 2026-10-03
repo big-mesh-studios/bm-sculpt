@@ -99,10 +99,21 @@ export class ChunkMeshBuilder implements SurfaceOutput {
   }
 
   /** Writes a vertex's colour. */
-  setColour(index: number, colour: Rgb8): void {
+  /**
+   * Sets one vertex's colour, and optionally how opaque it is.
+   *
+   * **Alpha is a separate argument with a default of 255 rather than part of
+   * `Rgb8`, and that is deliberate.** The packed vertex is four bytes and the third
+   * of them has always been the alpha, but `Rgb8` is what `Operation.colour` is and
+   * what every caller has in hand. Widening the colour type to carry alpha would
+   * have made every colour in the repository four-wide to serve one of them, so the
+   * default keeps the two-argument call meaning exactly what it meant before.
+   */
+  setColour(index: number, colour: Rgb8, alpha = 255): void {
     this.colours.setAt(index * 4, colour.r);
     this.colours.setAt(index * 4 + 1, colour.g);
     this.colours.setAt(index * 4 + 2, colour.b);
+    this.colours.setAt(index * 4 + 3, alpha);
   }
 
   /** Reads a vertex's position. */

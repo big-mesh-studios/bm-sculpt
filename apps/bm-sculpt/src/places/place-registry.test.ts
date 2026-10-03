@@ -327,7 +327,13 @@ describe("flatten is the only fold order", () => {
     const field = new Field(new OperationBVH(registry.flatten(document.list)));
 
     // The document's blue was made second, so it is last in the fold and wins.
-    expect(field.colourAt(0, 0, 0)).toEqual({ r: 0, g: 0, b: 200 });
+    // A colour and an opacity now, rather than a colour alone: an operation's colour
+    // decides the surface colour wherever the operation is, and its opacity travels
+    // with it so that a reader is not asked a second time.
+    expect(field.colourAt(0, 0, 0)).toEqual({
+      colour: { r: 0, g: 0, b: 200 },
+      opacity: 1,
+    });
   });
 
   it("puts the document first and places after it in the list it returns", () => {

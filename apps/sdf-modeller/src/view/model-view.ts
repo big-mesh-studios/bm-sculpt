@@ -21,12 +21,12 @@ import {
   BufferAttribute,
   BufferGeometry,
   Mesh,
-  NodeMaterial,
   type Scene,
 } from "@random-mesh/rmsl/scene";
 import type { ChunkMesh } from "@big-mesh-studios/meshing";
 
 import type { MeshResult } from "../model/mesh-model";
+import { modelMaterial } from "./model-material";
 
 /**
  * rmsl geometry from a packed mesh.
@@ -54,19 +54,23 @@ export const toGeometry = (mesh: ChunkMesh): BufferGeometry | undefined => {
   return geometry;
 };
 
-/** The material a model's surface is drawn with. */
-export const modelMaterial = (): NodeMaterial =>
-  // **A node material rather than a basic one**, because the packed vertex layout carries
-  // a normal per vertex and a basic material ignores it — which would draw a figure as a
-  // flat silhouette and give a person no sense of the form they are editing.
-  new NodeMaterial();
-
 export interface ModelView {
   /** The mesh on screen, or undefined when the model has nothing to draw. */
   readonly mesh: () => Mesh | undefined;
   readonly triangles: () => number;
-  /** Swaps in a new mesh. Passing undefined removes what is there. */
-  readonly install: (result: MeshResult | undefined) => void;
+  /**
+   * Swaps in a new mesh. Passing undefined removes what is there.
+   *
+   * `translucent` is passed rather than derived from the mesh because **a mesh cannot say
+   * whether it wants blending** — every vertex carries an alpha either way, and the packed
+   * format's fourth byte is opaque for a model with no transparency in it. So an always-
+   * transparent material would put a fully opaque model into the transparent queue with
+   * depth writes off, which is the arrangement that makes a solid self-overlap wrongly.
+   */
+  readonly install: (
+    result: MeshResult | undefined,
+    translucent: boolean,
+  ) => void;
   readonly dispose: () => void;
 }
 
@@ -90,14 +94,14 @@ export const createModelView = (scene: Scene): ModelView => {
 
     triangles: () => triangles,
 
-    install: (result) => {
+    install: (result, translucent) => {
       // **Disposed first, before the new geometry is even built.** See the header.
       release();
       if (result === undefined) return;
       const built = toGeometry(result.mesh);
       if (built === undefined) return;
       geometry = built;
-      drawn = new Mesh(built, modelMaterial());
+      drawn = new Mesh(built, modelMaterial(translucent));
       scene.add(drawn);
       triangles = result.triangles;
     },

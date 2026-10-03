@@ -23,10 +23,10 @@
  */
 import { createSignal, type Accessor } from "solid-js";
 
-import { IDENTITY, type Part } from "./part";
+import type { Part } from "./part";
 import { partsToOperations } from "./mesh-model";
 import type { Operation } from "@big-mesh-studios/csg";
-import type { Quat, Vec3 } from "@big-mesh-studios/core";
+import type { Quat, Rgb8, Vec3 } from "@big-mesh-studios/core";
 
 /**
  * One undoable edit, as the edit and the edit that puts it back.
@@ -60,6 +60,27 @@ export interface PartTransform {
   readonly origin?: Vec3;
   readonly orientation?: Quat;
   readonly shape?: Part["shape"];
+  /**
+   * Whether this part unions or subtracts.
+   *
+   * Part of the transform rather than of the shape because that is what it is: the same
+   * primitive in the same place is a different solid under a different boolean, and the
+   * panel that changes it is the same one that changes where the part is.
+   */
+  readonly combine?: Part["combine"];
+  /** How far the boolean blends. Zero is a hard edge; see `Part.softness`. */
+  readonly softness?: number;
+  /**
+   * The colour this part is painted.
+   *
+   * **`undefined` clears it**, which is not the same as not passing the field — a caller
+   * that wants a part to stop having a colour of its own has to be able to say so, and a
+   * `colour?: Rgb8` that fell back to the old value could not. The panel passes
+   * `undefined` explicitly for that.
+   */
+  readonly colour?: Rgb8 | undefined;
+  /** How opaque the colour is, `0..1`. Read only where a colour is set. */
+  readonly opacity?: number;
 }
 
 export interface ModelStore {
@@ -108,6 +129,12 @@ const sameVec3 = (a: Vec3, b: Vec3): boolean =>
 const sameQuat = (a: Quat, b: Quat): boolean =>
   a.x === b.x && a.y === b.y && a.z === b.z && a.w === b.w;
 
+/** Colours compare by value, and an absent colour is not the same as a black one. */
+const sameColour = (a: Rgb8 | undefined, b: Rgb8 | undefined): boolean =>
+  a === undefined || b === undefined
+    ? a === b
+    : a.r === b.r && a.g === b.g && a.b === b.b;
+
 /**
  * Builds a store over an initial set of parts.
  *
@@ -150,6 +177,10 @@ export const createModelStore = (initial: readonly Part[] = []): ModelStore => {
               origin: change.origin ?? part.origin,
               orientation: change.orientation ?? part.orientation,
               shape: change.shape ?? part.shape,
+              combine: change.combine ?? part.combine,
+              softness: change.softness ?? part.softness,
+              colour: "colour" in change ? change.colour : part.colour,
+              opacity: change.opacity ?? part.opacity,
             }
           : part,
       ),
@@ -257,17 +288,30 @@ export const createModelStore = (initial: readonly Part[] = []): ModelStore => {
 
       const nextOrigin = change.origin ?? existing.origin;
       const nextOrientation = change.orientation ?? existing.orientation;
+      // **`colour` is the one field where `undefined` means "clear it"** rather than
+      // "leave it", so it is read off the key rather than coalesced with `??`.
       const nextShape = change.shape ?? existing.shape;
+      const hasColour = "colour" in change;
+      const nextColour = hasColour ? change.colour : existing.colour;
+      const nextCombine = change.combine ?? existing.combine;
+      const nextSoftness = change.softness ?? existing.softness;
       const unchanged =
         sameVec3(nextOrigin, existing.origin) &&
         sameQuat(nextOrientation, existing.orientation) &&
-        nextShape === existing.shape;
+        nextShape === existing.shape &&
+        nextCombine === existing.combine &&
+        nextSoftness === existing.softness &&
+        sameColour(nextColour, existing.colour);
       if (unchanged) return false;
 
       const before = {
         origin: existing.origin,
         orientation: existing.orientation,
         shape: existing.shape,
+        combine: existing.combine,
+        softness: existing.softness,
+        colour: existing.colour,
+        opacity: existing.opacity,
       };
       replace(id, change);
       record({
@@ -305,15 +349,3 @@ export const createModelStore = (initial: readonly Part[] = []): ModelStore => {
 
   return store;
 };
-
-/** A part with no rotation, for a store that has just been given a shape and a point. */
-export const barePart = (
-  id: string,
-  shape: Part["shape"],
-  origin: Vec3,
-): Part => ({
-  id,
-  shape,
-  origin,
-  orientation: IDENTITY,
-});

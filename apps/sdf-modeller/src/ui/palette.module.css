@@ -1,0 +1,110 @@
+/*
+ * The row of remembered colours.
+ *
+ * **`--ui-size` sized squares in a wrapping row**, so the swatches grow to a finger under
+ * a coarse pointer with the rest of the application and stay mouse-sized on a desktop.
+ */
+
+.palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--ui-margin) / 2);
+}
+
+.empty {
+  margin: 0;
+  font-size: 0.65rem;
+  color: #4a4a4a;
+  font-style: italic;
+}
+
+.swatch {
+  width: var(--ui-size);
+  height: var(--ui-size);
+  min-width: var(--ui-size);
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: calc(var(--ui-size) / 6);
+  background: var(--swatch);
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.swatch:active {
+  border-color: #fff;
+}
+
+/*
+ * The swatch the model is using right now.
+ *
+ * **A white ring, outside the swatch rather than on it.** A border in the swatch's own
+ * complement would have to be computed per colour to stay visible; a ring outside the box
+ * reads against any colour underneath it and costs one `box-shadow`.
+ */
+.current {
+  box-shadow:
+    0 0 0 2px #111114,
+    0 0 0 4px #fff;
+}
+
+/*
+ * The add box: a swatch-sized tile showing the colour that a tap would remember.
+ *
+ * **Dashed, to read as an invitation rather than as a colour already in the row**, and the
+ * same checkerboard as a swatch so a translucent colour is legible before it is added.
+ * **The plus is outlined rather than shadowed.** It has to survive being drawn on top of any
+ * colour at all, including white and including black, and a shadow strong enough for white
+ * swallows the glyph on a mid-tone. A stroke is a fixed-width outline of the opposite
+ * lightness, which is legible on everything and stays legible as the tile gets smaller.
+ */
+.add {
+  width: var(--ui-size);
+  height: var(--ui-size);
+  min-width: var(--ui-size);
+  padding: 0;
+  border: 1px dashed rgba(255, 255, 255, 0.45);
+  border-radius: calc(var(--ui-size) / 6);
+  background: var(--swatch);
+  color: #fff;
+  font-size: calc(var(--ui-size) / 2.4);
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  -webkit-text-stroke: 1.5px #000;
+  paint-order: stroke fill;
+}
+
+.add:active {
+  border-style: solid;
+  border-color: #fff;
+}
+
+/*
+ * **A checkerboard behind every swatch**, because a colour with alpha over a dark panel is
+ * otherwise indistinguishable from the same colour fully transparent — the one case where
+ * the swatch has to show something the picker does not.
+ */
+.swatch,
+.add {
+  background-image:
+    linear-gradient(var(--swatch), var(--swatch)),
+    linear-gradient(45deg, #808080 25%, transparent 25%),
+    linear-gradient(-45deg, #808080 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #808080 75%),
+    linear-gradient(-45deg, transparent 75%, #808080 75%);
+  background-size:
+    auto,
+    10px 10px,
+    10px 10px,
+    10px 10px,
+    10px 10px;
+  background-position:
+    0 0,
+    0 0,
+    0 5px,
+    5px -5px,
+    -5px 0px;
+}

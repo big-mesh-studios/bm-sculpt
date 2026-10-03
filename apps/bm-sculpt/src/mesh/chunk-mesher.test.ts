@@ -58,7 +58,7 @@ const sphere = (centre: Vec3, radius: number) => {
     },
     colourAt: () => {
       calls.colour++;
-      return { r: 10, g: 20, b: 30 };
+      return { colour: { r: 10, g: 20, b: 30 }, opacity: 1 };
     },
     beginRegion: () => {
       calls.regions++;
@@ -263,14 +263,17 @@ describe("meshing a chunk through the field", () => {
     const wanted: Rgb8 = { r: 7, g: 8, b: 9 };
     const mesh = new SurfaceNetsChunkMesher({
       ...at({ x: 0, y: 0, z: 0 }).field,
-      colourAt: () => wanted,
+      // **A partial opacity as well as the colour**, because the mesher now scales
+      // what it is given into the vertex's fourth byte and this asserts the colour
+      // alone would not catch a dropped `Math.round(opacity * 255)`.
+      colourAt: () => ({ colour: wanted, opacity: 0.5 }),
     }).mesh({ cell: { x: 0, y: 0, z: 0 }, lod: LOD0 });
 
     for (let i = 0; i < mesh.vertexCount; i++) {
       expect(mesh.colours[i * 4], `vertex ${i} red`).toBe(7);
       expect(mesh.colours[i * 4 + 1], `vertex ${i} green`).toBe(8);
       expect(mesh.colours[i * 4 + 2], `vertex ${i} blue`).toBe(9);
-      expect(mesh.colours[i * 4 + 3], `vertex ${i} alpha`).toBe(255);
+      expect(mesh.colours[i * 4 + 3], `vertex ${i} alpha`).toBe(128);
     }
   });
 
@@ -425,7 +428,7 @@ describe("skirts at a level-of-detail face", () => {
     distance: (_x, y) => y,
     distanceForStepping: (_x, y) => y,
     gradient: () => ({ x: 0, y: 1, z: 0 }),
-    colourAt: () => ({ r: 1, g: 2, b: 3 }),
+    colourAt: () => ({ colour: { r: 1, g: 2, b: 3 }, opacity: 1 }),
     couldHoldSurface: () => true,
   };
   const mesher = new SurfaceNetsChunkMesher(plane);

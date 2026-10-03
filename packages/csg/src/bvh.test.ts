@@ -655,10 +655,16 @@ describe("the bounding volume hierarchy", () => {
     ];
     const bvh = new OperationBVH(operations);
     // Inside both: the later one wins.
-    expect(bvh.evalPaint(0, 0, 0)).toEqual({ r: 0, g: 255, b: 0 });
+    expect(bvh.evalPaint(0, 0, 0)).toEqual({
+      colour: { r: 0, g: 255, b: 0 },
+      opacity: 1,
+    });
     // Inside the first but outside the second, whose half-extent is 25 at this
     // point: only the earlier operation applies, and its colour stands.
-    expect(bvh.evalPaint(60, 0, 0)).toEqual({ r: 255, g: 0, b: 0 });
+    expect(bvh.evalPaint(60, 0, 0)).toEqual({
+      colour: { r: 255, g: 0, b: 0 },
+      opacity: 1,
+    });
     // Outside both: nothing, which is what lets the caller fall through to a paint
     // tile and then to a default rather than this inventing a colour.
     expect(bvh.evalPaint(200, 0, 0)).toBeUndefined();

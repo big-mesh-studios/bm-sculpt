@@ -37,13 +37,13 @@
  * ## Why parts are not operations
  *
  * **A part is a thing a person put in the model; an operation is a thing the CSG folds.**
- * They coincide today — every part becomes one `Add` operation — and they are kept apart
- * because the two will not stay coincided. The file format (a later phase) has to record a
- * part's name, its primitive and its transform; `Operation` has an `index` that means a
- * position in a fold, a `combine` that will one day be more than `Add`, and no name at
- * all. Merging them now would make that migration a rewrite.
+ * Each part becomes one operation, but they are kept apart because the two will not stay
+ * coincided. The file format (a later phase) has to record a part's name, its primitive,
+ * its transform and its boolean; `Operation` has an `index` that means a position in a
+ * fold, and no name at all. Merging them now would make that migration a rewrite.
  */
-import type { Quat, Vec3 } from "@big-mesh-studios/core";
+import type { Quat, Rgb8, Vec3 } from "@big-mesh-studios/core";
+import type { Combine } from "@big-mesh-studios/csg";
 import {
   primitiveHalfExtents,
   type OperationShape,
@@ -64,6 +64,47 @@ export interface Part {
   readonly origin: Vec3;
   /** Which way the primitive's own axes point. Identity is unrotated. */
   readonly orientation: Quat;
+  /**
+   * How this part joins the ones before it: `Add` unions, `Subtract` removes.
+   *
+   * **Required rather than defaulting to `Add`, because it is no longer decorative.**
+   * A union-only list folds the same however it is ordered, so a part's position in the
+   * list was bookkeeping. A list containing a subtraction does not: `A` then `B` then a
+   * difference of `C` is a different solid from the same three parts in another order, so
+   * the order is now part of what the model *is*. Making every construction site state it
+   * is the cheapest way to keep that visible.
+   *
+   * `Paint` is deliberately absent. A `Paint` operation adds no material — it only
+   * colours — and since an operation's colour began counting whatever the operation does
+   * to the geometry (ADR 0028), a coloured `Add` already expresses it. Offering `Paint`
+   * here would be a third option that does strictly less than `Add`.
+   */
+  readonly combine: Exclude<Combine, "Paint">;
+  /**
+   * How far the boolean blends, in world units. Zero is a hard edge.
+   *
+   * **Above zero it is a soft union or a soft difference**, chosen by `combine` — the
+   * same two cases `Operation` folds, and the same formula the landscape has always used:
+   * a polynomial smooth minimum, `min(a,b) - max(k - |a-b|, 0)² / 4k`, with `k` four
+   * times this number.
+   *
+   * Bounded by `MAX_SOFTNESS`, and the bound is not a style choice: the candidate cache
+   * is sized for a blend of that width, so a larger one would make the cache too small
+   * and a sample could miss an operation that reaches the point after all.
+   */
+  readonly softness: number;
+  /**
+   * The colour this part is painted, or `undefined` for a part that takes the default.
+   *
+   * **`undefined` rather than a default colour, because a part with no colour is a
+   * different statement from a part painted the default.** An operation's colour is what
+   * decides the colour of the surface there whatever the operation does to the geometry, so
+   * "no colour" means the surface falls through to whatever is underneath — which is what
+   * makes a difference read as a cut rather than as a differently-coloured solid.
+   */
+  readonly colour?: Rgb8;
+  /** How opaque this part is, `0..1`. Only read where `colour` is set. */
+  readonly opacity?: number;
 }
 
 /** The identity rotation, named because it is asked for constantly. */
@@ -216,9 +257,31 @@ export const partSize = (shape: OperationShape): Vec3 => {
   return { x: half.x * 2, y: half.y * 2, z: half.z * 2 };
 };
 
-/** A part with an identity rotation, for a caller that has just an origin and a shape. */
+/**
+ * A part that unions, with a hard edge and no rotation.
+ *
+ * **The defaults live here rather than on the type**, so that a caller who means "just
+ * add this" says it in one word, and a caller who means anything else has to name it —
+ * while a bare object literal still has to state `combine` and `softness` outright.
+ */
 export const placedPart = (
   id: string,
   shape: OperationShape,
   origin: Vec3,
-): Part => ({ id, shape, origin, orientation: IDENTITY });
+  overrides: {
+    readonly orientation?: Quat;
+    readonly combine?: Exclude<Combine, "Paint">;
+    readonly softness?: number;
+    readonly colour?: Rgb8;
+    readonly opacity?: number;
+  } = {},
+): Part => ({
+  id,
+  shape,
+  origin,
+  orientation: overrides.orientation ?? IDENTITY,
+  combine: overrides.combine ?? "Add",
+  softness: overrides.softness ?? 0,
+  colour: overrides.colour,
+  opacity: overrides.opacity,
+});

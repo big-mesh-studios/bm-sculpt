@@ -7,7 +7,9 @@ import {
   parameterFloats,
   parametersToFloats,
   primitiveFromCode,
+  dimensionGroups,
   primitiveHalfExtents,
+  primitiveParameters,
   PRIMITIVE_NAMES,
   PRIMITIVES,
   sdBox,
@@ -16,6 +18,7 @@ import {
   sdShape,
   shapeFromFloats,
   shapePadding,
+  withParameter,
   type OperationShape,
   type ShapeType,
 } from "./primitives";
@@ -700,5 +703,207 @@ describe("the primitive table", () => {
         `${name} surface escapes its half extents by ${worst}`,
       ).toBeLessThan(1e-5);
     }
+  });
+});
+
+/**
+ * The panel metadata.
+ *
+ * **Checked here rather than trusted, because a missing label is not a compile error and a
+ * panel that renders `undefined` as a field name is worse than one that refuses to open.**
+ * These are the only guarantees a consumer of `parameters` has, and the table is data, so
+ * data is what has to be checked.
+ */
+describe("parameter metadata", () => {
+  const everyParameter = () =>
+    PRIMITIVE_NAMES.flatMap((type) =>
+      primitiveParameters({ type } as OperationShape).map((parameter) => ({
+        type,
+        parameter,
+      })),
+    );
+
+  it("gives every parameter a label", () => {
+    for (const { type, parameter } of everyParameter()) {
+      expect(
+        parameter.label.trim(),
+        `${type}.${parameter.name} has no label`,
+      ).not.toBe("");
+    }
+  });
+
+  it("names three axes for a vec3 and none for a number", () => {
+    for (const { type, parameter } of everyParameter()) {
+      if (parameter.arity === 3) {
+        expect(
+          parameter.axes?.length,
+          `${type}.${parameter.name} is a vec3 with no axis names`,
+        ).toBe(3);
+        for (const axis of parameter.axes ?? [])
+          expect(
+            axis.trim(),
+            `${type}.${parameter.name} has a blank axis`,
+          ).not.toBe("");
+      } else {
+        expect(
+          parameter.axes,
+          `${type}.${parameter.name} is a number and should not name axes`,
+        ).toBeUndefined();
+      }
+    }
+  });
+
+  it("keeps every size non-negative and every step positive", () => {
+    for (const { type, parameter } of everyParameter()) {
+      expect(
+        parameter.min,
+        `${type}.${parameter.name} allows a negative size`,
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        parameter.step,
+        `${type}.${parameter.name} has a non-positive step`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("does not label the same field the same way twice for one shape", () => {
+    // A RoundBox's `radius` is its corner and a Capsule's `radius` is its size. Two
+    // parameters in one shape sharing a label would put two identical-looking inputs on
+    // screen for two different numbers.
+    for (const type of PRIMITIVE_NAMES) {
+      const labels = primitiveParameters({ type } as OperationShape).map(
+        (parameter) => parameter.label,
+      );
+      expect(new Set(labels).size, `${type} has a repeated label`).toBe(
+        labels.length,
+      );
+    }
+  });
+
+  it("agrees with the file format about how many floats a shape has", () => {
+    for (const type of PRIMITIVE_NAMES) {
+      const shape = { type } as OperationShape;
+      const fromMetadata = primitiveParameters(shape).reduce(
+        (total, parameter) => total + parameter.arity,
+        0,
+      );
+      expect(
+        fromMetadata,
+        `${type} metadata and parameterFloats disagree`,
+      ).toBe(parameterFloats(shape));
+    }
+  });
+});
+
+/**
+ * The editor's view of a shape.
+ *
+ * **`dimensionGroups` is the only thing standing between a table entry and a rendered input,
+ * and the panel is a loop over it.** So what is checked here is what a panel would show: the
+ * number of inputs, what each is called, and — for `withParameter` — that an edit arrives as
+ * a new object, because a store that compares by identity cannot see an in-place change.
+ */
+describe("dimension groups", () => {
+  const groupsOf = (shape: OperationShape) => dimensionGroups(shape);
+
+  it("gives every shape at least one field and never two per parameter", () => {
+    for (const type of PRIMITIVE_NAMES) {
+      const groups = groupsOf(SAMPLES[type]);
+      expect(groups.length, `${type} has no dimensions`).toBeGreaterThan(0);
+      for (const group of groups) {
+        expect(
+          [1, 3],
+          `${type}.${group.name} has ${group.fields.length} fields`,
+        ).toContain(group.fields.length);
+      }
+    }
+  });
+
+  it("reads a capsule's two numbers", () => {
+    const groups = groupsOf({ type: "Capsule", len: 2.2, radius: 0.7 });
+    expect(groups.map((group) => group.label)).toEqual(["Length", "Radius"]);
+    expect(
+      groups.flatMap((group) => group.fields.map((field) => field.value)),
+    ).toEqual([2.2, 0.7]);
+  });
+
+  it("reads a box as one group of three named axes", () => {
+    const groups = groupsOf({ type: "Box", len: { x: 1, y: 2, z: 3 } });
+    expect(groups).toHaveLength(1);
+    const group = groups[0]!;
+    expect(group.label).toBe("Size");
+    expect(group.fields.map((field) => field.label)).toEqual([
+      "Width",
+      "Height",
+      "Depth",
+    ]);
+    expect(group.fields.map((field) => field.value)).toEqual([1, 2, 3]);
+    // A `Vec3` component is an axis, not a parameter of its own.
+    expect(group.fields.map((field) => field.axis)).toEqual(["x", "y", "z"]);
+  });
+
+  it("leaves a scalar without an axis", () => {
+    const [group] = groupsOf({ type: "Sphere", radius: 1 });
+    expect(group?.fields[0]?.axis).toBeUndefined();
+  });
+
+  it("agrees with the table's arity on which is which", () => {
+    for (const type of PRIMITIVE_NAMES) {
+      const shape = SAMPLES[type];
+      const arity = new Map(
+        primitiveParameters(shape).map((parameter) => [
+          parameter.name,
+          parameter.arity,
+        ]),
+      );
+      for (const group of groupsOf(shape)) {
+        expect(
+          group.fields.length,
+          `${type}.${group.name} disagrees with its own arity`,
+        ).toBe(arity.get(group.name));
+      }
+    }
+  });
+});
+
+describe("withParameter", () => {
+  it("replaces a scalar without touching the rest", () => {
+    const shape: OperationShape = { type: "Capsule", len: 2.2, radius: 0.7 };
+    expect(withParameter(shape, "len", undefined, 3.5)).toEqual({
+      type: "Capsule",
+      len: 3.5,
+      radius: 0.7,
+    });
+  });
+
+  it("replaces one component of a vec3", () => {
+    const shape: OperationShape = { type: "Box", len: { x: 1, y: 2, z: 3 } };
+    expect(withParameter(shape, "len", "y", 9)).toEqual({
+      type: "Box",
+      len: { x: 1, y: 9, z: 3 },
+    });
+  });
+
+  it("returns a new object, because identity is how an edit is seen", () => {
+    const shape: OperationShape = { type: "Capsule", len: 2.2, radius: 0.7 };
+    expect(withParameter(shape, "len", undefined, 2.2)).not.toBe(shape);
+    // Even a write of the same value is a new object, so the store can decide for itself
+    // whether the numbers actually changed.
+    expect(
+      withParameter({ type: "Box", len: { x: 1, y: 1, z: 1 } }, "len", "x", 1),
+    ).not.toBe(shape);
+  });
+
+  it("leaves the original alone", () => {
+    const shape: OperationShape = { type: "Box", len: { x: 1, y: 2, z: 3 } };
+    withParameter(shape, "len", "z", 30);
+    expect(shape).toEqual({ type: "Box", len: { x: 1, y: 2, z: 3 } });
+  });
+
+  it("returns the shape itself for a parameter it does not have", () => {
+    // The read side and the write side have to agree about what a shape contains, or an
+    // editor can render a field it cannot write.
+    const shape: OperationShape = { type: "Sphere", radius: 1 };
+    expect(withParameter(shape, "majorRadius", undefined, 2)).toBe(shape);
   });
 });

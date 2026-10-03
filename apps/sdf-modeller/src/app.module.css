@@ -62,6 +62,50 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * The tool chooser.
+ *
+ * **Positioned rather than in the flow, because on a wide screen the canvas is.** The canvas
+ * fills its box in normal flow, so anything after it in the source is pushed below the
+ * window and clipped by the root's `overflow: hidden` — which is exactly where the tool
+ * buttons went the first time. The header and both panels are absolutely positioned for
+ * their own reasons; this joins them.
+ */
+.tools {
+  position: absolute;
+  /* **Below the header block**, which is title plus status plus its own padding: about four
+     rems. The parts panel is pushed down to match, so the three do not overlap. */
+  top: 4.25rem;
+  left: 0;
+  display: flex;
+  gap: var(--ui-margin);
+  padding-left: max(1rem, var(--ui-safe-left, 0px));
+}
+
+.tool {
+  min-height: var(--ui-size);
+  padding: 0 calc(var(--ui-margin) * 1.25);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: calc(var(--ui-size) / 4);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.tool[aria-checked="true"] {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.45);
+  font-weight: 600;
+}
+
+.tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .footer {
   position: absolute;
   left: 0;
@@ -111,17 +155,210 @@
   user-select: none;
 }
 
-/* **Below this width the panels stack along the bottom rather than sitting beside the
-   model**, because a panel taking half a phone's width leaves a model too narrow to read
-   and controls too small to hit. The threshold is the point at which the two stop fitting
-   side by side, not a device class. */
+/*
+ * ## The narrow layout, and why the panels cannot overlap in it
+ *
+ * **Above this width the panels are positioned over the canvas, which is right on a wide
+ * screen: the model should fill the window and the panels sit on top of it.**
+ *
+ * Below it, that stops working — and the symptom is worth naming, because it is not "the
+ * panels are too big". It is that two absolutely-positioned boxes on opposite edges of a
+ * short screen **have no relationship to each other at all**, so on a phone in portrait the
+ * top-right transform panel grows down into the bottom-left parts panel and the two occupy
+ * the same pixels. Neither is clipped, neither scrolls away, and no adjustment to either
+ * one fixes it, because nothing in CSS is relating them.
+ *
+ * So the narrow layout changes the *kind* of layout rather than the sizes: **the root
+ * becomes a flex column, the canvas is a child that flexes, and the panels are siblings
+ * below it.** Two siblings in a flex column cannot overlap — the column gives each a share
+ * of the height and the canvas takes what is left. The tab bar keeps it to one panel at a
+ * time: two panels side by side on a phone is neither of them, since the parts list wants a
+ * list's height and the transform wants a form's width.
+ *
+ * This is the arrangement `big-mesh-studios`'s voxelscape level editor uses for the same
+ * reason, and the reason to copy an arrangement rather than invent one is that this class of
+ * bug does not announce itself in review.
+ */
+.tabs {
+  display: none;
+}
+
 @media (max-width: 640px) {
+  .root {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /*
+   * **The canvas is a flex child, not an absolutely-positioned full-bleed layer.**
+   * `min-height: 0` is load-bearing and easy to drop: without it a flex item's default
+   * `min-height: auto` refuses to shrink below its content, so the canvas keeps its
+   * intrinsic height and pushes the panels off the bottom of the window instead of taking
+   * height from it.
+   */
+  .canvas {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    height: auto;
+    order: 1;
+  }
+
   .header {
+    order: 0;
+    /* **The tool chooser joins the header band**, see the note on `.tools`. It is a flex
+       child of the root like everything else here, so it needs its own order rather than
+       being nested inside the header — which is absolute on a wide screen and would take the
+       buttons with it. */
     max-width: none;
     right: 0;
+    padding: max(0.5rem, var(--ui-safe-top, 0px)) 0.75rem 0.5rem;
+    padding-left: max(0.75rem, var(--ui-safe-left, 0px));
+  }
+
+  /*
+   * **The sheet sits between the canvas and the tab bar, and says so.**
+   *
+   * An `order` on the tab bar and the header is not enough: a flex item with no `order` is
+   * `0`, which ties with the header and is then resolved by source order, so the sheet came
+   * out directly under the title and overlapped it. Everything in a column layout that is
+   * not in source order has to be numbered, and a `0` is a number.
+   *
+   * **Bounded height and its own scroll, because the canvas needs to keep some.** The shape
+   * grid plus the part list is taller than a phone once a few parts exist, and an unbounded
+   * sheet would take the window and leave the model nothing to be seen in.
+   */
+  .sheet {
+    order: 2;
+    min-height: 0;
+    max-height: 45%;
+    overflow-y: auto;
+    /* **Containment, not chaining.** Without this a flick that reaches the end of the sheet
+       scrolls the page behind it, which on a phone reads as the model jumping. */
+    overscroll-behavior: contain;
+  }
+
+  .tabs {
+    order: 3;
+    display: flex;
+    flex-flow: row wrap;
+    gap: var(--ui-margin);
+    align-items: center;
+    padding: var(--ui-margin);
+    padding-left: max(var(--ui-margin), var(--ui-safe-left, 0px));
+    padding-right: max(var(--ui-margin), var(--ui-safe-right, 0px));
+    background: rgba(17, 17, 20, 0.95);
+    pointer-events: all;
+  }
+
+  /*
+   * **The inactive panel leaves the layout entirely** rather than hiding behind the other.
+   * `display: none` and not `visibility: hidden`, because a visibility-hidden panel still
+   * takes its height and the point of the tab bar is that the canvas gets that height back.
+   */
+  [data-hidden] {
+    display: none;
+  }
+
+  /*
+ * The tool chooser.
+ *
+ * **Positioned rather than in the flow, because on a wide screen the canvas is.** The canvas
+ * fills its box in normal flow, so anything after it in the source is pushed below the
+ * window and clipped by the root's `overflow: hidden` — which is exactly where the tool
+ * buttons went the first time. The header and both panels are absolutely positioned for
+ * their own reasons; this joins them.
+ */
+  .tools {
+    position: absolute;
+    /* **Below the header block**, which is title plus status plus its own padding: about four
+     rems. The parts panel is pushed down to match, so the three do not overlap. */
+    top: 4.25rem;
+    left: 0;
+    display: flex;
+    gap: var(--ui-margin);
+    padding-left: max(1rem, var(--ui-safe-left, 0px));
+  }
+
+  .tool {
+    min-height: var(--ui-size);
+    padding: 0 calc(var(--ui-margin) * 1.25);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: calc(var(--ui-size) / 4);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .tool[aria-checked="true"] {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.45);
+    font-weight: 600;
+  }
+
+  .tool:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .footer {
+    order: 4;
+    position: static;
+    padding-left: max(var(--ui-margin), var(--ui-safe-left, 0px));
+    padding-right: max(var(--ui-margin), var(--ui-safe-right, 0px));
+    /* **The bottom safe-area inset belongs here** — this is the row along the bottom edge,
+       and it is the row a home indicator sits on. */
+    padding-bottom: max(var(--ui-margin), var(--ui-safe-bottom, 0px));
+  }
+
+  /*
+   * **Last, above the footer, and back in the flow.**
+   *
+   * `static` because on a narrow screen the root is a flex column and this is one more item
+   * in it; `order: 4` because a tool a thumb has to reach past the model to find is a tool
+   * that gets left on `select`. It sits under the tab bar rather than in the header because
+   * the top of a phone screen is the one part of it nobody can reach one-handed.
+   */
+  .tools {
+    position: static;
+    order: 4;
+    padding: 0 var(--ui-margin);
+    padding-left: max(var(--ui-margin), var(--ui-safe-left, 0px));
+    padding-right: max(var(--ui-margin), var(--ui-safe-right, 0px));
   }
 
   .hint {
     display: none;
   }
+}
+
+/*
+ * **A tab is `--ui-size` tall, which is 44px under a coarse pointer** — from the same token
+ * as everything else rather than a number written here, which is the reason the token exists.
+ */
+.tab {
+  min-height: var(--ui-size);
+  padding: 0 calc(var(--ui-margin) * 1.5);
+  border: 1px solid transparent;
+  border-radius: calc(var(--ui-size) / 4);
+  background: transparent;
+  color: #707070;
+  font: inherit;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.tab[aria-selected="true"] {
+  color: #e6e6ea;
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tab:disabled {
+  color: #343434;
+  cursor: default;
 }

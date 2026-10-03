@@ -64,6 +64,30 @@
   gap: var(--ui-margin);
 }
 
+/*
+ * A three-number parameter: a box around three rows.
+ *
+ * **A fieldset because the three numbers are one value.** A `Vec3` is a single fact about the
+ * shape, and a person who sees three loose inputs will happily set width and depth and leave
+ * height behind. The border and the legend are what say "these three go together", and they
+ * cost nothing that a heading and a margin would not.
+ *
+ * The margin is negative on the left so the rows line up with the single-number ones above and
+ * below: the box is the only thing indented, and the numbers are not.
+ */
+.group {
+  margin: 0 0 var(--ui-margin) 0;
+  padding: 0.25rem 0.5rem 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: calc(var(--ui-margin) / 2);
+}
+
+.groupLegend {
+  padding: 0 0.35rem;
+  font-size: 0.65rem;
+  color: #8f8f96;
+}
+
 .axisLabel {
   font-size: 0.7rem;
   color: #707070;
@@ -84,9 +108,18 @@
 
 @media (max-width: 640px) {
   .panel {
-    /* **Narrower than its desktop width but never full-bleed**, so the model stays
-       visible while a field is being edited. */
-    max-width: 44vw;
+    /* **Static, for the same reason as the parts panel** — the two are siblings in the
+       narrow layout's flex column and cannot overlap. Full width rather than `44vw`,
+       because this panel is a form and a form at 44% of a phone is a form whose fields
+       are 40px wide. */
+    position: static;
+    order: 3;
+    width: auto;
+    max-width: none;
+    max-height: 52dvh;
+    min-height: 0;
+    overflow-y: auto;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
   }
 
   .number {

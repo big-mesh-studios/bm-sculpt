@@ -21,6 +21,7 @@ import {
   FAR_DISTANCE,
   type Bounds,
   type Quat,
+  type Rgb8,
   MAX_SOFTNESS,
   SOFTNESS_REACH,
   type Vec3,
@@ -34,6 +35,21 @@ import {
 
 /** How an operation combines with the field the others have made. */
 export type Combine = "Add" | "Subtract" | "Paint";
+
+/**
+ * A surface's colour, as an operation pair states it: a byte triple and an opacity.
+ *
+ * **Opacity is a float between 0 and 1 and the colour is bytes**, because that is
+ * what an `Operation` holds and what the file format writes. The pair is only
+ * combined here so that nothing has to remember to carry the two together — a
+ * function returning an `Rgb8` had to be asked a second time for the opacity, which
+ * meant walking the operation list twice per vertex.
+ */
+export interface SurfaceColour {
+  readonly colour: Rgb8;
+  /** 0 to 1, where 1 is opaque. */
+  readonly opacity: number;
+}
 
 /** The combine modes, as the numbers the file format writes. */
 export const COMBINE = {
@@ -470,10 +486,17 @@ export const makeOperation = (
   shape,
   softness: options.softness ?? 0,
   combine,
-  // Both fields are present on every operation, and are meaningless on a
-  // non-paint one. Optional fields would make every reader that touches them —
-  // the serialiser, the colour resolver — carry a check for a case that is
-  // decided once, here, by the combine mode.
-  colour: options.colour ?? { r: 255, g: 255, b: 255 },
+  // **No colour unless one was asked for, and that is the opposite of what this used
+  // to do.** It defaulted to white, so every operation carried one and every reader
+  // could assume it was there — which was right while a colour was only read off a
+  // `Paint`, and wrong the moment any operation's colour counts. A default of white
+  // would have meant every `Add` in the model paints, and "no colour means no say in
+  // appearance" would not have been enforceable by anyone.
+  //
+  // So the absence is the default, and the reader that cares checks for it — one
+  // check, in `evalPaint`, which had to check anyway to reject a `Paint` with no
+  // colour. The serialiser already substituted white for the file, so the on-disk
+  // bytes are unchanged.
+  colour: options.colour,
   opacity: options.opacity ?? 1,
 });
