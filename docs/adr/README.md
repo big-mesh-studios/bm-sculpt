@@ -47,6 +47,7 @@ recorded cost is a decision nobody thought about.
 | [0027](0027-the-modeller-is-a-flat-list-of-placed-primitives.md)        | The modeller is a flat list of placed primitives, meshed not marched                   | accepted |
 | [0028](0028-a-colour-is-a-property-of-the-operation.md)                 | A colour is a property of the operation, and the model is a boolean fold               | accepted |
 | [0029](0029-the-site-root-is-a-front-page.md)                           | The site root is a front page, and the applications sit beside it                      | accepted |
+| [0030](0030-two-meshers-and-a-report.md)                                | The modeller offers two meshers, and reports what came back                            | accepted |
 
 ## What is decided so far
 
@@ -326,3 +327,18 @@ And one found on the way: **the modeller had been meshed with no `onVertex` at a
 vertex carried the builder's `+Y` normal placeholder. The builder's comment says that
 placeholder was chosen to be "a real direction rather than an obvious sentinel" — so the model
 shaded as though its normals were right.
+
+And one at the end: **the modeller's output is going to a 3D printer**, which is a different
+requirement from "looks right on a screen", and it is the requirement 0003's mesher could not
+meet. `0030` adds marching cubes beside Surface Nets, adds a resolution control, and adds a
+report that says whether a finished mesh is closed, manifold and consistently wound — because
+the interesting failures draw perfectly and the only moment to act on them is before a slicer
+says no.
+
+Two of its findings are worth reading for what they cost rather than for what they decided.
+The mesher had a bug that double-counted a corner offset on eight edges of twelve and omitted
+the shift from a sample index to a world position; **both still produced a closed mesh of
+roughly the right volume**, and only a test that put every vertex against the field found them.
+And the report welded vertices at a fixed four decimal places until the modeller's own
+finest-resolution mesh came back with an edge 7.6e-5 long and was called non-manifold — a
+resolution that cannot serve two scales at once.

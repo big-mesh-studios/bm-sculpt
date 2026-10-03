@@ -106,6 +106,76 @@
   cursor: default;
 }
 
+/*
+ * ## The mesher controls, on their own row under the tools
+ *
+ * **A row of their own rather than more buttons in `.tools`, because `.tools` is a single
+ * row of `--ui-size` buttons and four of them plus a slider is more than fits across a
+ * phone.** So they go below it and the parts panel moves down to match — the same bargain
+ * `.tools` already struck with that panel, and the reason its comment says the panel is
+ * "pushed down to match" is that this is a chain and not a coincidence.
+ *
+ * It is `pointer-events: none` with the controls taking them back, for the reason the root
+ * has: a strip of screen across the top of the model that takes presses is a strip of the
+ * view that cannot be orbited.
+ */
+.render {
+  position: absolute;
+  top: 6.5rem;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--ui-margin);
+  padding-left: max(1rem, var(--ui-safe-left, 0px));
+
+  pointer-events: none;
+}
+
+.render > * {
+  pointer-events: all;
+}
+
+/*
+ * **The mesher chooser reuses `.tool` rather than having its own button style.** They are
+ * the same control with a different question — which mesher rather than which tool — and
+ * two styles for one shape is one more thing to keep in step.
+ */
+.mesher {
+  display: flex;
+  gap: var(--ui-margin);
+}
+
+.resolution {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--ui-margin) / 2);
+  min-height: var(--ui-size);
+  padding: 0 calc(var(--ui-margin) * 1.25);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: calc(var(--ui-size) / 4);
+  background: rgba(20, 20, 26, 0.82);
+
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.resolutionLabel {
+  font-size: 0.7rem;
+  color: #a0a0a8;
+  white-space: nowrap;
+}
+
+/* **The slider itself is left mostly to the platform.** It is the one control here whose
+   appearance a person has an opinion about — a thumb sized for a finger, a track that is
+   visible in sunlight — and there is no version of that written once in a stylesheet that
+   agrees with the platform they are on. Only the width is set, because it is the one thing
+   that has to be the same everywhere for the row's layout to hold. */
+.resolution input {
+  width: 6rem;
+  margin: 0;
+  touch-action: manipulation;
+}
+
 .footer {
   position: absolute;
   left: 0;
@@ -326,6 +396,20 @@
     position: static;
     order: 4;
     padding: 0 var(--ui-margin);
+    padding-left: max(var(--ui-margin), var(--ui-safe-left, 0px));
+    padding-right: max(var(--ui-margin), var(--ui-safe-right, 0px));
+  }
+
+  /*
+   * **The mesher row joins the tool row in the flow, rather than sitting under it.**
+   *
+   * `order: 4` as well, so the two arrive together — and `flex-wrap`, because on a phone this
+   * row is as wide as the tool row was and the two of them do not fit on one line.
+   */
+  .render {
+    position: static;
+    order: 4;
+    flex-wrap: wrap;
     padding-left: max(var(--ui-margin), var(--ui-safe-left, 0px));
     padding-right: max(var(--ui-margin), var(--ui-safe-right, 0px));
   }

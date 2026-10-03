@@ -93,6 +93,19 @@ export class ChunkMeshBuilder implements SurfaceOutput {
     this.indices.push(d);
   }
 
+  /**
+   * Appends one triangle.
+   *
+   * **Not `quad` with a repeated vertex**, which is the tempting one-liner and produces two
+   * indices referring to the same position — a zero-area face that a normal calculation has to
+   * special-case and a slicer either rejects or prints as a speck.
+   */
+  triangle(a: number, b: number, c: number): void {
+    this.indices.push(a);
+    this.indices.push(b);
+    this.indices.push(c);
+  }
+
   /** Writes a vertex's normal, folding it onto the octahedron. */
   setNormal(index: number, x: number, y: number, z: number): void {
     writeOctahedralNormal(this.normalOct.array(), index * 2, { x, y, z });

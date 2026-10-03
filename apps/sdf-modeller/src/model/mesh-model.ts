@@ -29,9 +29,15 @@ import {
 } from "@big-mesh-studios/csg";
 import {
   ChunkMeshBuilder,
+  marchingCubes,
+  marchingCubesScratchFor,
+  reportMesh,
   scratchFor,
   surfaceNets,
   type ChunkMesh,
+  type MarchingCubesScratch,
+  type MeshReport,
+  type SurfaceNetsScratch,
 } from "@big-mesh-studios/meshing";
 
 import { modelBounds, type Part } from "./part";
@@ -68,6 +74,102 @@ export const DEFAULT_BUDGET: MeshBudget = {
   voxelSize: 0.25,
   maxSamplesPerAxis: 96,
   minSamplesPerAxis: 8,
+};
+
+/**
+ * The two meshers, and which one a rebuild uses.
+ *
+ * **A choice rather than a quality setting, because the two make different promises rather than
+ * different sizes.** Surface nets is faster and lighter and is what an edit wants while a finger is
+ * down; it is closed wherever the surface is well resolved, which is nearly always and is what makes
+ * it a reasonable default. Marching cubes places every vertex on a real crossing of the surface and
+ * is closed and manifold at every resolution — a guarantee rather than an observation — which is what
+ * a model bound for a slicer wants. ADR 0003 rejected marching cubes for the landscape; the reasons
+ * it gives are about streamed chunks at varying levels of detail, and none of them apply to one
+ * bounded box.
+ *
+ * `surfaceNets` is the default because that is what this application was, and because a mesher that
+ * arrives a few tens of milliseconds late is more annoying than one that is not quite closed. The
+ * status line reports what the mesh actually is either way, so choosing wrong is visible.
+ */
+export type MeshMode = "surface-nets" | "marching-cubes";
+
+/** The modes, with what a control needs to offer each one. */
+export const MESH_MODES: ReadonlyArray<{
+  readonly value: MeshMode;
+  readonly label: string;
+  readonly hint: string;
+}> = [
+  {
+    value: "surface-nets",
+    label: "Nets",
+    hint: "One vertex per cell. The fewest triangles and the fastest. Closed wherever the surface is well resolved — which is nearly always, but is not a promise.",
+  },
+  {
+    value: "marching-cubes",
+    label: "Cubes",
+    hint: "Vertices on the true surface, so it follows the model more closely. Closed and manifold at every resolution — this is the one to print.",
+  },
+];
+
+/**
+ * The voxel sizes a control offers, coarsest first.
+ *
+ * **A list of voxel sizes and not a slider from one to another**, because the cost is cubic in the
+ * reciprocal and a slider invites the middle of its travel, where the difference is invisible and the
+ * wait is real. Each step here doubles the samples on every axis and so multiplies the work by eight,
+ * which is a ratio a person can predict.
+ *
+ * The ends are the budget's own. `0.5` is coarse enough to see a model's blocking out; `0.0625` is
+ * the finest this repository offers, and above it the sampling stops being what limits the surface
+ * and the field's own smoothness does.
+ */
+export const RESOLUTIONS = [0.5, 0.25, 0.125, 0.0625] as const;
+
+/** The budget for one of `RESOLUTIONS`, keeping the other two numbers where they are. */
+export const budgetFor = (
+  voxelSize: number,
+  base: MeshBudget = DEFAULT_BUDGET,
+): MeshBudget => ({ ...base, voxelSize });
+
+/**
+ * Scratch, held across rebuilds.
+ *
+ * **Because the alternative is eleven megabytes a rebuild.** Marching cubes' vertex cache is three
+ * arrays of `grid² · cells` entries and the field is `grid³` floats, so at the finest resolution a
+ * rebuild allocates about twenty megabytes and throws them away — which is longer than the meshing.
+ *
+ * Each mode holds one, **grown but never shrunk**. A larger buffer is used as it stands: the loops
+ * derive their bounds from the region rather than from the buffer, so a region that has got smaller
+ * simply uses less of it. Reallocating on every change would mean the common case — nudging a part
+ * at the same resolution — is the one that allocates.
+ */
+const HELD: {
+  "surface-nets"?: { count: number; scratch: SurfaceNetsScratch };
+  "marching-cubes"?: { count: number; scratch: MarchingCubesScratch };
+} = {};
+
+const heldScratch = (
+  mode: MeshMode,
+  samples: number,
+): SurfaceNetsScratch | MarchingCubesScratch => {
+  const existing = HELD[mode];
+  if (existing !== undefined && existing.count >= samples)
+    return existing.scratch;
+  if (mode === "marching-cubes") {
+    const scratch = marchingCubesScratchFor(samples);
+    HELD["marching-cubes"] = { count: samples, scratch };
+    return scratch;
+  }
+  const scratch = scratchFor(samples);
+  HELD["surface-nets"] = { count: samples, scratch };
+  return scratch;
+};
+
+/** Frees the held scratch. For a test that wants the module to start from nothing. */
+export const releaseScratch = (): void => {
+  delete HELD["surface-nets"];
+  delete HELD["marching-cubes"];
 };
 
 /**
@@ -190,6 +292,14 @@ export interface MeshResult {
   readonly samples: number;
   /** Triangles, zero when the model has no surface in the box. */
   readonly triangles: number;
+  /**
+   * Whether the mesh is closed, manifold and consistently wound.
+   *
+   * **On every result rather than on request, because the interesting failures are the ones nothing
+   * looks like.** A clipped mesh and a mesh whose winding has turned over both draw perfectly, and the
+   * only moment a person can act on either is before they send it to a slicer.
+   */
+  readonly report: MeshReport;
 }
 
 /**
@@ -241,46 +351,66 @@ export const primitiveMesh = (
 export const meshModel = (
   parts: readonly Part[],
   budget: MeshBudget = DEFAULT_BUDGET,
+  mode: MeshMode = "surface-nets",
 ): MeshResult | undefined => {
   const region = meshRegion(parts, budget);
   if (region === undefined) return undefined;
 
-  const field = modelField(parts);
+  // **The budget, this time.** It was not passed before, which meant the BVH's candidate cell was
+  // always the default's eight voxels rather than this region's sample size — so a rebuild at a
+  // finer resolution got a candidate cell sized for a coarser one, and the cost of sampling stopped
+  // being independent of the resolution the caller asked for.
+  const field = modelField(parts, budget);
   const builder = new ChunkMeshBuilder();
-  surfaceNets({
-    origin: [region.origin.x, region.origin.y, region.origin.z],
+  const params = {
+    origin: [region.origin.x, region.origin.y, region.origin.z] as const,
     samples: region.samples,
     sampleSize: region.sampleSize,
     // `Field.distance` already *is* a `SurfaceSampler`: one method, negative inside.
     sampler: field,
     out: builder,
-    scratch: scratchFor(region.samples),
-    /**
-     * **The normal and the colour of every vertex, from the field.**
-     *
-     * This was absent, and its absence was not a cosmetic bug. `ChunkMeshBuilder.vertex`
-     * fills an unset normal with `+Y` and an unset colour with white — and the builder's
-     * own comment says the `+Y` was chosen to be "a real direction rather than an obvious
-     * sentinel", so that a vertex whose normal was never set would shade as though it were
-     * right. Which is exactly what happened: this model was being drawn with every normal
-     * pointing up and every vertex white.
-     *
-     * Both come from the field rather than from the mesh, because both are properties of
-     * the surface and the mesher knows nothing about fields — `SurfaceSampler` is one
-     * method, a distance.
-     */
-    onVertex: (index, x, y, z) => {
+    onVertex: (index: number, x: number, y: number, z: number) => {
+      /**
+       * **The normal and the colour of every vertex, from the field.**
+       *
+       * This was absent, and its absence was not a cosmetic bug. `ChunkMeshBuilder.vertex`
+       * fills an unset normal with `+Y` and an unset colour with white — and the builder's
+       * own comment says the `+Y` was chosen to be "a real direction rather than an obvious
+       * sentinel", so that a vertex whose normal was never set would shade as though it were
+       * right. Which is exactly what happened: this model was being drawn with every normal
+       * pointing up and every vertex white.
+       *
+       * Both come from the field rather than from the mesh, because both are properties of
+       * the surface and the mesher knows nothing about fields — `SurfaceSampler` is one
+       * method, a distance.
+       *
+       * **Called once per vertex rather than once per cell**, which is true of both meshers but only
+       * matters for one: marching cubes shares a vertex between the cells around an edge, so filling
+       * a normal per cell would write the same vertex several times over.
+       */
       const normal = field.gradient(x, y, z);
       builder.setNormal(index, normal.x, normal.y, normal.z);
       const { colour, opacity } = field.colourAt(x, y, z);
       builder.setColour(index, colour, Math.round(opacity * 255));
     },
-  });
+  };
 
+  const scratch = heldScratch(mode, region.samples);
+  if (mode === "marching-cubes") {
+    marchingCubes({
+      ...params,
+      scratch: scratch as MarchingCubesScratch,
+    });
+  } else {
+    surfaceNets({ ...params, scratch: scratch as SurfaceNetsScratch });
+  }
+
+  const mesh = builder.finish();
   return {
-    mesh: builder.finish(),
+    mesh,
     region,
     samples: (region.samples + 2) ** 3,
     triangles: builder.triangleCount,
+    report: reportMesh(mesh),
   };
 };

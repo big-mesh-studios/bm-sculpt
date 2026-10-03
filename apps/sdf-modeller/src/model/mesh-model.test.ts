@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_COLOUR } from "@big-mesh-studios/csg";
+import { describeReport } from "@big-mesh-studios/meshing";
 
 import {
+  budgetFor,
   DEFAULT_BUDGET,
   meshModel,
   meshRegion,
   primitiveMesh,
   modelField,
+  RESOLUTIONS,
   samplesFor,
 } from "./mesh-model";
 import { fromEuler, placedPart } from "./part";
@@ -513,5 +516,154 @@ describe("meshing one part for a preview", () => {
       placedPart("b", { type: "Sphere", radius: 0.5 }, { x: 3, y: 0, z: 0 }),
     ]);
     expect(twoParts!.samples).toBeLessThan(whole!.samples);
+  });
+});
+
+/**
+ * The two meshers, which is a choice rather than a quality setting.
+ *
+ * **Both are tested against the same models, because the claim being made is that they are
+ * interchangeable at the seam and different in what they produce.** A test that exercised only one
+ * would pass whether or not the seam held, since `meshModel`'s signature is what holds it.
+ */
+describe("choosing a mesher", () => {
+  const capsule = placedPart(
+    "a",
+    { type: "Capsule", len: 2.2, radius: 0.7 },
+    { x: 0, y: 1.1, z: 0 },
+  );
+  const pair = [
+    capsule,
+    placedPart("b", { type: "Sphere", radius: 0.8 }, { x: 1.4, y: 1.6, z: 0 }),
+  ];
+
+  it("gives each mode the same region and the same sample count", () => {
+    // The interchangeability claim, made concrete: the mode decides the triangulation and nothing
+    // else, so the two must agree about where the mesh is and how finely it is sampled.
+    const nets = meshModel(pair, DEFAULT_BUDGET, "surface-nets")!;
+    const cubes = meshModel(pair, DEFAULT_BUDGET, "marching-cubes")!;
+    expect(cubes.region).toEqual(nets.region);
+    expect(cubes.samples).toBe(nets.samples);
+    expect(cubes.mesh.vertexCount).toBeGreaterThan(0);
+    expect(cubes.mesh.indices.length).toBe(cubes.triangles * 3);
+  });
+
+  it("closes the model at every resolution on offer, with marching cubes", () => {
+    /**
+     * **The guarantee, checked at each setting the control offers rather than at one of them.**
+     *
+     * A resolution control is where a mesher's promise is most likely to quietly stop holding: the
+     * fine end resolves thin features the coarse end missed, and the coarse end is where a cell is
+     * barely a cell. Walking `RESOLUTIONS` is the only way to cover both.
+     *
+     * And it is a claim about marching cubes alone, deliberately. **Surface nets is closed on this
+     * model at every one of these settings too** — it is closed on nearly everything, which is why
+     * ADR 0003 could call the alternative "not manifold in general" and still be right. What it is
+     * not is *guaranteed* closed where the surface is thin or sharply creased. The mode is a choice
+     * between a guarantee and an observation, and `mesh-report` is what turns either into something a
+     * person can see before they send it to a slicer.
+     */
+    for (const voxelSize of RESOLUTIONS) {
+      const cubes = meshModel(pair, budgetFor(voxelSize), "marching-cubes")!;
+      expect(cubes.triangles, `at ${voxelSize}`).toBeGreaterThan(0);
+      expect(
+        cubes.report.watertight,
+        `at ${voxelSize}: ${describeReport(cubes.report)}`,
+      ).toBe(true);
+    }
+  });
+
+  it("puts the surface closer to where the field says it is, with marching cubes", () => {
+    // **The difference you can see without reading a report.** Marching cubes places every vertex on a
+    // crossing of the true surface; surface nets places one at a cell's average crossing, which is
+    // inside the cell and therefore off the surface by up to half a cell. Against an analytic volume,
+    // that is a measurable gap and it is the reason the finer mesh is also the truer one.
+    const analytic = (4 / 3) * Math.PI * 1 ** 3;
+    const sphere = [
+      placedPart("s", { type: "Sphere", radius: 1 }, { x: 0, y: 0, z: 0 }),
+    ];
+    const error = (mode: "surface-nets" | "marching-cubes"): number =>
+      Math.abs(
+        meshModel(sphere, budgetFor(0.125), mode)!.report.volume / analytic - 1,
+      );
+    expect(error("marching-cubes")).toBeLessThan(error("surface-nets"));
+  });
+
+  it("still meshes a lone part in either mode, for the drag ghost", () => {
+    // `primitiveMesh` is the drag's one build, and a drag is happening whichever mode is on.
+    for (const mode of ["surface-nets", "marching-cubes"] as const) {
+      const preview = primitiveMesh(capsule, DEFAULT_BUDGET);
+      expect(preview?.triangles ?? 0, mode).toBeGreaterThan(0);
+      const built = meshModel([capsule], DEFAULT_BUDGET, mode);
+      expect(built?.triangles ?? 0, mode).toBeGreaterThan(0);
+    }
+  });
+
+  it("reuses one scratch across rebuilds without carrying a mesh into the next", () => {
+    // The scratch is held across rebuilds because marching cubes' vertex cache is eleven megabytes
+    // at the default resolution. A mesh that carried over would show up here as a vertex count that
+    // only ever goes up.
+    const first = meshModel(pair, DEFAULT_BUDGET, "marching-cubes")!;
+    const second = meshModel(pair, DEFAULT_BUDGET, "marching-cubes")!;
+    expect(second.mesh.vertexCount).toBe(first.mesh.vertexCount);
+    expect(second.triangles).toBe(first.triangles);
+    expect([...second.mesh.indices]).toEqual([...first.mesh.indices]);
+  });
+});
+
+describe("the resolution control", () => {
+  it("offers sizes that halve, each a doubling of the work", () => {
+    // **The list rather than a range, because the cost is cubic in the reciprocal.** Each step here
+    // doubles the samples on an axis and so multiplies the work by eight; a slider across the same
+    // interval would offer ratios a person cannot predict.
+    expect(RESOLUTIONS.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < RESOLUTIONS.length; i++) {
+      expect(
+        RESOLUTIONS[i - 1]! / RESOLUTIONS[i]!,
+        `step ${i} is not a halving`,
+      ).toBeCloseTo(2, 12);
+    }
+    expect(RESOLUTIONS).toContain(DEFAULT_BUDGET.voxelSize);
+  });
+
+  it("changes the budget's spacing and nothing else", () => {
+    // **The other two numbers are not the control's to set**, so a control that changed them would be
+    // changing the memory ceiling and the small-model floor by accident.
+    const fine = budgetFor(0.125);
+    expect(fine.voxelSize).toBe(0.125);
+    expect(fine.maxSamplesPerAxis).toBe(DEFAULT_BUDGET.maxSamplesPerAxis);
+    expect(fine.minSamplesPerAxis).toBe(DEFAULT_BUDGET.minSamplesPerAxis);
+  });
+
+  it("meshes finer the smaller the voxel, and says so in the region", () => {
+    const coarse = meshModel(
+      [placedPart("a", { type: "Sphere", radius: 1 }, { x: 0, y: 0, z: 0 })],
+      budgetFor(0.5),
+    )!;
+    const fine = meshModel(
+      [placedPart("a", { type: "Sphere", radius: 1 }, { x: 0, y: 0, z: 0 })],
+      budgetFor(0.125),
+    )!;
+    expect(fine.samples).toBeGreaterThan(coarse.samples);
+    expect(fine.region.sampleSize).toBeLessThan(coarse.region.sampleSize);
+  });
+
+  it("reaches the field's candidate cell, which it did not used to", () => {
+    // **The budget now reaches `modelField`.** It did not, so a rebuild at a finer resolution got a
+    // BVH candidate cell sized for the default's eight voxels, which is what made the cost of
+    // sampling depend on a resolution the caller never asked for. Read back off the field rather
+    // than off the mesh, because the mesh is identical either way — the bug was invisible from here.
+    const fine = budgetFor(0.0625);
+    const field = modelField(
+      [placedPart("a", { type: "Sphere", radius: 1 }, { x: 0, y: 0, z: 0 })],
+      fine,
+    );
+    expect(field.gradient(0, 0, 0).y).not.toBe(0);
+    expect(
+      meshRegion(
+        [placedPart("a", { type: "Sphere", radius: 1 }, { x: 0, y: 0, z: 0 })],
+        fine,
+      )?.sampleSize,
+    ).toBeLessThanOrEqual(fine.voxelSize * 1.001);
   });
 });

@@ -24,9 +24,18 @@ import {
   untrack,
 } from "solid-js";
 import { PRIMITIVE_NAMES } from "@big-mesh-studios/sdf";
+import { describeReport } from "@big-mesh-studios/meshing";
 import { pointer } from "@big-mesh-studios/ui/pointer";
 
-import { DEFAULT_BUDGET, meshModel, primitiveMesh } from "./model/mesh-model";
+import {
+  budgetFor,
+  DEFAULT_BUDGET,
+  MESH_MODES,
+  meshModel,
+  primitiveMesh,
+  RESOLUTIONS,
+  type MeshMode,
+} from "./model/mesh-model";
 import { modelBounds, placedPart, type Part } from "./model/part";
 import { createGhost, type Ghost } from "./view/ghost";
 import {
@@ -113,6 +122,28 @@ export function App() {
   const [status, setStatus] = createSignal("meshing…");
 
   /**
+   * Which mesher a rebuild uses.
+   *
+   * **A signal because it changes the mesh and nothing else**, and it is the one setting here
+   * that alters what the model *is* rather than how it is drawn. Surface nets by default: it is
+   * what this application was, and while a finger is down a mesh that arrives promptly and is
+   * not quite closed beats one that is closed and late.
+   */
+  const [mode, setMode] = createSignal<MeshMode>("surface-nets");
+
+  /**
+   * How fine to mesh, as one of `RESOLUTIONS`.
+   *
+   * **A union of the offered sizes rather than a number**, so that a slider's value cannot be
+   * something the mesher was never measured at. Widening it to `number` would also mean deciding
+   * what to do with a value that is not in the list, and the answer would be to round it — which is
+   * the same decision made invisibly.
+   */
+  const [resolution, setResolution] = createSignal<
+    (typeof RESOLUTIONS)[number]
+  >(DEFAULT_BUDGET.voxelSize as (typeof RESOLUTIONS)[number]);
+
+  /**
    * Which panel the bottom sheet is showing, on a narrow screen.
    *
    * **One at a time, because two panels side by side on a phone is neither of them.**
@@ -163,11 +194,17 @@ export function App() {
     const target = view;
     const camera = orbit;
     if (target === undefined || camera === undefined) return;
+    // **The mode and the resolution are read here, not inside the timeout**, so they are part
+    // of what this rebuild is *for*. Read inside, a rebuild would use whatever they happened to
+    // be when the timer fired, so moving the resolution slider would mesh the old one and the
+    // picture would come back looking like the control had not worked.
+    const budget = budgetFor(resolution());
+    const mesher = mode();
     if (pending !== undefined) clearTimeout(pending);
     pending = setTimeout(() => {
       pending = undefined;
       const started = performance.now();
-      const result = meshModel(parts, DEFAULT_BUDGET);
+      const result = meshModel(parts, budget, mesher);
       // **Translucent only if something in the model is.** A mesh cannot say so itself, and
       // an always-transparent material with depth writes off makes a solid self-overlap.
       target.install(
@@ -197,7 +234,7 @@ export function App() {
       setStatus(
         result === undefined
           ? "no parts yet — add one below"
-          : `${count} part${count === 1 ? "" : "s"} · ${result.triangles} triangles · ${Math.round(result.samples / 1000)}k samples · ${Math.round(elapsed)} ms`,
+          : `${count} part${count === 1 ? "" : "s"} · ${result.triangles} triangles · ${Math.round(result.samples / 1000)}k samples · ${Math.round(elapsed)} ms · ${describeReport(result.report)}`,
       );
     }, REBUILD_MS);
   };
@@ -331,6 +368,28 @@ export function App() {
     (parts) => rebuild(parts),
   );
 
+  /*
+   * **The mesher and the resolution watch their own effects, because both change the mesh and
+   * neither changes the model.**
+   *
+   * A model is a list of parts, so `store.parts()` is the only thing a rebuild used to depend on and
+   * turning a mode on was not a model edit — there was nothing for that effect to fire on. Reading
+   * the parts again here is the point rather than an accident: the rebuild needs the list, and the
+   * list has to come from a tracked read.
+   *
+   * They are two effects rather than one watching both, because `rebuild` debounces by ninety
+   * milliseconds and one effect over two signals would re-arm the timer whenever either moved —
+   * including when they moved together, which is not a thing a person does.
+   */
+  createEffect(
+    () => mode(),
+    () => rebuild(store.parts()),
+  );
+  createEffect(
+    () => resolution(),
+    () => rebuild(store.parts()),
+  );
+
   // **Solid 2 replaced `onMount` with `onSettled`**, which fires once after the current
   // activity settles rather than on mount, and which does *not* return a disposal: the
   // callback returns the teardown itself. `onCleanup` *inside* one is a dev-mode error
@@ -447,6 +506,60 @@ export function App() {
             {label}
           </button>
         ))}
+      </div>
+
+      {/*
+        **The mesher chooser and the resolution, on their own row, for the same reason the tools
+        are a radio group: one choice with several answers.**
+
+        The mesher is a genuine choice rather than a quality slider, because the two produce
+        different meshes from the same field — one is closed throughout and the other is not
+        everywhere — so there is no ordering to slide along. What the resolution *is* a slider of is
+        work: each step doubles the samples on every axis, and the cost is cubic in the reciprocal.
+      */}
+      <div class={styles.render}>
+        <div class={styles.mesher} role="radiogroup" aria-label="Mesher">
+          {MESH_MODES.map((option) => (
+            <button
+              type="button"
+              role="radio"
+              class={styles.tool}
+              aria-checked={mode() === option.value ? "true" : "false"}
+              title={option.hint}
+              onClick={() => {
+                setMode(option.value);
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
+        <label class={styles.resolution}>
+          <span class={styles.resolutionLabel}>Resolution</span>
+          {/*
+            **The slider's position is an index into `RESOLUTIONS` and not a voxel size.** The
+            sizes halve as the index rises, so a slider whose value were the size itself would run
+            backwards — the coarse end on the right — and a person would learn that by dragging it
+            and watching the model get worse.
+
+            `aria-valuetext` because the bare number a range reports is an index, and "2" is not a
+            resolution. The text is what a screen reader says out loud, so it has to be the thing a
+            person would have said.
+          */}
+          <input
+            type="range"
+            min={0}
+            max={RESOLUTIONS.length - 1}
+            step={1}
+            value={RESOLUTIONS.indexOf(resolution())}
+            aria-valuetext={`${resolution()} world units a voxel`}
+            onInput={(event) => {
+              const chosen = RESOLUTIONS[event.currentTarget.valueAsNumber];
+              if (chosen !== undefined) setResolution(chosen);
+            }}
+          />
+        </label>
       </div>
 
       {/*

@@ -60,9 +60,36 @@ export interface SurfaceOutput {
   vertexCount: number;
   /** Appends a vertex at a world position. Returns its index. */
   vertex(x: number, y: number, z: number): number;
-  /** Appends two triangles from four existing vertices, in the order given. */
+  /**
+   * Appends two triangles from four existing vertices, in the order given.
+   *
+   * **A quad and not a triangle because every dual method emits quads**, and an output that
+   * only took triangles would have the other half of this seam added for a primal method's sake.
+   */
   quad(a: number, b: number, c: number, d: number): void;
+  /**
+   * Appends one triangle from three existing vertices.
+   *
+   * **Optional, and that is the point of it being optional rather than absent.** Surface nets
+   * never calls it, and a `SurfaceOutput` that a test writes by hand should not have to
+   * implement a method nothing will call. A mesher that needs it and does not find it throws
+   * rather than silently dropping triangles.
+   */
+  triangle?(a: number, b: number, c: number): void;
 }
+
+/** Appends one triangle, refusing to say nothing if the output cannot take one. */
+export const emitTriangle = (
+  out: SurfaceOutput,
+  a: number,
+  b: number,
+  c: number,
+): void => {
+  if (out.triangle === undefined) {
+    throw new Error("this SurfaceOutput cannot take a triangle");
+  }
+  out.triangle(a, b, c);
+};
 
 /** The eight corners of a cell, as offsets from its low corner. */
 const CORNER_OFFSETS = [

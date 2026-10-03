@@ -4,13 +4,15 @@
 
 .panel {
   position: absolute;
-  /* **Below the header, not level with it.** Both this and the header are absolutely
-   * positioned into the top-left corner, so with both at `top: 0` they do not sit side by
-   * side — they sit on top of each other, and the first heading of the picker draws through
-   * the title. An absolute box has no relationship with another absolute box, which is the
-   * same reason the two panels overlapped on a phone; here it is solved by giving them
-   * different corners' worth of offset rather than by a layout that stacks them. */
-  top: 6.5rem;
+  /* **Below the header, the tool row and the mesher row, not level with any of them.**
+   * All four are absolutely positioned into the top-left corner, so with them at `top: 0` they do
+   * not sit side by side — they sit on top of each other, and the first heading of the picker draws
+   * through the title. An absolute box has no relationship with another absolute box, which is the
+   * same reason the two panels overlapped on a phone; here it is solved by giving each a different
+   * corner's worth of offset rather than by a layout that stacks them, which means **this number is
+   * the bottom of that chain**: header at 0, tools at 4.25rem, mesher row at 6.5rem, and this panel
+   * below the last of them. Moving the mesher row means moving this with it. */
+  top: 8.75rem;
   left: 0;
   bottom: 0;
   width: 16rem;
