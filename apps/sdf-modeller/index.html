@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      **`viewport-fit=cover`, and it is not decoration.**
+      It is what makes `env(safe-area-inset-*)` resolve to anything but zero, which is
+      what keeps the toolbar clear of a home indicator and the header clear of a notch.
+      Without it the browser letterboxes the page and the safe-area rules in
+      `@big-mesh-studios/ui`'s baseline compile, apply and do nothing.
+      `packages/ui/src/viewport.test.ts` reads this file and fails if the token goes.
+
+      **No `maximum-scale`, so the page stays zoomable.** That is a deliberate choice:
+      a modeller is read closely, and pinning the zoom is an accessibility setting made
+      on the user's behalf. It costs one thing, which is that iOS zooms the page in when
+      an input under 16px takes focus — so the baseline raises inputs to 16px under a
+      coarse pointer, and the same test checks that pairing.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#111114" />
+    <meta
+      name="description"
+      content="Modelling figures out of signed distance primitives, in the browser."
+    />
+    <title>sdf-modeller</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      This is a modelling application: it draws to a canvas and runs entirely in
+      your browser, so there is nothing for it to show without JavaScript.
+    </noscript>
+    <script src="./src/index.tsx" type="module"></script>
+  </body>
+</html>

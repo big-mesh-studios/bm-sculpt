@@ -20,6 +20,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # **Before the types, because it is the check that has nothing to do with types.**
+      # `pnpm check-types` cannot tell a library from an application — both are
+      # strict-mode TypeScript and both compile. This reads every `package.json` and
+      # fails on a package that depends on an app, an app that could be published, or
+      # two packages pointing at each other by path. Run last it would be the last
+      # thing anyone reads; run first, a wrong dependency graph fails in a second
+      # instead of after every type-check and every test.
+      - name: check the workspace layout
+        run: pnpm workspace:check
+
       - name: check types
         run: pnpm check-types
 

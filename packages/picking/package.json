@@ -1,0 +1,29 @@
+{
+  "name": "@big-mesh-studios/picking",
+  "version": "0.0.0",
+  "description": "Sphere-tracing a field: what is under a point, and what is under a screen position",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clinuxrulz/bm-sculpt.git",
+    "directory": "packages/picking"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@big-mesh-studios/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@big-mesh-studios/csg": "workspace:*",
+    "@random-mesh/rmsl": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

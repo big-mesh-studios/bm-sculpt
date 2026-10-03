@@ -1,0 +1,35 @@
+{
+  // The compiler options every workspace in this repository agrees on.
+  //
+  // ## Why a base exists here, when the sibling monorepo hand-duplicates
+  //
+  // There are seven tsconfigs and one of them has to differ from the other six: only
+  // `apps/bm-sculpt` maps the `voxelscape` specifier, which is the name a *place's
+  // source* imports and which resolves to the guest library. Twenty lines copied seven
+  // times is twenty places for the strictness flags to drift apart in, and the drift is
+  // silent — a package that loses `noUnusedLocals` looks like it was always that way.
+  //
+  // **`noEmit`, `strict`, and `noUnusedLocals`/`noUnusedParameters` live here because
+  // they are not opinions.** They are the four checks that catch the three mistakes this
+  // codebase makes most: an unused import left behind by a refactor, a parameter nobody
+  // read, and a `switch` that falls through. ADR 0024 and the move it describes were
+  // mostly import lines, and these are the flags that know whether every one landed.
+  "compilerOptions": {
+    "target": "ESNext",
+    "lib": ["ESNext", "DOM"],
+    "module": "ESNext",
+    // **`bundler`, not `node`.** It reads a package's `exports` map and accepts a `.ts`
+    // target, which is what lets `@big-mesh-studios/core` point at `./src/index.ts` and
+    // type-check with no build step anywhere in the workspace. A workspace of raw
+    // TypeScript source is only possible because of this one setting.
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "isolatedModules": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  }
+}

@@ -1,0 +1,17 @@
+{
+  // An application. `include: ["src"]` rather than the whole directory, so that a
+  // stray `.ts` beside `index.html` is not type-checked as though it were source.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // **`DOM.Iterable`, which the base does not carry.** This application walks the DOM
+    // — the parts list, the primitive picker, a canvas — and a `NodeListOf` is not
+    // iterable without it, so `[...root.querySelectorAll("li")]` in a mounted-component
+    // test is a type error here and in no package. See `packages/ui`, which is the other
+    // workspace that had to ask for it, and for the same reason.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web",
+    "types": ["vite/client"]
+  },
+  "include": ["src"]
+}

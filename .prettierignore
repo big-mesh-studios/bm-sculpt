@@ -1,6 +1,12 @@
+# The lockfile and the workspace config are not Prettier's to reformat. The workspace
+# config in particular is hand-aligned, and a formatter reflowing it would make every
+# catalog change look larger than it is.
 pnpm-lock.yaml
 pnpm-workspace.yaml
+
+# Build output, in whichever workspace produced it.
 dist
+dist-*
 node_modules
 *.tsbuildinfo
 .DS_Store

@@ -1,0 +1,31 @@
+/*
+ * The application's own reset — and only that.
+ *
+ * **Everything mobile is in `@big-mesh-studios/ui`'s `baseline.css`, imported above
+ * this file.** The split is deliberate and worth stating: this file is what this
+ * application does to a document, and the baseline is what a phone requires of every
+ * application in this repository. `overscroll-behavior`, the 16px input rule under a
+ * coarse pointer, the safe-area insets and the coarse-pointer sizing tokens are not
+ * this application's opinions, and putting them here would be the first step of them
+ * drifting from the other application.
+ */
+
+/*
+ * A reset, on top of the baseline's box-sizing rule.
+ *
+ * `::backdrop` is in the baseline already, which is why anything this file centres
+ * with the browser's own `margin: auto` has to ask for the margin again.
+ */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: #111114;
+}

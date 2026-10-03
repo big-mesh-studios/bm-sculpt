@@ -39,6 +39,9 @@ recorded cost is a decision nobody thought about.
 | [0019](0019-the-host-owns-what-it-can-own.md)                           | The host owns what it can own, and asks for the eight things it cannot                 | accepted |
 | [0020](0020-a-place-runs-on-the-frame.md)                               | A place runs on the frame, and the console is how a person meets it                    | accepted |
 | [0021](0021-a-place-arrives-as-a-zip-with-a-manifest.md)                | A place arrives as a zip with a manifest at its root                                   | accepted |
+| [0022](0022-a-field-is-a-box-that-moves-the-player.md)                  | A medium is a box the physics reads, and the host supplies it                          | accepted |
+| [0023](0023-lights-are-a-fixed-table-of-uniforms.md)                    | Lights are a fixed table of uniforms, not per-object state                             | accepted |
+| [0024](0024-packages-is-what-has-no-opinion.md)                         | `/packages` is what has no opinion, and `/apps` is what does                           | accepted |
 
 ## What is decided so far
 
@@ -182,3 +185,109 @@ answered here.
 
 The phases themselves are in the repository history, one commit per phase, each verified
 before the next began.
+
+**0024 is the first decision about where code lives rather than what it does, and its cost is
+paid in gate coverage.** The second application needed five libraries, and all five were already
+written — as application code, next to the application that had no use for them. What makes the
+record worth more than the move is the second finding, which had nothing to do with packages.
+
+`src/scratch/` held three test files that the repository-root Vitest collected and `tsc` never
+looked at. Moving them into `src/` to type-check them exposed two mistakes, and both had been
+sitting in green CI:
+
+- **`pan-recycle.test.ts` marked nothing.** `for (const slot of window.slots) window.markFilled(slot)`
+  passes slot _records_ to a function taking a slot _index_, so `slots[record]` was `undefined`
+  and every call returned early. It passed because nothing in it depended on a slot being filled.
+- **`load-place.test.ts` had been a type error since ADR 0021.** `JSZip.file` has no
+  `string | null` overload, so `pnpm check-types` had been printing `TS2769` for a phase and
+  nobody was reading to the end of the output.
+
+Neither is an argument for the monorepo. Both are arguments for **a gate that is actually read**,
+and for keeping tests inside the tree they claim to cover. `pnpm workspace:check` is also the
+only check in this repository that can fail on a dependency graph which compiles perfectly.
+
+**0025 removed the last list of primitives that was written out by hand, and there were
+seven of them rather than the five expected.** The two that mattered most were not switches.
+`edit/document.ts` held a _duplicate_ of the half-extents function, and its comment argued
+against fixing it — correctly, because a too-small invalidation box does not throw and makes
+an edit half appear. And the `shape` field's description to place authors was the literal
+string `"a primitive: Ellipsoid, Box or Capsule"`, which was a lie the day the table gained
+six entries and which nothing caught, because documentation is not a compiler.
+
+Three findings are worth carrying forward:
+
+1. **A table of nine distance functions is testable in a way nine hand-written functions are
+   not.** The table-wide tests — one crossing per ray, a unit gradient, never over-reporting,
+   the surface inside the reported half-extents — are written against the table, so a tenth
+   primitive is covered by being in the table. They caught `sdCone` with its base radius at
+   the wrong end, a cone that was upside down: negative inside, zero on _a_ surface, and
+   wrong everywhere else.
+2. **"Closed form" is not "exact".** All nine are closed form and one is approximate, so the
+   table carries an `exact` flag. The old code claimed the ellipsoid's error was "bounded by
+   `ellipsoidError`" and `ellipsoidError` did not exist. What replaced it is measured: the
+   zero set is exact to 2.7e-15 against an f32 epsilon of 1.2e-7, and it never over-reports
+   along any ray. Both are asserted.
+3. **A torus is not star-shaped, and `exact: true` does not mean it is.** It has a hole, so a
+   ray from its centre meets the surface twice. Irrelevant for meshing and picking, fatal for
+   a sphere tracer started inside the bounding box — so the eight-of-nine claim is written as
+   a test that must opt the ninth out by name, because a fact in a comment is a fact that
+   rots.
+
+The capsule's axis moved from X to Y, which took the file format to version 2. The transform
+itself was never missing: `Operation` has carried `orientation: Quat` since before the places
+layer, `shape-add` accepts one, and the format persists it. What was pinned was the primitive's
+convention, not its placement.
+
+**0026 is the first record about a device rather than about geometry**, and its findings
+came from measuring this application rather than from reasoning about phones. Three of the
+gaps were live bugs in the shipped application, not omissions:
+
+1. **The command line was `font: 12px monospace` on a zoomable viewport.** iOS Safari zooms
+   the _page_ when an input under 16px takes focus and does not reliably zoom back out on
+   blur. Unlike the sibling's 3D editors, this application cannot rule that out with
+   `user-scalable=no` — it is deliberately zoomable — so it had to make the font big enough
+   that the browser had no reason to zoom.
+2. **No `overscroll-behavior`,** so a pull towards the top of the page began pull-to-refresh
+   in the middle of an orbit. No element-level `touch-action` prevents this: the gesture
+   belongs to the document.
+3. **The header was pinned to `top: 0` on a phone with a notch,** while the viewport tag was
+   already asking for `viewport-fit=cover` — the browser was already handing out the inset
+   and nothing asked for it.
+
+The lesson is the packaging rule. **A CSS module's class names are hashed per build and
+scoped to its own file, so they cannot travel into a package** — the sibling's own design
+record names that as the one thing that made a component extraction cost more than it
+saved. So `packages/ui` ships plain CSS with no classes on it (one exception, where the
+`max()` arithmetic is the fiddly part), and everything with a class stays in the application
+that draws it.
+
+And the one that would have rotted silently: **`env(safe-area-inset-*)` resolves to `0px`
+unless the page carries `viewport-fit=cover`, and no CSS feature query can detect the tag's
+absence.** In the sibling monorepo, one application sets three safe-area rules and its
+`index.html` has no such tag, so all three are dead and it has a bottom sheet with a home
+indicator on top of it. Nothing reported it, because the declarations are correct. Hence
+`packages/ui/src/viewport.test.ts`, which reads every `apps/*/index.html` and asserts the
+pairing.
+
+**0027 is the first record with two applications in it**, and its findings are about the
+libraries rather than about the modeller — because a library only its first consumer
+exercises is one whose second consumer finds the gaps. Six of the nine primitives had never
+been called by anything.
+
+Two things are worth carrying forward:
+
+1. **A transform that stores Euler angles beside a quaternion disagrees with it**, and a
+   person finds out by typing roll after yaw. The model holds the quaternion; the panel
+   _asks_ it what the angles are. And every axial primitive running along Y (ADR 0025) is
+   what makes rotation load-bearing rather than a refinement — a position-only panel could
+   not build a figure lying down.
+2. **Both shapes of the undo command compiled and both were wrong.** A command that returns
+   its own inverse loses the original the moment it is called, so it can undo but not redo;
+   and having fixed that, `apply` and `invert` were backwards for _removal_, so undoing a
+   removal removed it again. Neither was found by a test — they were found by a test that
+   asserted on the parts list rather than on a return value.
+
+And one about the camera: **neither `packages/ui`'s `pointer()` nor the landscape's orbit
+controller was reused**, and both refusals are recorded with reasons. A pinch needs pointer
+positions in the canvas's own coordinates and one pointer followed per call is the wrong
+shape for it.

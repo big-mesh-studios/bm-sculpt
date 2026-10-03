@@ -1,5 +1,9 @@
 node_modules
+# **Every workspace builds into its own directory**, so this is a name rather than a
+# path. `apps/*/dist` and `packages/*/dist` are both covered, and a package that
+# acquired a build step by accident would be ignored too rather than committed.
 dist
+dist-*
 *.tsbuildinfo
 .DS_Store
 

@@ -1,0 +1,254 @@
+/*
+ * The baseline two applications are sized against, and the rules that are the
+ * difference between working on a phone and working on a phone by accident.
+ *
+ * ## What this file is, and is not
+ *
+ * **Not a component library, and not a reset.** Everything here is either a
+ * custom property or a rule with no class on it, so it cannot collide with an
+ * application's own styling and cannot be half-used. A CSS *module* cannot be
+ * shared this way — its class names are hashed per build and scoped to the file that
+ * declared them — so the rule for this package is that **it ships plain CSS and
+ * nothing else.** Anything with a class in it belongs to the application that draws
+ * it. That is a constraint rather than a preference: the sibling monorepo's own
+ * design record names "the editor's `PopOver` hardcodes a class from its CSS module,
+ * which cannot travel into a package" as the one thing that made a component
+ * extraction cost more than it saved.
+ *
+ * ## The one that costs the most to leave out
+ *
+ * `overscroll-behavior: none` on `*`. **Without it, a pull towards the edge of a
+ * phone's page starts the browser's pull-to-refresh in the middle of a drag** — the
+ * landscape follows the finger up, the refresh spinner appears, and the drag is over.
+ * It is a one-line rule and no amount of `touch-action` on the element stops it,
+ * because the gesture belongs to the document rather than to the element.
+ */
+
+/* ------------------------------------------------------------------ the box */
+
+*,
+*::before,
+*::after,
+::backdrop {
+  box-sizing: border-box;
+}
+
+/* ------------------------------------------------------------------ tokens */
+
+/*
+ * The two sizing tokens every control is measured in.
+ *
+ * **Raised under a coarse pointer, rather than per component.** A hand on the glass
+ * needs a taller target than a mouse does, and doing that with one media query on the
+ * tokens gets every control at once. The sibling monorepo repeats the 44px figure in
+ * three separate files before working out that it belongs here.
+ */
+:root {
+  color-scheme: dark;
+
+  /* A mouse-sized control. */
+  --ui-size: 32px;
+  --ui-margin: 6px;
+
+  /*
+   * **The one number that is not a taste.** 44px is the smallest target a fingertip
+   * hits reliably, and it is the reason the coarse-pointer block below exists.
+   */
+  --ui-touch-size: 44px;
+}
+
+@media (any-pointer: coarse) {
+  :root {
+    --ui-size: var(--ui-touch-size);
+    --ui-margin: 8px;
+  }
+}
+
+/* ------------------------------------------------------------------- text */
+
+/*
+ * `-webkit-text-size-adjust: 100%` and not nothing.
+ *
+ * **Because Safari inflates text in landscape on its own**, and a block of console
+ * output that silently becomes 20% larger when the phone is turned sideways is a
+ * layout that only fails in one orientation.
+ */
+html {
+  line-height: 1.5;
+  tab-size: 4;
+  -webkit-text-size-adjust: 100%;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+img,
+svg,
+video,
+canvas,
+audio,
+iframe,
+embed,
+object {
+  display: block;
+  vertical-align: middle;
+}
+
+img,
+video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ----------------------------------------------------------------- scrolling */
+
+* {
+  scrollbar-color: var(--ui-grey, #707070) transparent;
+  scrollbar-width: thin;
+
+  /*
+   * A pull towards the edge of the page must not reload it out from under a drag on
+   * something inside it. See the header — this is the rule this file exists for.
+   */
+  overscroll-behavior: none;
+}
+
+/* ------------------------------------------------------------------ controls */
+
+/*
+ * Form controls sized for a finger, and text big enough that focusing one does not
+ * zoom the page.
+ *
+ * **`font-size: 16px` is not a style choice, it is the fix for a bug.** iOS Safari
+ * zooms the *page* in when an input is focused and its text is under 16px, and it
+ * does not reliably zoom back out on blur — so a 12px command line leaves the user
+ * looking at a magnified page they cannot get back. Both this repository's
+ * applications are deliberately zoomable (`initial-scale=1`, no `maximum-scale`), so
+ * they cannot rule it out the way the sibling's 3D editors do. Hence this rule, and
+ * hence a test that keeps the two in agreement.
+ */
+@media (any-pointer: coarse) {
+  button,
+  select,
+  input:not([type="range"]) {
+    min-height: var(--ui-touch-size);
+  }
+
+  input:not([type="range"]),
+  select,
+  textarea {
+    /* The zoom threshold. Not `16px` for looks — see above. */
+    font-size: 16px;
+  }
+
+  /*
+   * A range input is excluded from the font rule above and given its height here
+   * instead: its thumb is the target, and a thumb is not made easier to hit by
+   * enlarging its text.
+   */
+  input[type="range"] {
+    height: var(--ui-touch-size);
+  }
+}
+
+/*
+ * Every control inherits the page's font and colour rather than the browser's.
+ *
+ * **In a package reset this is the one rule that reaches into how things *look*,** and
+ * it earns its place: a `<button>` in one application and a `<button>` in the other
+ * then agree, instead of each carrying its own override for the same default.
+ */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* ------------------------------------------------------------------- taps */
+
+/*
+ * The grey flash a browser paints over a tapped element.
+ *
+ * **It is set on `html` and therefore inherited, rather than on each control.**
+ * The sibling monorepo applies it inline on one overlay and in CSS on two buttons,
+ * which is the same idea reached twice by accident. Inherited, one declaration does
+ * it for everything added later, and `-webkit-` prefixed properties are inherited
+ * where their unprefixed equivalents are not always applied.
+ *
+ * **Colour visibility is deliberately not touched.** Removing the flash entirely
+ * means a tap on a control whose only feedback is the browser's own gives nothing at
+ * all, and a 44px target that gives no feedback when hit is worse than one that
+ * flashes.
+ */
+html {
+  -webkit-tap-highlight-color: rgba(255, 255, 255, 0.12);
+}
+
+/* ---------------------------------------------------------------- safe area */
+
+/*
+ * The insets a notched or gesture-bar phone reserves, as custom properties.
+ *
+ * **They read `0px` unless the page's `viewport` meta tag carries
+ * `viewport-fit=cover`, and there is no way to detect that from CSS.** Without the
+ * token the browser letterboxes the page to the safe area and every inset resolves
+ * to zero, so the rules below compile, apply, and do nothing. That is not a
+ * hypothetical: in the sibling monorepo one application sets `env(safe-area-inset-*)`
+ * on three selectors and its `index.html` has no `viewport-fit=cover`, so all three
+ * are dead.
+ *
+ * **So the two-argument form is not optional here.** `env(safe-area-inset-bottom,
+ * 0px)` resolves in browsers that do not know the property at all, and `padding: 0`
+ * next to it is a no-op either way — whereas the bare one-argument form makes the whole
+ * declaration invalid where `env()` is unsupported, taking the fallback with it.
+ *
+ * The `max()` form is what makes these safe to add to a rule that already has padding:
+ * `max(var(--ui-margin), env(safe-area-inset-bottom))` keeps the margin on a device
+ * with no inset, and grows past it on one with.
+ */
+:root {
+  --ui-safe-top: env(safe-area-inset-top, 0px);
+  --ui-safe-right: env(safe-area-inset-right, 0px);
+  --ui-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --ui-safe-left: env(safe-area-inset-left, 0px);
+}
+
+/*
+ * A bar along the bottom edge of the window — a toolbar, a status strip, a console
+ * input row — is the thing most often sat under a home indicator.
+ *
+ * **The only class in this file, and it is here rather than in the applications
+ * because the arithmetic is the fiddly part.** Every application would otherwise
+ * reach for the same three lines and one of them would forget the `max()`.
+ */
+.ui-bottom-bar {
+  padding-bottom: max(var(--ui-margin), var(--ui-safe-bottom));
+  padding-left: max(var(--ui-margin), var(--ui-safe-left));
+  padding-right: max(var(--ui-margin), var(--ui-safe-right));
+}
+
+/* --------------------------------------------------------- reduced motion */
+
+/*
+ * Honour the system setting.
+ *
+ * **The sibling's editors do not, and this is the one rule in this file with no
+ * precedent to copy.** A `prefers-reduced-motion` user has asked the system not to
+ * animate, and an application that transitions anyway is overriding a setting made
+ * about their body. The transition is named rather than global so that what is
+ * disabled is visible in the source, because a blanket
+ * `* { transition: none !important }` also stops the state change from appearing at
+ * all, which is a different bug.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

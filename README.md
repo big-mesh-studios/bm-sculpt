@@ -24,15 +24,15 @@ The decisions behind all of it, with their costs and their rejected alternatives
 0 through 5 — are in the repository history, one commit per phase, each verified before the
 next began.
 
-|              |                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Renderer** | [`@random-mesh/rmsl`](https://www.npmjs.com/package/@random-mesh/rmsl) 1.14.0 — a scene graph and a node-graph shader DSL. Not a three.js fork; see [ADR 0001](docs/adr/0001-rmsl-over-three.md).                                                                                                                                                                                                                                        |
-| **UI**       | Solid **2.0.0-beta.29**, `solid-js` + `@solidjs/web` + `@solidjs/signals`, coordinated at one version. The JSX transform runs through Babel rather than the native compiler, so the toolchain has no native step and builds anywhere Node does; see `pnpm-workspace.yaml`.                                                                                                                                                               |
-| **Build**    | Vite 8, `vite-plugin-solid@3.0.0-next.5`, TypeScript in `strict` with `noUnusedLocals` and `noUnusedParameters`.                                                                                                                                                                                                                                                                                                                         |
-| **Style**    | One Prettier config, no linter. Type safety is `tsc --noEmit`.                                                                                                                                                                                                                                                                                                                                                                           |
-| **Layout**   | One package. `pnpm-workspace.yaml` exists for the `catalog:` it holds, which every version more than one place needs is written into once.                                                                                                                                                                                                                                                                                               |
-| **Console**  | `/` for a floating terminal over the game: fuzzy command completion, history, `/help`, and the fullscreen button beside its trigger. Commands are declared in one table (`src/console/commands.ts`) whose `run` closures call plain methods on `Game`; neither knows a console exists. A second table, `/place:`, is merged in with `Commander.with()` and may return a promise, which the console prints as a pending line it replaces. |
-| **Places**   | TypeScript run in QuickJS-in-WASM, bundled from source, with 19 effects and 7 events. `/place:load bridge` builds a bridge you can walk on, and `/place:open` reads one out of a zip. Isolated, deterministic and capped; see [ADR 0021](docs/adr/0021-a-place-arrives-as-a-zip-with-a-manifest.md).                                                                                                                                     |
+|              |                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Renderer** | [`@random-mesh/rmsl`](https://www.npmjs.com/package/@random-mesh/rmsl) 1.14.0 — a scene graph and a node-graph shader DSL. Not a three.js fork; see [ADR 0001](docs/adr/0001-rmsl-over-three.md).                                                                                                                                                                                                                                                       |
+| **UI**       | Solid **2.0.0-beta.29**, `solid-js` + `@solidjs/web` + `@solidjs/signals`, coordinated at one version. The JSX transform runs through Babel rather than the native compiler, so the toolchain has no native step and builds anywhere Node does; see `pnpm-workspace.yaml`.                                                                                                                                                                              |
+| **Build**    | Vite 8, `vite-plugin-solid@3.0.0-next.5`, TypeScript in `strict` with `noUnusedLocals` and `noUnusedParameters`.                                                                                                                                                                                                                                                                                                                                        |
+| **Style**    | One Prettier config, no linter. Type safety is `tsc --noEmit`.                                                                                                                                                                                                                                                                                                                                                                                          |
+| **Layout**   | One package. `pnpm-workspace.yaml` exists for the `catalog:` it holds, which every version more than one place needs is written into once.                                                                                                                                                                                                                                                                                                              |
+| **Console**  | `/` for a floating terminal over the game: fuzzy command completion, history, `/help`, and the fullscreen button beside its trigger. Commands are declared in one table (`apps/bm-sculpt/src/console/commands.ts`) whose `run` closures call plain methods on `Game`; neither knows a console exists. A second table, `/place:`, is merged in with `Commander.with()` and may return a promise, which the console prints as a pending line it replaces. |
+| **Places**   | TypeScript run in QuickJS-in-WASM, bundled from source, with 19 effects and 7 events. `/place:load bridge` builds a bridge you can walk on, and `/place:open` reads one out of a zip. Isolated, deterministic and capped; see [ADR 0021](docs/adr/0021-a-place-arrives-as-a-zip-with-a-manifest.md).                                                                                                                                                    |
 
 ## Phase 0 spikes
 
@@ -45,14 +45,14 @@ compiles and inspects the shader on the host, and once visibly on screen.
 will target — `float32x3` position, `snorm16x2` octahedral normal, `unorm8x4`
 colour, twenty bytes. `vertexFormatOf` infers the format from the array type,
 component count and `normalized` flag, and
-[`spike-geometry.test.ts`](src/render/spike-geometry.test.ts) asserts the
+[`spike-geometry.test.ts`](apps/bm-sculpt/src/render/spike-geometry.test.ts) asserts the
 inference and that `VERTEX_BYTES` matches what those formats actually occupy.
 Signed 16-bit pairs beat unsigned 8-bit quads for the normal at the same four
 bytes — roughly a hundredth of a degree of error rather than four tenths.
 
 **Does a 3D sampler bind?** There is no `Data3DTexture`; a volume is a
 `DataTexture` with a depth, bound through `b.sampler(name, "sampler3D", …)`.
-[`surface-material.test.ts`](src/render/surface-material.test.ts) compiles the
+[`surface-material.test.ts`](apps/bm-sculpt/src/render/surface-material.test.ts) compiles the
 material on the host and asserts `sampler3D` appears in the emitted GLSL and in
 the program's binding list — the text being the only place the difference between a
 `sampler3D` and a `sampler2D` on the same bytes is visible.
@@ -60,7 +60,7 @@ the program's binding list — the text being the only place the difference betw
 **What precision does this device have?** `highp` is mandatory in the vertex stage
 and optional in the fragment stage, and an unsupported qualifier is dropped
 _silently_ — the shader still compiles and the only symptom is banded lighting.
-[`precision.ts`](src/render/precision.ts) measures it with
+[`precision.ts`](apps/bm-sculpt/src/render/precision.ts) measures it with
 `getShaderPrecisionFormat` and the spike page reports the answer.
 
 **Is a raw GLSL escape hatch available?** No, and that is worth knowing before
@@ -69,17 +69,51 @@ be a node graph. `compileGLSL` is how to see what one became.
 
 ## Running it
 
+This is a pnpm workspace: **five libraries under `packages/`, one application under `apps/`.**
+`pnpm` at the root does the right thing for all of them, so the commands below have not changed.
+
 ```sh
 pnpm install
 pnpm dev
 ```
 
 ```sh
-pnpm check-types   # tsc --noEmit
-pnpm test          # vitest
-pnpm build         # vite build
-pnpm format        # prettier --write
+pnpm check-types       # tsc --noEmit, in every workspace
+pnpm test              # vitest, in every workspace
+pnpm build             # vite build, per app
+pnpm format            # prettier --write
+pnpm workspace:check   # the /apps versus /packages rule
 ```
+
+### The layout, and the rule that keeps it
+
+| Path               | What it is                                                          |
+| ------------------ | ------------------------------------------------------------------- |
+| `packages/core`    | Vector and box types, `Medium`, the three numbers every field needs |
+| `packages/sdf`     | Closed-form primitive distances and their validation table          |
+| `packages/csg`     | The operation list, the fold, the BVH, terrain, serialisation       |
+| `packages/meshing` | Surface Nets, growable buffers, chunk mesh output                   |
+| `packages/picking` | Which primitive a structural ray hits                               |
+| `apps/bm-sculpt`   | The landscape: chunks, streaming, renderer, places, console         |
+| `tools`            | The checks the workspaces cannot check on each other                |
+
+**Mobile lives in `packages/ui`, not in an application.** `baseline.css` carries
+`overscroll-behavior`, the 16px input rule that stops iOS zooming the page on focus, the
+safe-area insets, the coarse-pointer 44px sizing tokens and `prefers-reduced-motion` — and
+it ships **no classes at all**, because a CSS module's hashed names cannot travel into a
+package. [ADR 0026](docs/adr/0026-the-mobile-rules-live-in-a-package.md) records what that
+found in this application, including three shipped bugs.
+
+`workspace:check` is the only gate here that can fail on a dependency graph which compiles
+perfectly: a package that depends on an app, an app that could be published, or two packages
+pointing at each other by path. It runs first in CI, because it costs a second and it is the
+check with nothing to do with types. [ADR 0024](docs/adr/0024-packages-is-what-has-no-opinion.md)
+records why the split is at this line rather than another.
+
+**Packages ship raw TypeScript.** Each one's `exports` points at `./src/index.ts` and consumers
+resolve it with `moduleResolution: "bundler"`, so there is no build step in any package and a
+broken type in a library fails the _consumer's_ type-check immediately. The only workspace with a
+`build` script is an app.
 
 ### Why Solid beta rather than RC
 
@@ -249,7 +283,7 @@ where that code runs was settled by measurement before any of it was built — s
 - `Math.random` is seeded and `Date.now` answers from a caller-supplied clock, because
   every peer runs every place and has to arrive at the same world.
 
-`src/places/interpreter.ts` and its twenty tests settle all of that under Node, and
+`apps/bm-sculpt/src/places/interpreter.ts` and its twenty tests settle all of that under Node, and
 `/places-probe.html` settles the one claim a test cannot: that the WebAssembly file loads
 under Vite, which rewrites the loader's own module location and can leave the fetch
 answering with the page instead of the binary. Same argument as `sky-probe.html` — one page
@@ -324,7 +358,7 @@ What carries the weight is not the count:
 All of it, and it runs. `/place:load bridge` in the browser builds a bridge you can walk on.
 
 - The interpreter (`interpreter.ts`), the registry and the shared fold-order counter they
-  allocate from (`place-registry.ts`, `src/edit/fold-order.ts`), the vocabulary
+  allocate from (`place-registry.ts`, `apps/bm-sculpt/src/edit/fold-order.ts`), the vocabulary
   (`limits.ts`, `fields.ts`, `effects.ts`, `events.ts`, `event-log.ts`), the bundler
   (`bundle.ts`) and the guest library as a real type-checked file (`guest/place-api.ts`).
 - The host (`host.ts`), which owns what it can and asks the application for the eight
@@ -334,7 +368,7 @@ All of it, and it runs. `/place:load bridge` in the browser builds a bridge you 
   at all. A place writes into the registry rather than through `document.add`, so nothing
   else would find out; the symptom is a bridge that is in the collision field and in no
   mesh, so the player stands on something nobody can see.
-- Three shipped places (`src/places/demo/`), loaded for real by `demos.test.ts` — the
+- Three shipped places (`apps/bm-sculpt/src/places/demo/`), loaded for real by `demos.test.ts` — the
   only test that would catch a typo in an example, and the reason a demo nobody can run
   does not reach a person.
 - **`/place:open` reads a place out of a zip** — `manifest.json` at the root, validated
@@ -360,9 +394,9 @@ also already exists, and which now wait only on the props decision.
 ## The game and its console
 
 The application grew a third scene, the default one: a first-person player over the
-terrain who digs and places with the same stroke machinery the sculptor uses. `src/player/`
+terrain who digs and places with the same stroke machinery the sculptor uses. `apps/bm-sculpt/src/player/`
 is that player's physics — arithmetic over the field, testable without a browser —
-and `src/engine/game.ts` is the seam where the player, the input, the camera and the
+and `apps/bm-sculpt/src/engine/game.ts` is the seam where the player, the input, the camera and the
 streamed world meet once a frame.
 
 Press `/` and a floating terminal opens. It completes command names as they are typed,
@@ -382,7 +416,7 @@ application shows anyway. [ADR 0010](docs/adr/0010-suspend-the-pointer-lock-not-
 records the cost — one click to resume — and what else was rejected.
 
 **Commands are declared in one table and call plain methods on `Game`.**
-`src/console/commands.ts` holds a `Commander` over a literal of `{ description, args,
+`apps/bm-sculpt/src/console/commands.ts` holds a `Commander` over a literal of `{ description, args,
 run }`, where each `run` does its own argument parsing and validation and then asks the
 game to do something typed. `Game.setFlying` and `Game.setNoClip` know nothing about
 where they were called from; `Player.flying` and `Player.noclip` know nothing either.
@@ -423,7 +457,7 @@ operation list, the mesher runs in workers, and the picker traces the same field
 mesher reads — so a dab lands where the field says the surface is, which is the property
 the whole design exists to make true.
 
-`src/pick/` traces the ray. `src/edit/` holds the model, the brush, and the tool that
+`packages/picking/src/` traces the ray. `apps/bm-sculpt/src/edit/` holds the model, the brush, and the tool that
 decides what a pointer event means. The single most important decision is recorded in
 [ADR 0009](docs/adr/0009-picking-and-history.md) and is worth repeating here: **the picker
 and the mesher read the same function of position**, so they cannot disagree about where the
@@ -459,7 +493,7 @@ said it needed.
 
 ## Phase 4 — drawing it
 
-`src/session.ts` is where the phases meet, and it is the most bug-prone file in the
+`apps/bm-sculpt/src/session.ts` is where the phases meet, and it is the most bug-prone file in the
 project for a reason that is worth stating: a seam between two correct pieces is not
 automatically correct. Each of the pieces enforces its own invariant, and none of them
 knows whether the wiring honours it. So the session takes an injected worker factory, and
@@ -488,7 +522,7 @@ Two bugs the session's own tests caught:
   callers order by distance — so startup meshed the far corners of the window while the
   chunk the player was standing in waited its turn.
 
-`src/render/chunk-mesh-store.ts` enforces ADR 0007's rule that a slot is marked unfilled by
+`apps/bm-sculpt/src/render/chunk-mesh-store.ts` enforces ADR 0007's rule that a slot is marked unfilled by
 whatever invalidates it and refused for a revision the caller does not hold. That rule turned
 out to need to be stronger than the record expected: the store owns a revision per slot, so
 the invariant is enforced by the owner of the state rather than by every caller remembering
@@ -501,19 +535,19 @@ sculpt deletes a chunk's surface, which is what every deletion produces.
 
 ## Phase 3 — meshing
 
-`src/mesh/` turns the field's sign into triangles, in workers. The mesher proper is
-a pure algorithm over a sampler; everything project-specific is one layer above it.
+Meshing is split at the line between the algorithm and this landscape's LOD bands. The
+first three rows are `packages/meshing`; the rest are `apps/bm-sculpt/src/mesh/`.
 
-|                   |                                                                                                                                        |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `surface-nets.ts` | One vertex per cell whose corners disagree, one quad per sign-changing edge. Owns the seam rule, which is the only subtle thing in it. |
-| `chunk-mesher.ts` | `ChunkMesher`, the interface a WebAssembly implementation would come through, and the Surface Nets implementation of it.               |
-| `chunk-mesh.ts`   | The twenty-byte vertex the Phase 0 spike proved reaches the GPU.                                                                       |
-| `growable.ts`     | The only way geometry is accumulated, with the `array`/`exact` split so a transfer never delivers a detached view.                     |
-| `model-field.ts`  | Builds a field from a model message, on the worker's side of the thread boundary.                                                      |
-| `protocol.ts`     | The messages, as data and nothing else.                                                                                                |
-| `worker.ts`       | `handleMeshMessage`, a pure function of state, message and an injected mesher factory.                                                 |
-| `worker-pool.ts`  | Four workers, one chunk each, and the rule for which answer counts.                                                                    |
+|                   | Where              |                                                                                                                                                                        |
+| ----------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `surface-nets.ts` | `packages/meshing` | One vertex per cell whose corners disagree, one quad per sign-changing edge. Owns the seam rule, which is the only subtle thing in it.                                 |
+| `chunk-mesh.ts`   | `packages/meshing` | The twenty-byte vertex the Phase 0 spike proved reaches the GPU.                                                                                                       |
+| `growable.ts`     | `packages/meshing` | The only way geometry is accumulated, with the `array`/`exact` split so a transfer never delivers a detached view.                                                     |
+| `chunk-mesher.ts` | `apps/bm-sculpt`   | `ChunkMesher`, the interface a WebAssembly implementation would come through, and the Surface Nets implementation of it — over `CHUNK_VOXELS`, and scheduled by `Lod`. |
+| `model-field.ts`  | `apps/bm-sculpt`   | Builds a field from a model message, on the worker's side of the thread boundary.                                                                                      |
+| `protocol.ts`     | `apps/bm-sculpt`   | The messages, as data and nothing else.                                                                                                                                |
+| `worker.ts`       | `apps/bm-sculpt`   | `handleMeshMessage`, a pure function of state, message and an injected mesher factory.                                                                                 |
+| `worker-pool.ts`  | `apps/bm-sculpt`   | Four workers, one chunk each, and the rule for which answer counts.                                                                                                    |
 
 The seam rule, in one sentence: **a chunk owning cells `[base, base + n)` emits the
 edges in that same range, taking the four cells it needs from one cell of low
@@ -549,7 +583,7 @@ Three more things the tests found, recorded in
 
 ## Phase 2 — the streaming foundation
 
-`src/world/` is where chunks live: which cells exist, which slot each is in, and what
+`apps/bm-sculpt/src/world/` is where chunks live: which cells exist, which slot each is in, and what
 colour they hold. None of it touches the renderer, the DOM or the field, so a meshing
 worker needs its arithmetic and nothing else.
 
@@ -587,15 +621,15 @@ Three things writing the tests corrected, recorded in
 ## Phase 1 — the CSG core
 
 The model is a list of CSG operations and nothing else: no voxel grid, no baked
-field, no stored mesh (ADR 0002). `src/csg/` is the whole of it.
+field, no stored mesh (ADR 0002). `packages/csg/src/` is the whole of it.
 
-|                 |                                                                                                                                                                                       |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `shapes.ts`     | Ellipsoid, box, capsule, and the signed distance to each. Two are exact; the ellipsoid is the standard two-term approximation, and its shortfall is bounded rather than assumed away. |
-| `operations.ts` | The operation type, the smooth booleans, an operation's world box, and **the fold** — the one piece of arithmetic that has to be exactly right.                                       |
-| `bvh.ts`        | A binned surface-area hierarchy over the operations, and the candidate cache that makes a chunk's cost independent of the model.                                                      |
-| `field.ts`      | The composition seam: `fold(operations, p, baseField?(p))`. Adding an infinite world is a new `baseField` and nothing else.                                                           |
-| `serialise.ts`  | File format v1. The field's _description_, never any voxel data — so a file's size is a function of what the user did, not how big the model is.                                      |
+|                 |                                                                                                                                                                                                                                                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `primitives.ts` | All nine primitives and the signed distance to each, in `packages/sdf`, as one table. Eight are exact closed forms; the ellipsoid is the standard two-term approximation, carries `exact: false`, and its two measured properties — an exact zero set, and never over-reporting — are asserted rather than assumed. |
+| `operations.ts` | The operation type, the smooth booleans, an operation's world box, and **the fold** — the one piece of arithmetic that has to be exactly right.                                                                                                                                                                     |
+| `bvh.ts`        | A binned surface-area hierarchy over the operations, and the candidate cache that makes a chunk's cost independent of the model.                                                                                                                                                                                    |
+| `field.ts`      | The composition seam: `fold(operations, p, baseField?(p))`. Adding an infinite world is a new `baseField` and nothing else.                                                                                                                                                                                         |
+| `serialise.ts`  | File format v1. The field's _description_, never any voxel data — so a file's size is a function of what the user did, not how big the model is.                                                                                                                                                                    |
 
 Three things came out of building it that the plan did not foresee, each caught by a
 test comparing against a brute-force fold and each now its own decision:
@@ -623,6 +657,6 @@ operations — takes **275 ms** on an ARM phone. A 2016 laptop is several times 
 and four workers run four chunks at once. One candidate cache rebuild serves the whole
 chunk.
 
-`src/csg/cost.test.ts` holds that to a ceiling rather than reporting it as a
+`apps/bm-sculpt/src/csg-cost/cost.test.ts` holds that to a ceiling rather than reporting it as a
 benchmark, because the failure worth catching is a change that looks harmless and
 costs ten times as much, not a number that drifts.

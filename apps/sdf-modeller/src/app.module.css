@@ -1,0 +1,127 @@
+/*
+ * The shell: a canvas with panels over it.
+ *
+ * **Every overlay here is `pointer-events: none` with its own controls taking them
+ * back.** A header that stretches across the top of the model and takes presses is a
+ * strip of the screen that cannot be orbited, and on a phone that strip is a third of
+ * the view.
+ */
+
+.root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #111114;
+  color: #e6e6ea;
+}
+
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+
+  /* **The element owns its gestures, and this is the one rule that makes touch work.**
+     Without it a drag on the canvas is a gesture the page is free to interpret, which on
+     a touch device means the viewport scrolls halfway through an orbit — and
+     `overscroll-behavior` in the baseline stops the *page* from bouncing but cannot stop
+     this, because this gesture belongs to the canvas. */
+  touch-action: none;
+
+  cursor: grab;
+}
+
+.canvas:active {
+  cursor: grabbing;
+}
+
+.header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: 22rem;
+  padding: max(1rem, var(--ui-safe-top, 0px)) 1rem 1rem;
+  padding-left: max(1rem, var(--ui-safe-left, 0px));
+
+  /* Only the text is selectable; the empty space around it is not a target. */
+  pointer-events: none;
+  user-select: none;
+}
+
+.title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.status {
+  margin: 0.25rem 0 0;
+  font-size: 0.75rem;
+  color: #a9a9a9;
+  font-variant-numeric: tabular-nums;
+}
+
+.footer {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  display: flex;
+  gap: var(--ui-margin);
+  align-items: center;
+
+  /* **The row along the bottom edge, so it is the row a home indicator sits on.** The
+     `max()` keeps the baseline margin from being replaced by a zero inset on a device
+     that has one. */
+  padding: var(--ui-margin);
+  padding-bottom: max(var(--ui-margin), var(--ui-safe-bottom, 0px));
+  padding-left: max(var(--ui-margin), var(--ui-safe-left, 0px));
+  padding-right: max(var(--ui-margin), var(--ui-safe-right, 0px));
+
+  pointer-events: none;
+}
+
+.action {
+  pointer-events: all;
+  min-height: var(--ui-size);
+  padding: 0 calc(var(--ui-margin) * 2);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: calc(var(--ui-size) / 4);
+  background: rgba(20, 20, 26, 0.82);
+  color: inherit;
+  cursor: pointer;
+
+  /* Nothing here is text to select, and a double-tap that selects a button instead of
+     pressing it is the classic mobile misfire. Paired with `touch-action: none` on the
+     element that owns a gesture — this one owns no gesture, so it keeps `manipulation`
+     rather than `none` so a tap is still delivered promptly. */
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.hint {
+  font-size: 0.7rem;
+  color: #707070;
+  user-select: none;
+}
+
+/* **Below this width the panels stack along the bottom rather than sitting beside the
+   model**, because a panel taking half a phone's width leaves a model too narrow to read
+   and controls too small to hit. The threshold is the point at which the two stop fitting
+   side by side, not a device class. */
+@media (max-width: 640px) {
+  .header {
+    max-width: none;
+    right: 0;
+  }
+
+  .hint {
+    display: none;
+  }
+}

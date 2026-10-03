@@ -1,54 +1,19 @@
 {
+  // The root workspace's own TypeScript: the tools, and nothing else.
+  //
+  // **This is the seventh tsconfig the base comment counts, and the only one with no DOM.**
+  // `tools/` is Node — it reads `package.json` files off a disk during CI — and giving it
+  // the browser's globals would mean a tool could call `document.querySelector` and
+  // type-check, failing only when the check actually ran. Dropping `DOM` from `lib` and
+  // setting `types: ["node"]` makes the absence part of the type rather than a comment.
+  //
+  // It exists at all because these files used to sit inside `src/` and were covered by the
+  // application's tsconfig. Splitting the monorepo moved them to the root, where
+  // `pnpm -r check-types` does not look, so a broken tool would have type-checked nowhere.
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    // Solid's JSX is compiled, not interpreted: `preserve` hands the
-    // transform to `vite-plugin-solid`, which is the only thing that knows how
-    // to turn it into DOM calls. Importing from `@solidjs/web` rather than
-    // `solid-js` is what puts the DOM runtime in scope for the transform.
-    "jsx": "preserve",
-    "jsxImportSource": "@solidjs/web",
-
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "noEmit": true,
-
-    // Allows `import "./thing.ts"` in the Node-run scripts under `tools/` and
-    // `e2e/`, which Node executes with type stripping rather than a bundler.
-    // Imports inside `src/` stay extensionless.
-    "allowImportingTsExtensions": true,
-
-    // So that a place's source — `src/places/demo/*.ts` — type-checks here rather than only
-    // when a person is reading it. A place imports `voxelscape`, which is not a package: it is
-    // the guest library in `guest/place-api.ts`, reached through the two-line alias in
-    // `guest/voxelscape.ts`. Without this, `tsc` cannot resolve a place's imports, the demos
-    // would be the only TypeScript in the repository that nothing checks, and a typo in an
-    // effect's field name would surface at runtime as a refusal rather than at compile time as
-    // an error.
-    //
-    // **A place author's own project needs the same line**, and it is in `voxelscape.ts`'s
-    // header. It is here because the demos are places.
-    "paths": {
-      "voxelscape": ["./src/places/guest/voxelscape.ts"]
-    },
-
-    "allowSyntheticDefaultImports": true,
-    "esModuleInterop": true,
-    "isolatedModules": true,
-
-    "strict": true,
-    // Not stylistic: a leftover scratch binding in a mesher loop is a bug that
-    // silently costs a branch or hides a shadowed name.
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    // `exactOptionalPropertyTypes` is off deliberately. It is correct, and it
-    // makes every optional field that is genuinely optional — half of the
-    // worker protocol — a `{ field?: T | undefined }` at every call site.
-    "noImplicitOverride": true,
-    "noFallthroughCasesInSwitch": true,
-
-    "skipLibCheck": true,
-    "types": ["vite/client"]
+    "lib": ["ESNext"],
+    "types": ["node"]
   },
-  "include": ["src", "tools"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["tools"]
 }

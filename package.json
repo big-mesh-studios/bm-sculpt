@@ -1,39 +1,30 @@
 {
-  "name": "bm-sculpt",
+  "name": "big-mesh-studios",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "Chunked surface-nets sculpting, in the browser",
+  "description": "One signed distance field core, two applications: a landscape and a figure modeller",
   "engines": {
     "node": ">=24"
   },
   "packageManager": "pnpm@11.24.0",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "serve": "vite preview",
-    "check-types": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "dev": "pnpm --filter bm-sculpt dev",
+    "dev:sdf-modeller": "pnpm --filter @big-mesh-studios/sdf-modeller dev",
+    "build": "pnpm -r build",
+    "check-types": "pnpm -r check-types && pnpm check-types:tools",
+    "check-types:tools": "tsc --noEmit -p tsconfig.json",
+    "test": "pnpm -r test && pnpm test:tools",
+    "test:tools": "vitest run tools",
+    "workspace:check": "node tools/workspace.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
-  "dependencies": {
-    "@jitl/quickjs-wasmfile-release-sync": "catalog:",
-    "@random-mesh/rmsl": "catalog:",
-    "@solidjs/signals": "catalog:",
-    "@solidjs/web": "catalog:",
-    "jszip": "catalog:",
-    "quickjs-emscripten-core": "catalog:",
-    "solid-js": "catalog:"
-  },
   "devDependencies": {
-    "jsdom": "catalog:",
+    "@types/node": "catalog:",
     "prettier": "catalog:",
     "typescript": "catalog:",
-    "vite": "catalog:",
-    "vite-plugin-solid": "catalog:",
     "vitest": "catalog:"
   }
 }

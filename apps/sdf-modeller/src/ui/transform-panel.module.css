@@ -1,0 +1,97 @@
+/*
+ * The selected part's transform, in the top right.
+ *
+ * **Every control is at least `--ui-size`, which the baseline raises to 44px under a
+ * coarse pointer.** A number field is the one control where a fingertip and a caret fight
+ * each other, and the field is `inputmode="decimal"` in the component so a phone brings up
+ * a number pad rather than a keyboard.
+ */
+
+.panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 9rem;
+  padding: calc(var(--ui-margin) * 2);
+  padding-top: max(calc(var(--ui-margin) * 2), var(--ui-safe-top, 0px));
+  padding-right: max(calc(var(--ui-margin) * 2), var(--ui-safe-right, 0px));
+
+  background: rgba(17, 17, 20, 0.9);
+  pointer-events: all;
+}
+
+.heading {
+  margin: 0 0 var(--ui-margin);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #707070;
+  display: flex;
+  justify-content: space-between;
+  gap: var(--ui-margin);
+}
+
+.id {
+  color: #4a4a4a;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.subheading {
+  margin: var(--ui-margin) 0 2px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #4a4a4a;
+  display: flex;
+  justify-content: space-between;
+}
+
+.note {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.axis {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr;
+  align-items: center;
+  gap: var(--ui-margin);
+}
+
+.axisLabel {
+  font-size: 0.7rem;
+  color: #707070;
+  font-family: ui-monospace, monospace;
+}
+
+.number {
+  min-height: var(--ui-size);
+  width: 100%;
+  padding: 0 calc(var(--ui-margin) / 2);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: calc(var(--ui-size) / 4);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+  touch-action: manipulation;
+}
+
+@media (max-width: 640px) {
+  .panel {
+    /* **Narrower than its desktop width but never full-bleed**, so the model stays
+       visible while a field is being edited. */
+    max-width: 44vw;
+  }
+
+  .number {
+    /* The baseline raises inputs to 16px under a coarse pointer, which is what stops iOS
+       zooming the page when this takes focus. */
+    font-size: 16px;
+  }
+}

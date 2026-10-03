@@ -51,6 +51,30 @@ jobs:
       # byte-for-byte the build that ships.
       - run: pnpm build
 
+      # `pnpm build` is `pnpm -r build`, so each app builds into its own
+      # `apps/*/dist` and the root has no `dist` of its own any more. The page
+      # that used to be at the site root is at `apps/bm-sculpt/dist`, which is
+      # why this is a path into an app rather than a bare `./dist`.
+      #
+      # **Two applications, one site, and the layout is a decision rather than a
+      # default.** The landscape stays at the root so its existing URL keeps
+      # working, and the modeller goes in a subdirectory of its own. That works
+      # because both are built with `base: "./"`, so every asset address in each
+      # index.html is relative and resolves correctly from either place — which is
+      # the property that makes one site possible at all rather than two.
+      #
+      # The alternative is a second Pages site per application, which would let
+      # each be deployed and rolled back independently. What argues against it
+      # here is that the two share five packages and a file format, and a reader
+      # following a link from a model's documentation to the model itself should
+      # not have to cross a hostname. **If the modeller grows its own routing, or
+      # the two need independent deploys, this is the line to move.**
+      - name: Collect the built apps
+        run: |
+          mkdir -p dist/sdf-modeller
+          cp -r apps/bm-sculpt/dist/. dist/
+          cp -r apps/sdf-modeller/dist/. dist/sdf-modeller/
+
       # No `404.html` is copied over the way the sibling repository does for its
       # routed applications, because this one has no routes. Its only addresses are
       # query strings — `?spike`, `?lod=off` — and a browser never sends those to a

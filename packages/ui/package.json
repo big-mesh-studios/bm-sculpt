@@ -1,0 +1,32 @@
+{
+  "name": "@big-mesh-studios/ui",
+  "version": "0.0.0",
+  "license": "MIT",
+  "description": "The mobile-first interface primitives two applications share: one pointer for mouse and finger alike, and the CSS baseline they are sized against",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clinuxrulz/bm-sculpt.git",
+    "directory": "packages/ui"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    "./activity": "./src/activity.tsx",
+    "./combine-refs": "./src/combine-refs.ts",
+    "./create-media-query": "./src/create-media-query.ts",
+    "./pointer": "./src/pointer.ts",
+    "./baseline.css": "./src/baseline.css"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@solidjs/web": "catalog:",
+    "solid-js": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

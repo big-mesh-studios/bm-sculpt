@@ -1,0 +1,48 @@
+{
+  "name": "bm-sculpt",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "The smooth landscape: an infinite chunk-streamed world with places, a sky, and a player",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.24.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "vite preview",
+    "check-types": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@big-mesh-studios/core": "workspace:*",
+    "@big-mesh-studios/csg": "workspace:*",
+    "@big-mesh-studios/meshing": "workspace:*",
+    "@big-mesh-studios/picking": "workspace:*",
+    "@big-mesh-studios/sdf": "workspace:*",
+    "@big-mesh-studios/ui": "workspace:*",
+    "@jitl/quickjs-wasmfile-release-sync": "catalog:",
+    "@random-mesh/rmsl": "catalog:",
+    "@solidjs/signals": "catalog:",
+    "@solidjs/web": "catalog:",
+    "jszip": "catalog:",
+    "quickjs-emscripten-core": "catalog:",
+    "solid-js": "catalog:"
+  },
+  "devDependencies": {
+    "jsdom": "catalog:",
+    "prettier": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plugin-solid": "catalog:",
+    "vitest": "catalog:"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clinuxrulz/bm-sculpt.git",
+    "directory": "apps/bm-sculpt"
+  }
+}

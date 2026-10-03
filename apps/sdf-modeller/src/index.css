@@ -1,0 +1,24 @@
+/*
+ * This application's own styles, and nothing mobile.
+ *
+ * **Everything mobile is `@big-mesh-studios/ui`'s `baseline.css`, imported from
+ * `index.tsx` immediately before this file** so that these rules win wherever the two
+ * have the same specificity. A CSS `@import` of a bare specifier would be resolved by
+ * PostCSS, which has no idea a workspace package exists; the same specifier in a
+ * JavaScript import goes through Vite's resolver, which reads the package's `exports`.
+ * See `apps/bm-sculpt/src/index.css` for the same arrangement and ADR 0026.
+ */
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: #111114;
+}

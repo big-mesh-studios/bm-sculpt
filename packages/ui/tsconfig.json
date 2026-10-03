@@ -1,0 +1,26 @@
+{
+  // A library. `include: ["src"]` because there is nothing else in the directory that is
+  // TypeScript, and saying so is cheaper than letting tsc scan upward.
+  //
+  // **`DOM.Iterable`, which the base does not carry.** Four of the five modules here put
+  // things in a `NodeList` or iterate a collection of DOM nodes, and without the
+  // iterable lib a spread or a `for...of` over one is a type error. The base gives every
+  // workspace `["ESNext", "DOM"]` because that is the floor; this package is the one that
+  // walks the DOM rather than only reading from it.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+
+    // **`jsx: "preserve"` with `jsxImportSource: "@solidjs/web"`, and both lines are
+    // the application's, copied.** Solid's JSX is not React's, so the compiler leaves
+    // it alone for the Vite plugin's own transform rather than emitting calls itself;
+    // and the types have to come from `@solidjs/web` rather than from `solid-js`,
+    // because it is `@solidjs/web` that declares the DOM intrinsics. Pointing this at
+    // `solid-js` instead — which is the more obvious guess — compiles to "no interface
+    // `JSX.IntrinsicElements` exists" and "this JSX tag requires the module path
+    // `solid-js/jsx-runtime` to exist".
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web"
+  },
+  "include": ["src"]
+}

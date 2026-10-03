@@ -1,0 +1,181 @@
+/*
+ * The parts list and the primitive picker, along the left edge.
+ */
+
+.panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 16rem;
+  max-width: 60vw;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--ui-margin) * 2);
+  padding: calc(var(--ui-margin) * 3) var(--ui-margin);
+  padding-top: max(calc(var(--ui-margin) * 3), var(--ui-safe-top, 0px));
+  padding-bottom: max(calc(var(--ui-margin) * 3), var(--ui-safe-bottom, 0px));
+  padding-left: max(var(--ui-margin), var(--ui-safe-left, 0px));
+
+  background: rgba(17, 17, 20, 0.9);
+
+  /* **The whole panel is a target**, unlike the header. A list a finger cannot scroll is
+     a list nobody uses on a phone. */
+  pointer-events: all;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.heading {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #707070;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.count {
+  font-variant-numeric: tabular-nums;
+  color: #a9a9a9;
+}
+
+.subheading {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #707070;
+}
+
+/*
+ * The picker.
+ *
+ * **One column, not a grid.** Nine primitives in three rows of three gives each button a
+ * third of a panel's width on a phone, which is under the 44px target the baseline asks
+ * for as soon as the panel is narrow. One column costs height, and height is the axis a
+ * phone has.
+ */
+.picker {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+}
+
+.primitive {
+  min-height: var(--ui-size);
+  padding: 0 var(--ui-margin);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: calc(var(--ui-size) / 4);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.primitive:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.primitive:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.item {
+  display: flex;
+  gap: 2px;
+}
+
+.select {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--ui-size);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--ui-margin);
+  padding: 0 var(--ui-margin);
+  border: 1px solid transparent;
+  border-radius: calc(var(--ui-size) / 4);
+  background: transparent;
+  color: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.selected {
+  background: rgba(111, 207, 151, 0.16);
+  border-color: rgba(111, 207, 151, 0.5);
+}
+
+.kind {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coords {
+  color: #707070;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.7rem;
+  flex-shrink: 0;
+}
+
+.remove {
+  min-height: var(--ui-size);
+  width: var(--ui-size);
+  border: 1px solid transparent;
+  border-radius: calc(var(--ui-size) / 4);
+  background: transparent;
+  color: #707070;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.remove:active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e6e6ea;
+}
+
+/*
+ * **On a narrow screen the list moves out of the way**, because a panel over the left
+ * half of a phone hides the model a person is trying to look at while they tap a
+ * primitive. It becomes a bar along the bottom, above the undo row.
+ */
+@media (max-width: 640px) {
+  .panel {
+    top: auto;
+    right: 0;
+    bottom: 3.5rem;
+    width: auto;
+    max-width: none;
+    max-height: 45dvh;
+    padding-top: var(--ui-margin);
+  }
+
+  /* The list is what gets scrolled away first; the picker is what gets used. */
+  .picker {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}

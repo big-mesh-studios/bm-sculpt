@@ -1,0 +1,9 @@
+{
+  // A library. `include: ["src"]` because there is nothing else in the directory that is
+  // TypeScript, and saying so is cheaper than letting tsc scan upward.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM"]
+  },
+  "include": ["src"]
+}

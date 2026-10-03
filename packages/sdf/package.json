@@ -1,0 +1,27 @@
+{
+  "name": "@big-mesh-studios/sdf",
+  "version": "0.0.0",
+  "description": "Signed distance functions: how far a point is from each primitive shape",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clinuxrulz/bm-sculpt.git",
+    "directory": "packages/sdf"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@big-mesh-studios/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
