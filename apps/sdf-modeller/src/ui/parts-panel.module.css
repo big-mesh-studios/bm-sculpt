@@ -4,17 +4,32 @@
 
 .panel {
   position: absolute;
-  /* **Below the header, the tool row and the mesher row, not level with any of them.**
-   * All four are absolutely positioned into the top-left corner, so with them at `top: 0` they do
-   * not sit side by side — they sit on top of each other, and the first heading of the picker draws
-   * through the title. An absolute box has no relationship with another absolute box, which is the
-   * same reason the two panels overlapped on a phone; here it is solved by giving each a different
-   * corner's worth of offset rather than by a layout that stacks them, which means **this number is
-   * the bottom of that chain**: header at 0, tools at 4.25rem, mesher row at 6.5rem, and this panel
-   * below the last of them. Moving the mesher row means moving this with it. */
-  top: 8.75rem;
+  /* **Below the header, the tool row and the mesher row, from the chain on `.root`.**
+   *
+   * All four are absolutely positioned into the top-left corner, so with them at `top: 0` they
+   * do not sit side by side — they sit on top of each other, and the first heading of the
+   * picker draws through the title. An absolute box has no relationship with another
+   * absolute box, which is the same reason the two panels overlapped on a phone; here it is
+   * solved by giving each a different corner's worth of offset rather than by a layout that
+   * stacks them — which means **this offset is the bottom of that chain**, and it is written
+   * as the token rather than as a number because the chain is derived in one place
+   * (`app.module.css`) precisely so that moving the mesher row moves this with it. */
+  top: var(--parts-top, 8.75rem);
   left: 0;
-  bottom: 0;
+  /*
+   * **Stopped above the footer row rather than at the bottom of the window.**
+   *
+   * The footer is a sibling overlay along the bottom edge and it is not part of this panel,
+   * so `bottom: 0` ran the list underneath it: the last one or two parts were drawn *behind*
+   * the Undo/Redo/Files buttons and could not be read or clicked, and because the panel's
+   * own `padding-bottom` was smaller than the footer is tall, scrolling to the very bottom
+   * did not bring them out from under it either. That is the "the scrollbar stops a few
+   * rows short" symptom — the content was reachable by scrolling and still not visible.
+   *
+   * The offset is the footer's own height, derived from the same tokens, so the two cannot
+   * drift apart.
+   */
+  bottom: calc(var(--ui-size) + var(--ui-margin) * 2);
   width: 16rem;
   max-width: 60vw;
   display: flex;

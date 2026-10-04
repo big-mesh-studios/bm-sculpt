@@ -20,9 +20,21 @@
  */
 import type { JSX } from "@solidjs/web/jsx-runtime";
 
-/** The shared stroke setup: a 24-unit grid, drawn in the button's own colour. */
+/**
+ * The shared stroke setup: a 24-unit grid, drawn in the button's own colour.
+ *
+ * **`width`/`height` of 24 and they are not decoration.** An `<svg>` with a `viewBox` and
+ * no `width`/`height` attributes has an intrinsic *ratio* but no intrinsic *size*, so a
+ * stylesheet asking for `width: 100%` inside an `auto`-width box is asking for nothing in
+ * particular and the browser falls back to the replaced-element default of 300×150 — which
+ * is how a 24-unit glyph ends up drawn 300px wide over the buttons beside it. The
+ * attributes give every glyph a size of its own, so it is the right size wherever it is
+ * dropped, and a stylesheet that does want it bigger still wins over them.
+ */
 const stroke: JSX.SvgSVGAttributes<SVGSVGElement> = {
   viewBox: "0 0 24 24",
+  width: 24,
+  height: 24,
   fill: "none",
   stroke: "currentColor",
   "stroke-width": "2",

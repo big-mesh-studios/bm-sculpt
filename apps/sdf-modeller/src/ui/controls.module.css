@@ -131,16 +131,37 @@
   }
 }
 
-/** Every glyph is a square of its own, so labels line up across a row. */
+/**
+ * Every glyph is a square of its own, so labels line up across a row.
+ *
+ * **The glyph gets a definite size, and that is the whole of this rule.** An inline `<svg>`
+ * with a `viewBox` and no `width`/`height` has an intrinsic *ratio* but no intrinsic *size*,
+ * so `width: 100%` inside a wrapper whose own width is `auto` is indefinite and the browser
+ * falls back to the replaced-element default of 300×150 — squared to 300×300 by the `1:1`
+ * viewBox. The `Files` bar is the first thing in the document to put a glyph in a flex row,
+ * so this drew at 300px and lay over New, Open and Save, which is how those three buttons
+ * came to look like they were missing.
+ *
+ * **`min-width`/`min-height` cannot fix it**, because a minimum is not a size: the box still
+ * has no definite width for the percentage to resolve against, so the SVG still falls back.
+ *
+ * The size is written on the `svg` rather than only on the wrapper — as `voxelscape`'s
+ * `EditHud.module.css` does — so a glyph dropped anywhere without this wrapper is still the
+ * right size rather than 300px of nothing.
+ */
 .icon {
+  --icon-size: calc(var(--ui-size) - var(--ui-margin) * 3);
+
   flex: none;
-  align-content: center;
-  min-width: calc(var(--ui-size) - var(--ui-margin) * 3);
-  min-height: calc(var(--ui-size) - var(--ui-margin) * 3);
+  display: grid;
+  place-items: center;
+  width: var(--icon-size);
+  height: var(--icon-size);
 
   svg {
-    width: 100%;
-    height: 100%;
+    display: block;
+    width: var(--icon-size);
+    height: var(--icon-size);
   }
 }
 
@@ -185,7 +206,6 @@
   position: absolute;
   margin: 0;
 
-  display: flex;
   flex-direction: column;
   gap: var(--ui-margin);
   width: max-content;
@@ -204,6 +224,24 @@
   pointer-events: auto;
   user-select: none;
   -webkit-user-select: none;
+}
+
+/*
+ * **`display` is on `:popover-open` and not on the base rule, and that placement is the
+ * whole of why a closed popover is invisible.**
+ *
+ * The user agent hides a closed popover with `[popover]:not(:popover-open) { display: none }`.
+ * An author declaration of `display` beats a user-agent one *whatever the specificity*, so a
+ * plain `display: flex` on `.popover` silently cancels the hiding: the panel stays in the
+ * layout permanently, sits on top of the controls it was opened from, and takes their
+ * clicks. That is exactly what happened to the export panel — it covered New, Open and Save
+ * in the `Files` bar from the first paint, because nothing was ever going to close it.
+ *
+ * Asking for the display from the open state instead means the UA rule and this one are
+ * never talking about the same declaration, so there is nothing to outrank.
+ */
+.popover:popover-open {
+  display: flex;
 }
 
 /*

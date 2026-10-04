@@ -933,7 +933,16 @@ export function App() {
 
       <header class={styles.header}>
         <h1 class={styles.title}>sdf-modeller</h1>
-        <p class={styles.status}>{status()}</p>
+        {/*
+         * **The readout carries its own full text in a `title`.** It is the longest string in
+         * the shell and it is one line with an ellipsis, because a second line would push the
+         * header's bottom edge down through the tool row — see `.status` in
+         * `app.module.css`, and the chain it is measured against. A `title` is what keeps the
+         * tail of the sentence reachable on a screen too narrow to show it.
+         */}
+        <p class={styles.status} title={status()}>
+          {status()}
+        </p>
       </header>
 
       {/*

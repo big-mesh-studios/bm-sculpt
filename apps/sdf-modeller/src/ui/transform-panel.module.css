@@ -21,6 +21,28 @@
 
   background: rgba(17, 17, 20, 0.9);
   pointer-events: all;
+
+  /*
+   * **Bounded by the window and its own scroll, because it is a form and a form is taller
+   * than a short window.**
+   *
+   * The root is `overflow: hidden` and this box is absolutely positioned, so a panel with
+   * no bound simply runs off the bottom of the screen: on a 720px-tall laptop the rotation
+   * fields, the colour picker and the boolean pair were all unreachable, and the only way
+   * to reach them was to make the window taller. `max-height: 100%` resolves against the
+   * root's height — the root is `position: relative` with a definite height, so the
+   * percentage is definite too — and `overflow-y: auto` turns the overflow into a scroll.
+   *
+   * **`max-height` and not `bottom: 0`**, because a sphere has no rotation and this panel
+   * would then be a full-height column of dark panel with one field in it. The bound only
+   * has to bite when the content is genuinely taller.
+   *
+   * `overscroll-behavior: contain` so a flick that reaches the end scrolls the panel and
+   * not the page behind it — which, on a canvas application, reads as the model jumping.
+   */
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .heading {
@@ -104,6 +126,245 @@
   color: inherit;
   font-variant-numeric: tabular-nums;
   touch-action: manipulation;
+}
+
+/*
+ * ## The colour row: the colour as it is now, and the numbers that made it
+ *
+ * **The swatch and the readout side by side rather than one or the other.** The swatch is
+ * what a person matches against the model and the numbers are what they type back in, and
+ * both are wanted at the moment they are deciding whether to open the picker at all.
+ */
+.colourRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-margin);
+}
+
+/*
+ * **The same checkerboard the palette row draws**, because a colour with alpha over a dark
+ * panel is otherwise indistinguishable from the same colour fully transparent — and the
+ * swatch here is the one place that fact is visible without opening anything.
+ */
+.swatch {
+  flex: none;
+  width: var(--ui-size);
+  height: var(--ui-size);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: calc(var(--ui-size) / 6);
+  background-color: var(--swatch);
+  background-image:
+    linear-gradient(var(--swatch), var(--swatch)),
+    linear-gradient(45deg, #808080 25%, transparent 25%),
+    linear-gradient(-45deg, #808080 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #808080 75%),
+    linear-gradient(-45deg, transparent 75%, #808080 75%);
+  background-size:
+    auto,
+    10px 10px,
+    10px 10px,
+    10px 10px,
+    10px 10px;
+  background-position:
+    0 0,
+    0 0,
+    0 5px,
+    5px -5px,
+    -5px 0px;
+}
+
+.colourValue {
+  min-width: 0;
+  color: #a9a9a9;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * ## The picker trigger
+ *
+ * **`--ui-size` tall and full width, like every other control in this panel**, and it was
+ * not: it carried no class in the stylesheet at all, so it rendered as the user agent's
+ * own button — about 60×21, in system grey, with its own border and its own padding — which
+ * on a dark panel reads as a stray element rather than as a control. A styled trigger is
+ * also what makes it obvious that there is a picker, rather than a piece of text.
+ */
+.pickerButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ui-margin);
+
+  min-height: var(--ui-size);
+  width: 100%;
+  margin-top: var(--ui-margin);
+  padding: 0 var(--ui-margin);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: calc(var(--ui-size) / 4);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.09);
+  }
+
+  &:focus-visible {
+    outline: 2px solid #a9a9a9;
+    outline-offset: -2px;
+  }
+}
+
+/*
+ * ## The picker's own popover
+ *
+ * **`inset: unset` and `position: absolute` first, for the reason `controls.popover` gives:
+ * the user agent centres every popover with `inset: 0; margin: auto`, and `margin: auto`
+ * silently defeats an anchor.** It carried no class here either, so the picker opened
+ * *centred in the viewport* rather than under the button that opened it — a panel about the
+ * selected part's colour appearing in the middle of the model, with nothing connecting it
+ * to the control that summoned it.
+ *
+ * **`display` is declared on the open state only**, for the reason `controls.popover` gives
+ * at greater length: an author `display` beats the user agent's
+ * `[popover]:not(:popover-open) { display: none }` whatever the specificity, so putting it
+ * on the base rule leaves a closed popover permanently on screen.
+ *
+ * **Bounded and scrollable, because the picker is a 200px chart plus two sliders plus four
+ * fields plus a palette row**, and on a short window that is more height than there is.
+ */
+.pickerPopover {
+  inset: unset;
+  position: absolute;
+  margin: 0;
+
+  flex-direction: column;
+  gap: var(--ui-margin);
+  width: max-content;
+  max-width: min(22rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2 * var(--ui-margin));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+
+  padding: var(--ui-margin);
+  background: var(--ui-back);
+  border: 1px solid var(--ui-grey);
+  border-radius: calc(var(--ui-size) / 3);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  color: inherit;
+  font: inherit;
+
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.pickerPopover:popover-open {
+  display: flex;
+
+  /*
+   * **Under the button and lined up with its left edge**, so the choices in it read as
+   * belonging to the word they came out of. This is the baseline, and it is what a browser
+   * without `position-area` gets.
+   */
+  top: calc(anchor(bottom) + var(--ui-margin));
+  left: anchor(left);
+}
+
+/*
+ * ## Keeping the picker on the screen, which `left: anchor(left)` does not do
+ *
+ * **The trigger is `width: 100%` of a panel pinned to the right-hand edge of the window,
+ * and the picker is 352px wide.** So the trigger's left edge sits about 280px from the
+ * right and the picker, hung off that edge, overhangs the side of the screen by 60px —
+ * taking the brightness and alpha sliders, which are the only route to an alpha, with it.
+ * Nothing scrolls it back: a popover is in the top layer, not in the panel's scroll box.
+ *
+ * Measured, anchoring to the left edge on a 1180×720 window: right edge at 1239 in a window
+ * 1180 wide, bottom edge at 774 in a window 720 tall. Both axes off the screen.
+ *
+ * **`position-area` rather than `position-try-fallbacks`, and the difference matters.**
+ * `position-try-fallbacks: flip-inline` was tried first because it is the obvious tool, and
+ * it fixed a 1440-wide window and did nothing at 1180 or 900 — the fallback is chosen
+ * against the *containing block*, which here is the 300px transform panel, not the window, so
+ * the box "overflows" in every candidate position and the machinery gives up.
+ * `position-area: bottom span-right` instead resolves against the anchor and then **clamps
+ * the box into that region**, which is the behaviour that is actually wanted: below the
+ * button, right-aligned to the panel's right edge, never past the edge of the screen, and
+ * no taller than the room left under the button.
+ *
+ * `inset: auto` is what hands placement over to the region. `justify-self: end` puts it at
+ * the region's right — the panel's right edge, which is the window's — and `align-self:
+ * start` keeps it hard against the button.
+ *
+ * **In `@supports`, because `inset: auto` with no fallback leaves the popover at its static
+ * position.** A browser that cannot do `position-area` keeps the `anchor()` version above,
+ * which overhangs on a narrow window but is at least attached to its button.
+ */
+@supports (position-area: bottom span-right) {
+  .pickerPopover:popover-open {
+    inset: auto;
+    position-area: bottom span-right;
+    justify-self: end;
+    align-self: start;
+
+    /*
+     * **The region's own height, less the gap above it.** `overflow-y: auto` is already on
+     * the base rule, so when the window is too short the picker shrinks to the room it has
+     * and scrolls rather than running off the bottom — 287px tall and scrolling on a
+     * 720px window, where it was previously 336px tall and 54px off the screen.
+     */
+    max-height: calc(100% - var(--ui-margin));
+    margin-top: var(--ui-margin);
+  }
+}
+
+/*
+ * ## The boolean pair, and the softness note under it
+ *
+ * **Two radios in a row rather than a dropdown**, which is the component's own argument:
+ * there are two of them and the common one is the first. The note is a sentence rather
+ * than a value because "soft" is not a number anybody can picture — it says which of the
+ * two operations the softness is being applied to, which is the part that is ambiguous.
+ */
+.booleans {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-margin) calc(var(--ui-margin) * 2);
+  align-items: center;
+}
+
+.boolean {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--ui-margin) / 2);
+  min-height: var(--ui-size);
+  color: #a9a9a9;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.boolean input {
+  width: 1.15em;
+  height: 1.15em;
+  margin: 0;
+  accent-color: #6fcf97;
+  cursor: pointer;
+}
+
+.softnessNote {
+  margin: 0;
+  color: #707070;
+  font-size: 0.7rem;
+  font-style: italic;
 }
 
 @media (max-width: 640px) {

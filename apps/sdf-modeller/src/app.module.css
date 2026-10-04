@@ -14,6 +14,32 @@
   overflow: hidden;
   background: #111114;
   color: #e6e6ea;
+
+  /*
+   * ## The top-left chain, written once
+   *
+   * **Four overlays go into the same corner and nothing in CSS relates one absolute box to
+   * another**, so each needs to be told where the one above it ended. That is what these
+   * four numbers are, and the reason they are here rather than as four literals in three
+   * stylesheets is that they are a *chain*: change the control height and all four have to
+   * move together or the rows draw through each other.
+   *
+   * **The step is `--ui-size + --ui-margin`, and it has to be.** The offsets this replaced
+   * were 4.25rem, 6.5rem and 8.75rem — a 2.25rem (36px) step, which is `rm-stacker`'s
+   * `--size`. This application deliberately raised `--ui-size` to 44px for touch, so every
+   * one of those numbers was 13px short of where the row above actually ended: the mesher
+   * row drew through the bottom of the tool row, and the tool row drew through the second
+   * line of the status readout. Nothing about that announces itself in review, which is why
+   * the step is derived from the token rather than measured once and written down.
+   *
+   * `--header-h` is the one number here that is not derived, because the header's height is
+   * its content's. It is stable because `.status` is a single line (see its own rule), so a
+   * long readout ellipsises instead of pushing the chain down.
+   */
+  --header-h: 5rem;
+  --tools-top: calc(var(--header-h) + var(--ui-margin));
+  --render-top: calc(var(--tools-top) + var(--ui-size) + var(--ui-margin));
+  --parts-top: calc(var(--render-top) + var(--ui-size) + var(--ui-margin));
 }
 
 .canvas {
@@ -60,6 +86,20 @@
   font-size: 0.75rem;
   color: #a9a9a9;
   font-variant-numeric: tabular-nums;
+
+  /*
+   * **One line, always, and that is a layout decision as much as a typographic one.**
+   *
+   * This readout is the longest string in the shell — `6 parts · 788 triangles · 11k samples
+   * · 40 ms · watertight · 788 triangles · 5u³` — and at `22rem` it wraps to two lines on any
+   * ordinary screen. A second line pushed the header's bottom edge down through the tool row,
+   * because the tool row is positioned from a fixed offset (see `.root`). Ellipsising keeps
+   * `--header-h` honest for every model; the full string is in the `title`, and the part that
+   * decides whether the model can be printed is in the export popover in any case.
+   */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /*
@@ -73,9 +113,9 @@
  */
 .tools {
   position: absolute;
-  /* **Below the header block**, which is title plus status plus its own padding: about four
-     rems. The parts panel is pushed down to match, so the three do not overlap. */
-  top: 4.25rem;
+  /* **Below the header block, from the chain on `.root`** rather than from a number here.
+     See the note there for why this offset is derived rather than written down. */
+  top: var(--tools-top);
   left: 0;
   display: flex;
   gap: var(--ui-margin);
@@ -121,7 +161,7 @@
  */
 .render {
   position: absolute;
-  top: 6.5rem;
+  top: var(--render-top);
   left: 0;
   display: flex;
   align-items: center;
@@ -403,48 +443,14 @@
   }
 
   /*
- * The tool chooser.
- *
- * **Positioned rather than in the flow, because on a wide screen the canvas is.** The canvas
- * fills its box in normal flow, so anything after it in the source is pushed below the
- * window and clipped by the root's `overflow: hidden` — which is exactly where the tool
- * buttons went the first time. The header and both panels are absolutely positioned for
- * their own reasons; this joins them.
- */
-  .tools {
-    position: absolute;
-    /* **Below the header block**, which is title plus status plus its own padding: about four
-     rems. The parts panel is pushed down to match, so the three do not overlap. */
-    top: 4.25rem;
-    left: 0;
-    display: flex;
-    gap: var(--ui-margin);
-    padding-left: max(1rem, var(--ui-safe-left, 0px));
-  }
-
-  .tool {
-    min-height: var(--ui-size);
-    padding: 0 calc(var(--ui-margin) * 1.25);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: calc(var(--ui-size) / 4);
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    font-size: 0.8rem;
-    cursor: pointer;
-    touch-action: manipulation;
-  }
-
-  .tool[aria-checked="true"] {
-    background: rgba(255, 255, 255, 0.14);
-    border-color: rgba(255, 255, 255, 0.45);
-    font-weight: 600;
-  }
-
-  .tool:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
+   * **The tool chooser's own appearance is not repeated here.** There used to be a second
+   * copy of `.tools`, `.tool`, `.tool[aria-checked]` and `.tool:disabled` inside this query,
+   * carried over from the wide layout with a stale `top: 4.25rem` in it. It was dead — the
+   * `.tools { position: static }` rule further down overrides the positioning, and the
+   * button rules were character-for-character the ones above — but it is where the wrong
+   * offset survived longest, and a control that differs between layouts should say so here
+   * rather than by accident.
+   */
 
   .footer {
     order: 4;

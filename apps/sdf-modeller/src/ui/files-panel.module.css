@@ -118,6 +118,35 @@
   }
 }
 
+/*
+ * **…and then it hangs off the side of a phone, because Export is the fourth of five buttons
+ * in a row that ends at the right-hand edge.** Anchored to its trigger's left edge, a 16rem
+ * panel on a 390px phone put its right edge 7px past the window, and 8px on a 320px one —
+ * which is the popover's own right-hand padding and border, so the panel looks closed rather
+ * than cut off, and nothing indicates there is more of it.
+ *
+ * `position-area` for the reason `transform-panel.module.css` sets out at length: it resolves
+ * against the anchor and clamps into the region, where `position-try-fallbacks` chooses
+ * between candidates against the containing block and so gives up when the dialogue is
+ * narrower than the panel. In `@supports`, so a browser without it keeps the anchored version
+ * above rather than dropping the popover at its static position.
+ */
+@supports (position-area: bottom span-right) {
+  .exportPanel:popover-open {
+    inset: auto;
+    position-area: bottom span-right;
+    justify-self: end;
+    align-self: start;
+    margin-top: var(--ui-margin);
+
+    /*
+     * **The room left under the trigger, so a short dialogue scrolls the panel rather than
+     * letting it run past the bottom.** `overflow-y: auto` is on `controls.popover`.
+     */
+    max-height: calc(100% - var(--ui-margin));
+  }
+}
+
 .report {
   margin: 0;
   color: var(--ui-grey);
@@ -309,17 +338,33 @@
 }
 
 /*
- * ## Narrow panels: the name goes, the buttons keep their glyphs
+ * ## Narrow panels: the labels go, the glyphs stay, and the name gets a row of its own
  *
- * **At 560px the four actions and the name cannot both have their labels.** The labels go rather
- * than the actions, because an action with a glyph and a title still says what it does and a name
- * with no room does not say what the document is. The glyph's own `title` is the accessible name,
- * so this is a visual decision rather than an accessibility one.
+ * **At 560px the four actions and the name cannot both have their labels.** The labels go
+ * rather than the actions, because an action with a glyph and a title still says what it
+ * does. The glyph's own `title` is the accessible name, so this is a visual decision rather
+ * than an accessibility one.
+ *
+ * **The name takes a whole row at the same width, and that is the part worth explaining.**
+ * There used to be a second breakpoint at 380px that did this, on the theory that a panel
+ * wider than 380px could still fit the name beside the icons. It cannot — and the width that
+ * proved it is 390, which is the commonest phone there is. Five icon buttons come to about
+ * 290px with their padding, gaps and the bar's own, leaving 70px; `.title` is a flex row of
+ * the name and `.where`, and `.where` is `white-space: nowrap` while the name's label is
+ * `min-width: 0`, so the *name* is what gets squeezed — measured at **0px wide on a 390px
+ * phone**, i.e. the document you are editing was not named anywhere on the screen.
+ *
+ * So the name gets its own row from the same 560px, and the 380px query goes. A panel between
+ * 380 and 560 pays one extra 24px row for a name that can actually be read, which is the
+ * right trade: an action row that is 24px shorter is a matter of taste, and a document whose
+ * name is invisible is a matter of not knowing what you have open.
  */
 @container (max-width: 560px) {
   .bar {
-    grid-template-columns: repeat(4, auto) auto minmax(0, 1fr);
-    grid-template-areas: "new open save export close title";
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-areas:
+      "new   open  save  export close"
+      "title title title title title";
   }
 
   .bar > button > .label {
@@ -328,21 +373,5 @@
 
   .bar > button {
     justify-content: center;
-  }
-}
-
-/*
- * ## And narrower still: the actions become a row of their own
- *
- * **A row that cannot fit becomes two.** This is the same bargain the sibling's action bar
- * strikes at 400px, and it is a grid rather than a wrap because a wrap would leave the name
- * stranded on a row of its own.
- */
-@container (max-width: 380px) {
-  .bar {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    grid-template-areas:
-      "new   open  save  export close"
-      "title title title title title";
   }
 }
