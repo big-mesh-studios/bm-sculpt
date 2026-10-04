@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { BLOCK_WORLD } from "../constants";
 import { ChunkWindow, type ChunkWindowParams } from "./chunk-window";
 import {
   cellCentre,
@@ -7,6 +8,7 @@ import {
   DEFAULT_LOD_BANDS,
   LOD_OFF,
   lodExtent,
+  OVERLAP_X_NEG,
 } from "./level-data";
 import type { CellCoord } from "./level-data";
 
@@ -440,49 +442,52 @@ describe("level of detail", () => {
   });
 });
 
-describe("skirt masks", () => {
-  it("skirts a cell whose neighbour steps, and not the level's own centre", () => {
-    // Measured from the focus *cell*, and the player is anywhere inside that cell — so
-    // the cell worth testing is the outermost full-detail one, one chunk out, whose
-    // outward neighbour has stepped to a coarser level. Inside it, everything is watertight
-    // and needs no skirt.
+describe("overlap masks", () => {
+  it("reaches out of a cell whose neighbour is finer, and not the other way round", () => {
+    // Measured from the focus *cell*, and the player is anywhere inside that cell — so the
+    // cell worth testing is the first one *outside* the full-detail band, which is a step
+    // coarser than the neighbour behind it and reaches back into it. Inside the band
+    // everything is watertight and reaches into nothing.
     const { full } = DEFAULT_LOD_BANDS;
-    const { window } = recordingWindow({ radius: full + 1, yRadius: 1 });
+    const { window } = recordingWindow({ radius: full + 2, yRadius: 1 });
     const centre = window.claimedSlotOf({ x: 0, y: 0, z: 0 });
-    const edge = window.claimedSlotOf({ x: full, y: 0, z: 0 });
+    const edge = window.claimedSlotOf({ x: full + 1, y: 0, z: 0 });
     expect(centre).toBeDefined();
     expect(edge).toBeDefined();
     expect(window.lodOf(centre as number)).toBe(0);
-    expect(window.lodOf(edge as number)).toBe(0);
-    expect(window.skirtOf(centre as number)).toBe(0);
-    expect(window.skirtOf(edge as number)).not.toBe(0);
+    expect(window.lodOf(edge as number)).toBe(1);
+    expect(window.overlapOf(centre as number)).toBe(0);
+    expect(window.overlapOf(edge as number)).toBe(OVERLAP_X_NEG);
   });
 
   it("rebuilds a cell whose neighbour's level moved, even when its own did not", () => {
-    // The gap a level change opens is on the *neighbour's* side of the boundary, so a cell
-    // whose own level is unchanged can still need a different skirt. Leaving it alone here
-    // would put the crack back exactly along the band the scroll just moved.
+    // The cells a chunk reaches into are on the *neighbour's* side of the boundary, so a
+    // cell whose own level is unchanged can still need a different overlap. Leaving it
+    // alone here would put the slit back exactly along the band the scroll just moved.
     //
-    // The cell is the outermost full-detail one, and the scroll walks the focus one chunk
-    // towards it — which brings its outward neighbour inside the band. Its own level does
-    // not move, so only its skirt does, and a rebuild is the only thing that can fix it.
-    const { full } = DEFAULT_LOD_BANDS;
+    // The bands are wider than the defaults so that the level a cell is at is not decided
+    // by its distance alone: with one chunk of level between two bands, every cell whose
+    // neighbour changes band has changed band itself, and the case could not be built at
+    // all. Here the middle level is four chunks thick, so (3,0,0) stays at level 1 across
+    // the scroll while its neighbour at (2,0,0) walks into full detail — and reaches back.
+    const bands = { full: 1, coarse: 4 };
     const { window, events, reset } = recordingWindow({
-      radius: full + 1,
+      radius: 4,
       yRadius: 1,
+      bands,
     });
     fillEverything(window);
-    const slot = window.claimedSlotOf({ x: full, y: 0, z: 0 }) as number;
-    expect(window.lodOf(slot)).toBe(0);
-    expect(window.skirtOf(slot)).not.toBe(0);
+    const slot = window.claimedSlotOf({ x: 3, y: 0, z: 0 }) as number;
+    expect(window.lodOf(slot)).toBe(1);
+    expect(window.overlapOf(slot)).toBe(0);
 
     reset();
-    window.scrollTo({ x: 320, y: 0, z: 0 });
+    window.scrollTo({ x: BLOCK_WORLD, y: 0, z: 0 });
 
     // Same cell, same slot — a refill and not a release or a reposition.
-    expect(window.slots[slot].cell).toEqual({ x: full, y: 0, z: 0 });
-    expect(window.lodOf(slot)).toBe(0);
-    expect(window.skirtOf(slot)).toBe(0);
+    expect(window.slots[slot].cell).toEqual({ x: 3, y: 0, z: 0 });
+    expect(window.lodOf(slot)).toBe(1);
+    expect(window.overlapOf(slot)).toBe(OVERLAP_X_NEG);
     expect(events.refilled).toContain(slot);
     expect(events.released).not.toContain(slot);
     expect(events.repositioned.map((entry) => entry.slot)).not.toContain(slot);

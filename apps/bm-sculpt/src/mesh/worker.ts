@@ -13,7 +13,7 @@
  * half-updated by a message arriving while a chunk is being built.
  */
 
-import type { CellCoord, Lod, SkirtMask } from "../world";
+import type { CellCoord, Lod, OverlapMask } from "../world";
 import { sameCell } from "../world";
 
 import type { ChunkMesher } from "./chunk-mesher";
@@ -159,7 +159,7 @@ const meshChunk = (
     cell: CellCoord;
     lod: Lod;
     generation: number;
-    skirt?: SkirtMask;
+    overlap?: OverlapMask;
   },
   build: MesherFactory,
 ): Handled => {
@@ -182,7 +182,10 @@ const meshChunk = (
     //
     // Optional on the interface, and absent means "mesh it" — see `ChunkMesher`. Only a
     // mesher that answers `false` is trusted, and only it is allowed to have an opinion.
-    if (mesher.couldHaveMesh?.(request.cell, request.lod) === false) {
+    if (
+      mesher.couldHaveMesh?.(request.cell, request.lod, request.overlap) ===
+      false
+    ) {
       return {
         state: { ...pending, pending: undefined, meshed: pending.meshed + 1 },
         reply: {
@@ -198,7 +201,7 @@ const meshChunk = (
     const mesh = mesher.mesh({
       cell: request.cell,
       lod: request.lod,
-      ...(request.skirt !== undefined ? { skirt: request.skirt } : {}),
+      ...(request.overlap !== undefined ? { overlap: request.overlap } : {}),
     });
     const empty = mesh.vertexCount === 0;
     return {
@@ -257,8 +260,13 @@ export interface Wanted {
   readonly cell: CellCoord;
   readonly lod: Lod;
   readonly generation: number;
-  /** Faces whose neighbour is at a different level, for the skirt. Absent means none. */
-  readonly skirt?: SkirtMask;
+  /**
+   * Faces whose neighbour is meshed more finely, so the mesh reaches into it.
+   *
+   * Absent means it reaches into nobody, which is the behaviour of a request from before
+   * this field existed.
+   */
+  readonly overlap?: OverlapMask;
 }
 
 /**

@@ -32,12 +32,12 @@ import {
   DEFAULT_LOD_BANDS,
   lodAt,
   lodIsOff,
-  skirtMaskAt,
+  overlapMaskAt,
   sphereCells,
   type CellCoord,
   type Lod,
   type LodBands,
-  type SkirtMask,
+  type OverlapMask,
 } from "./level-data";
 
 /** One resident chunk. What a slot holds. */
@@ -58,13 +58,14 @@ export interface ChunkSlot {
    */
   targetLod: Lod;
   /**
-   * Faces of the cell whose neighbour is at a different level of detail.
+   * Faces of the cell whose neighbour is meshed at a finer level of detail.
    *
    * Held beside `targetLod` because it is chosen the same way and changes with it: a face
-   * where the level steps is the only place a chunk needs a skirt, and a slot whose target
-   * skirt moved is a slot that has to be rebuilt exactly as one whose level moved.
+   * where a finer neighbour begins is the only place a chunk reaches outside its own
+   * cells, and a slot whose target overlap moved is a slot that has to be rebuilt exactly
+   * as one whose level moved.
    */
-  targetSkirt: SkirtMask;
+  targetOverlap: OverlapMask;
   /**
    * Whether anything has been built for this slot's current cell.
    *
@@ -309,8 +310,8 @@ export class ChunkWindow {
       }
 
       const wanted = lodAt(entry.cell, centre, this.bands);
-      const wantedSkirt = skirtMaskAt(entry.cell, centre, this.bands);
-      if (wanted !== entry.targetLod || wantedSkirt !== entry.targetSkirt) {
+      const wantedOverlap = overlapMaskAt(entry.cell, centre, this.bands);
+      if (wanted !== entry.targetLod || wantedOverlap !== entry.targetOverlap) {
         // Refill, not release. The cell has not changed — only the resolution it is to be
         // built at — so the geometry on the GPU is still this cell's own surface, sitting
         // at the coordinates it has always sat at, and is merely the wrong one to look at
@@ -330,7 +331,7 @@ export class ChunkWindow {
         entry.filled = false;
         refilling.push(slot);
         entry.targetLod = wanted;
-        entry.targetSkirt = wantedSkirt;
+        entry.targetOverlap = wantedOverlap;
       }
     }
 
@@ -352,7 +353,7 @@ export class ChunkWindow {
       entry.cell = cell;
       entry.centre = cellCentre(cell);
       entry.targetLod = lodAt(cell, centre, this.bands);
-      entry.targetSkirt = skirtMaskAt(cell, centre, this.bands);
+      entry.targetOverlap = overlapMaskAt(cell, centre, this.bands);
       // The slot still holds the cell it left behind and now stands for this one.
       // Until the rebuild lands it answers for neither.
       entry.filled = false;
@@ -412,7 +413,7 @@ export class ChunkWindow {
         cell: { x: 0, y: 0, z: 0 },
         centre: { x: 0, y: 0, z: 0 },
         targetLod: lodAt({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, bands),
-        targetSkirt: skirtMaskAt(
+        targetOverlap: overlapMaskAt(
           { x: 0, y: 0, z: 0 },
           { x: 0, y: 0, z: 0 },
           bands,
@@ -452,7 +453,7 @@ export class ChunkWindow {
       entry.cell = cell;
       entry.centre = cellCentre(cell);
       entry.targetLod = lodAt(cell, centre, this.bands);
-      entry.targetSkirt = skirtMaskAt(cell, centre, this.bands);
+      entry.targetOverlap = overlapMaskAt(cell, centre, this.bands);
       entry.filled = false;
       taken.push(slot);
     }
@@ -496,10 +497,10 @@ export class ChunkWindow {
     return entry.targetLod;
   }
 
-  /** The faces a slot's mesh must skirt, because a neighbour is at another level. */
-  skirtOf(slot: number): SkirtMask {
+  /** The faces a slot's mesh reaches into, because a neighbour is at a finer level. */
+  overlapOf(slot: number): OverlapMask {
     const entry = this.slots[slot];
-    return entry.targetSkirt;
+    return entry.targetOverlap;
   }
 
   /** Whether the window's level of detail is switched off. */
@@ -537,7 +538,7 @@ export class ChunkWindow {
           { x: 0, y: 0, z: 0 },
           this.bands,
         ),
-        targetSkirt: skirtMaskAt(
+        targetOverlap: overlapMaskAt(
           { x: 0, y: 0, z: 0 },
           { x: 0, y: 0, z: 0 },
           this.bands,

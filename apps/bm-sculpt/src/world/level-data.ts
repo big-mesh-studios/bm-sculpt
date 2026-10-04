@@ -126,54 +126,75 @@ export const lodAt = (
 };
 
 /**
- * Which of a chunk's six faces border a chunk at a different level of detail.
+ * Which of a chunk's six faces border a chunk at a *finer* level of detail.
  *
- * A `SkirtMask` is a bit set, one bit per face, in the order `-x, +x, -y, +y, -z, +z`.
- * A set bit says the neighbouring cell is meshed at a different level, so the two
- * surfaces meet across a resolution change and can leave a hairline crack — the case a
- * skirt exists to cover.
+ * A `OverlapMask` is a bit set, one bit per face, in the order `-x, +x, -y, +y, -z, +z`.
+ * A set bit says the neighbouring cell is meshed more finely than this one, so this chunk
+ * meshes **one cell into it** and the two surfaces overlap across the plane between them
+ * rather than stopping on it (ADR 0035).
+ *
+ * **Only the coarser side is marked, and that is the whole policy.** Two chunks at
+ * different levels sample the same field at different strides, so their surfaces meet
+ * across the shared plane but not exactly: they disagree by up to about half a coarse
+ * sample, which leaves a slit. One of the two has to reach across that plane, and it is
+ * always the coarse one, for two reasons that both point the same way. It is the side whose
+ * geometry is an approximation, so the strip it adds is geometry that would have been
+ * approximate anyway and is drawn underneath the real thing; and it is the side paying for
+ * it in samples, at its own stride rather than the fine one.
  *
  * The mask is derived from the same `lodAt` the window schedules with, one cell out, so
  * it cannot disagree with the level a neighbour is actually built at. A face outside the
  * window still answers, because `lodAt` is defined for every cell: the neighbour simply
  * may not exist yet, which changes nothing about where the discontinuity is.
  */
-export type SkirtMask = number;
+export type OverlapMask = number;
 
-export const SKIRT_X_NEG = 1 << 0;
-export const SKIRT_X_POS = 1 << 1;
-export const SKIRT_Y_NEG = 1 << 2;
-export const SKIRT_Y_POS = 1 << 3;
-export const SKIRT_Z_NEG = 1 << 4;
-export const SKIRT_Z_POS = 1 << 5;
+export const OVERLAP_X_NEG = 1 << 0;
+export const OVERLAP_X_POS = 1 << 1;
+export const OVERLAP_Y_NEG = 1 << 2;
+export const OVERLAP_Y_POS = 1 << 3;
+export const OVERLAP_Z_NEG = 1 << 4;
+export const OVERLAP_Z_POS = 1 << 5;
 
-/** The six face neighbours, in `SkirtMask` bit order. */
-export const SKIRT_DIRECTIONS: readonly (readonly [number, number, number])[] =
-  [
-    [-1, 0, 0],
-    [1, 0, 0],
-    [0, -1, 0],
-    [0, 1, 0],
-    [0, 0, -1],
-    [0, 0, 1],
-  ];
+/** The six face neighbours, in `OverlapMask` bit order. */
+export const OVERLAP_DIRECTIONS: readonly (readonly [
+  number,
+  number,
+  number,
+])[] = [
+  [-1, 0, 0],
+  [1, 0, 0],
+  [0, -1, 0],
+  [0, 1, 0],
+  [0, 0, -1],
+  [0, 0, 1],
+];
 
-/** The faces of a cell whose neighbour is at a different level of detail. */
-export const skirtMaskAt = (
+/**
+ * The faces of a cell whose neighbour is meshed at a finer level of detail.
+ *
+ * **Direction, not equality.** Asking whether a neighbour is at a *different* level was the
+ * older question, and it was what a flap of covering geometry needed: drawn by the finer
+ * side, which had to know there was something to cover. Nothing needs that now. The coarse
+ * side reaches over and the fine side has nothing to do, so a cell whose neighbours are all
+ * coarser gets a mask of zero and pays nothing for them — where an inequality test would
+ * have had it reach into all six.
+ */
+export const overlapMaskAt = (
   cell: CellCoord,
   focus: CellCoord,
   bands: LodBands = DEFAULT_LOD_BANDS,
-): SkirtMask => {
+): OverlapMask => {
   const self = lodAt(cell, focus, bands);
   let mask = 0;
-  for (let face = 0; face < SKIRT_DIRECTIONS.length; face++) {
-    const [dx, dy, dz] = SKIRT_DIRECTIONS[face];
+  for (let face = 0; face < OVERLAP_DIRECTIONS.length; face++) {
+    const [dx, dy, dz] = OVERLAP_DIRECTIONS[face];
     const neighbour = lodAt(
       { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz },
       focus,
       bands,
     );
-    if (neighbour !== self) mask |= 1 << face;
+    if (neighbour < self) mask |= 1 << face;
   }
   return mask;
 };

@@ -9,8 +9,10 @@ import {
   chunkCellOf,
   lodSampleSize,
   lodSamples,
-  SKIRT_X_POS,
-  SKIRT_Z_POS,
+  OVERLAP_X_NEG,
+  OVERLAP_X_POS,
+  OVERLAP_Z_NEG,
+  OVERLAP_Z_POS,
 } from "../world";
 
 import { type ChunkMesh } from "@big-mesh-studios/meshing";
@@ -418,11 +420,11 @@ describe("meshing a chunk through the field", () => {
   });
 });
 
-describe("skirts at a level-of-detail face", () => {
+describe("overlap at a level-of-detail face", () => {
   /**
    * A horizontal plane at `y = 0`, so the surface is a sheet that runs out of the chunk's
-   * four vertical faces. The mesher leaves that sheet open at each face, which is exactly
-   * the edge set a skirt extrudes — a closed surface inside the chunk would have none.
+   * four vertical faces — and, unlike a closed shape inside the chunk, it is still there in
+   * the cell beyond the boundary. That is the cell the overlap exists to reach.
    */
   const plane: MeshField = {
     distance: (_x, y) => y,
@@ -432,31 +434,130 @@ describe("skirts at a level-of-detail face", () => {
     couldHoldSurface: () => true,
   };
   const mesher = new SurfaceNetsChunkMesher(plane);
-  const request = (skirt?: number): MeshRequest =>
-    skirt === undefined
+  const request = (overlap?: number): MeshRequest =>
+    overlap === undefined
       ? { cell: { x: 0, y: 0, z: 0 }, lod: LOD0 }
-      : { cell: { x: 0, y: 0, z: 0 }, lod: LOD0, skirt };
+      : { cell: { x: 0, y: 0, z: 0 }, lod: LOD0, overlap };
 
-  it("adds one wall (two triangles) per open boundary edge on a skirted face", () => {
+  /**
+   * How far the mesh reaches on one axis, which is what an overlap moves.
+   *
+   * A vertex is the average of crossings inside its own cell, so it sits in the middle of
+   * that cell rather than at its edge: the furthest vertex of a chunk that owns no cell
+   * past its boundary is half a sample inside it. The assertions below are written as
+   * differences for that reason — "one sample further" is the property, and a vertex's
+   * exact position within its cell is the mesher's business.
+   */
+  const reach = (mesh: ChunkMesh, component: 0 | 1 | 2): number => {
+    let furthest = -Infinity;
+    for (let i = 0; i < mesh.vertexCount; i++)
+      furthest = Math.max(furthest, mesh.positions[i * 3 + component]);
+    return furthest;
+  };
+  const nearest = (mesh: ChunkMesh, component: 0 | 1 | 2): number => {
+    let closest = Infinity;
+    for (let i = 0; i < mesh.vertexCount; i++)
+      closest = Math.min(closest, mesh.positions[i * 3 + component]);
+    return closest;
+  };
+
+  it("meshes the cell beyond the boundary on the faces that step", () => {
+    // The mechanism, with a face marked the mesh crosses the chunk's own edge by one sample
+    // instead of stopping on it. The distinction is the shape: nothing is added below the
+    // surface, so this is a surface that continues rather than a flap hanging off it — which
+    // is what a tunnel through a level step used to run into.
     const plain = mesher.mesh(request());
-    const skirted = mesher.mesh(request(SKIRT_X_POS | SKIRT_Z_POS));
-    expect(plain.triangleCount).toBeGreaterThan(0);
-    // Two new vertices and two new triangles per skirted open edge, so the two counts rise
-    // together — a skirt that added vertices without faces, or faces without vertices,
-    // would fail this.
-    expect(skirted.triangleCount).toBeGreaterThan(plain.triangleCount);
-    expect(skirted.vertexCount - plain.vertexCount).toBe(
-      skirted.triangleCount - plain.triangleCount,
+    const region = chunkRegion({ x: 0, y: 0, z: 0 }, LOD0);
+    expect(plain.vertexCount).toBeGreaterThan(0);
+    expect(reach(plain, 0)).toBeCloseTo(
+      region.bounds.max.x - VOXEL_SIZE / 2,
+      6,
+    );
+
+    const overlapped = mesher.mesh(request(OVERLAP_X_POS | OVERLAP_Z_POS));
+    expect(reach(overlapped, 0)).toBeCloseTo(
+      region.bounds.max.x + VOXEL_SIZE / 2,
+      6,
+    );
+    expect(reach(overlapped, 2)).toBeCloseTo(
+      region.bounds.max.z + VOXEL_SIZE / 2,
+      6,
+    );
+    // And the faces that did not step are untouched, which is what the per-axis count in
+    // `overlapCells` buys: a whole extra shell would move all three axes.
+    expect(reach(mesher.mesh(request(OVERLAP_X_POS)), 2)).toBeCloseTo(
+      reach(plain, 2),
+      6,
     );
   });
 
   it("adds nothing when no face has a level step", () => {
-    // The common case: a chunk whose neighbours are all at its level pays nothing, which is
-    // what keeps a skirt off every same-level seam in the world.
+    // The common case: a chunk whose neighbours are all at its level, or all coarser, pays
+    // nothing. This is most chunks in the world, and it is what keeps the overlap off every
+    // same-level seam.
     const plain = mesher.mesh(request());
     const zero = mesher.mesh(request(0));
     expect(zero.vertexCount).toBe(plain.vertexCount);
     expect(zero.triangleCount).toBe(plain.triangleCount);
+    expect(trianglesOf(zero)).toEqual(trianglesOf(plain));
+  });
+
+  it("reaches one cell lower for a face whose neighbour below is finer", () => {
+    // The other end, and the reason the mesher's run is described by its origin rather
+    // than by a range: a cell below index one does not exist, so an overlap at the low end
+    // is a region one cell lower and the same run length.
+    const plain = mesher.mesh(request());
+    const below = mesher.mesh(request(OVERLAP_X_NEG | OVERLAP_Z_NEG));
+    const region = chunkRegion({ x: 0, y: 0, z: 0 }, LOD0);
+    // One cell lower and the same run length, so the far end of the chunk does not move.
+    // The near end is one sample further out than it was — and one further than the plain
+    // mesh's, whose low padding cell already sits half a sample below the boundary.
+    expect(reach(below, 0)).toBeCloseTo(reach(plain, 0), 6);
+    expect(nearest(below, 0)).toBeCloseTo(nearest(plain, 0) - VOXEL_SIZE, 6);
+    expect(nearest(plain, 0)).toBeCloseTo(
+      region.bounds.min.x - VOXEL_SIZE / 2,
+      6,
+    );
+  });
+
+  it("samples the cells the overlap added, or the cache answers for elsewhere", () => {
+    // The candidate cache is told a region and answers every sample inside it from the
+    // candidates gathered for it. A region that does not cover the extra cell's samples
+    // gets those samples answered from somewhere else, which is a surface with holes in it
+    // and nothing reporting an error.
+    const regions: Bounds[] = [];
+    const counted = new SurfaceNetsChunkMesher({
+      ...plane,
+      beginRegion: (bounds) => {
+        regions.push(bounds);
+        return () => {};
+      },
+    });
+    counted.mesh(request(OVERLAP_X_POS));
+    expect(regions).toHaveLength(1);
+    expect(regions[0]?.max.x).toBeCloseTo(
+      chunkRegion({ x: 0, y: 0, z: 0 }, LOD0).sampleBounds.max.x + VOXEL_SIZE,
+      6,
+    );
+  });
+
+  it("asks the skip gate about the cells the overlap added", () => {
+    // A gate that tested only the chunk's own extent could answer "nothing here" for a
+    // chunk whose only surface is in the cell it reaches into — a hole with nothing to fill
+    // it, since nothing would ever ask again.
+    const asked: Bounds[] = [];
+    const counted = new SurfaceNetsChunkMesher({
+      ...plane,
+      couldHoldSurface: (bounds) => {
+        asked.push(bounds);
+        return true;
+      },
+    });
+    counted.couldHaveMesh({ x: 0, y: 0, z: 0 }, LOD0, OVERLAP_X_POS);
+    expect(asked[0]?.max.x).toBeCloseTo(
+      chunkRegion({ x: 0, y: 0, z: 0 }, LOD0).sampleBounds.max.x + VOXEL_SIZE,
+      6,
+    );
   });
 });
 

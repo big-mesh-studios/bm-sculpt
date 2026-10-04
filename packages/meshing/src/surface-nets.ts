@@ -46,6 +46,18 @@
  * Those four-cell indices are what fix the loop ranges. `p` must be `1 .. n` on the
  * edge's own axis to be owned, and `1 .. n` on the other two so that `p - 1` still
  * names a cell. One range, both reasons.
+ *
+ * ## A chunk may own cells outside its own extent
+ *
+ * `extra` widens the run of owned cells per axis, to `1 .. n + extra`, and everything
+ * above follows from that: the grid is two larger than the run rather than than `n`, and
+ * the grid is rectangular rather than cubic, so the strides come off the cell counts
+ * instead of off one `cells`.
+ *
+ * The run still *begins* at `origin`, so a caller whose extra cell lies below its chunk
+ * says so by lowering `origin` rather than by asking for a negative index. That is the
+ * whole reason the parameter is a count per axis and not a range: a chunk reaching into
+ * its neighbour on one face should own one extra cell, not a shell of them.
  */
 
 /** What the mesher needs from whatever it is meshing. */
@@ -132,13 +144,18 @@ const CELL_EDGES = [
  * at index 0 and its last own cell at index `n`, which needs samples `n` and `n + 1`.
  * Both sides are padded so the sampling loop is a plain cube rather than a special case
  * on the high edge.
+ *
+ * `extra` is the most this will ever be asked for beyond `n`, which is what a buffer has
+ * to be sized for: a chunk that owns cells past its own extent needs a bigger grid, and a
+ * buffer one cell short of the grid does not fail loudly — it drops the writes past its
+ * end and reads air in their place.
  */
-export const SURFACE_NETS_GRID = (samplesPerAxis: number): number =>
-  samplesPerAxis + 2;
+export const SURFACE_NETS_GRID = (samplesPerAxis: number, extra = 0): number =>
+  samplesPerAxis + extra + 2;
 
 /** Cells along an axis: one more than the grid. */
-export const SURFACE_NETS_CELLS = (samplesPerAxis: number): number =>
-  samplesPerAxis + 1;
+export const SURFACE_NETS_CELLS = (samplesPerAxis: number, extra = 0): number =>
+  samplesPerAxis + extra + 1;
 
 /** Reusable per-thread buffers, sized for one chunk shape and then reused. */
 export class SurfaceNetsScratch {
@@ -148,18 +165,36 @@ export class SurfaceNetsScratch {
   /** The eight corner samples of the cell being considered. */
   readonly corners = new Float32Array(8);
 
-  constructor(samplesPerAxis: number) {
+  constructor(samplesPerAxis: number, maxExtra = 0) {
     const n = samplesPerAxis;
-    this.samples = new Float32Array(SURFACE_NETS_GRID(n) ** 3);
-    this.cellVertex = new Int32Array(SURFACE_NETS_CELLS(n) ** 3);
+    const grid = SURFACE_NETS_GRID(n, maxExtra);
+    const cells = SURFACE_NETS_CELLS(n, maxExtra);
+    this.samples = new Float32Array(grid ** 3);
+    this.cellVertex = new Int32Array(cells ** 3);
   }
 }
 
 export interface SurfaceNetsParams {
   /** The world position of the chunk's own first sample's voxel. */
   origin: readonly [number, number, number];
-  /** Samples a chunk owns per axis. The sample grid is two larger. */
+  /** Samples this chunk owns per axis. The sample grid is two larger. */
   samples: number;
+  /**
+   * Cells this chunk owns beyond `samples`, on each axis.
+   *
+   * **A chunk reaching into its neighbour's ground.** The run of owned cells becomes
+   * `1 .. samples + extra`, which is what closes a level-of-detail seam: the coarser of
+   * two neighbouring chunks meshes one cell into the finer one, so their two surfaces
+   * overlap across the plane between them instead of stopping on it and leaving a slit
+   * (ADR 0035).
+   *
+   * The run still begins at `origin`, so an extra cell on an axis's *low* side is a lower
+   * `origin` rather than a negative cell index, and the axes are independent — one finer
+   * neighbour on one face costs one cell rather than a shell of them on all six.
+   *
+   * Optional, and absent means none, which is the case every other caller is.
+   */
+  extra?: readonly [number, number, number];
   /** World units between samples. Ignored where `lanes` is given. */
   sampleSize: number;
   /**
@@ -223,27 +258,54 @@ export const uniformLane = (
  */
 export const surfaceNets = (params: SurfaceNetsParams): void => {
   const { origin, samples, sampleSize, sampler, out, scratch } = params;
-  const grid = SURFACE_NETS_GRID(samples);
-  const cells = SURFACE_NETS_CELLS(samples);
-  const STRIDES = strideTable(cells);
+
+  // The run of owned cells, and the two grids around it. Cubic when no axis takes an
+  // extra cell, which is every call but one kind, so the general form costs nothing to
+  // read: `grid` is `owned + 2` and `cells` is one fewer than that.
+  const extra = params.extra ?? NO_EXTRA;
+  const ownedX = samples + extra[0];
+  const ownedY = samples + extra[1];
+  const ownedZ = samples + extra[2];
+  const gridX = SURFACE_NETS_GRID(ownedX);
+  const gridY = SURFACE_NETS_GRID(ownedY);
+  const gridZ = SURFACE_NETS_GRID(ownedZ);
+  const cellsX = SURFACE_NETS_CELLS(ownedX);
+  const cellsY = SURFACE_NETS_CELLS(ownedY);
+  const cellsZ = SURFACE_NETS_CELLS(ownedZ);
+  const STRIDES = cellStrides(cellsX, cellsY);
+
+  // A scratch one cell short of the grid does not fail — it drops the writes past its end
+  // and reads air in their place, which is a field that is solid everywhere reading as
+  // half solid and the mesher inventing a surface in the middle of rock. The two grids
+  // are separately sized and separately checked because either one alone can be short.
+  if (scratch.samples.length < gridX * gridY * gridZ) {
+    throw new Error(
+      `surface nets: scratch holds ${scratch.samples.length} samples, this grid needs ${gridX * gridY * gridZ}`,
+    );
+  }
+  if (scratch.cellVertex.length < cellsX * cellsY * cellsZ) {
+    throw new Error(
+      `surface nets: scratch holds ${scratch.cellVertex.length} cells, this grid needs ${cellsX * cellsY * cellsZ}`,
+    );
+  }
 
   // Where each sample sits on each axis, resolved once. An even grid is built rather than
   // special-cased in the loops below, so there is a single version of the hot code and it
   // is the version that supports uneven spacing.
-  const px = params.lanes?.x ?? uniformLane(origin[0], sampleSize, grid);
-  const py = params.lanes?.y ?? uniformLane(origin[1], sampleSize, grid);
-  const pz = params.lanes?.z ?? uniformLane(origin[2], sampleSize, grid);
+  const px = params.lanes?.x ?? uniformLane(origin[0], sampleSize, gridX);
+  const py = params.lanes?.y ?? uniformLane(origin[1], sampleSize, gridY);
+  const pz = params.lanes?.z ?? uniformLane(origin[2], sampleSize, gridZ);
 
   out.clear();
 
   const sample = (x: number, y: number, z: number): number =>
-    scratch.samples[(z * grid + y) * grid + x];
-  for (let z = 0; z < grid; z++) {
+    scratch.samples[(z * gridY + y) * gridX + x];
+  for (let z = 0; z < gridZ; z++) {
     const wz = pz[z] as number;
-    for (let y = 0; y < grid; y++) {
+    for (let y = 0; y < gridY; y++) {
       const wy = py[y] as number;
-      for (let x = 0; x < grid; x++) {
-        scratch.samples[(z * grid + y) * grid + x] = sampler.distance(
+      for (let x = 0; x < gridX; x++) {
+        scratch.samples[(z * gridY + y) * gridX + x] = sampler.distance(
           px[x] as number,
           wy,
           wz,
@@ -252,12 +314,15 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
     }
   }
 
-  scratch.cellVertex.fill(-1, 0, cells * cells * cells);
+  // The whole buffer, rather than the part this grid uses: it is sized for the widest grid
+  // the thread will be asked for, and a leftover entry from a previous chunk would be read
+  // as a vertex in this one.
+  scratch.cellVertex.fill(-1);
 
   // ---- One vertex per cell whose corners disagree.
-  for (let cz = 0; cz < cells; cz++) {
-    for (let cy = 0; cy < cells; cy++) {
-      for (let cx = 0; cx < cells; cx++) {
+  for (let cz = 0; cz < cellsZ; cz++) {
+    for (let cy = 0; cy < cellsY; cy++) {
+      for (let cx = 0; cx < cellsX; cx++) {
         let inside = 0;
         for (let corner = 0; corner < 8; corner++) {
           const [dx, dy, dz] = CORNER_OFFSETS[corner];
@@ -304,13 +369,13 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
           (pz[cz] as number) +
           (sumZ / crossings) * ((pz[cz + 1] as number) - (pz[cz] as number));
 
-        scratch.cellVertex[(cz * cells + cy) * cells + cx] = out.vertex(
+        scratch.cellVertex[(cz * cellsY + cy) * cellsX + cx] = out.vertex(
           worldX,
           worldY,
           worldZ,
         );
         params.onVertex?.(
-          scratch.cellVertex[(cz * cells + cy) * cells + cx],
+          scratch.cellVertex[(cz * cellsY + cy) * cellsX + cx],
           worldX,
           worldY,
           worldZ,
@@ -321,7 +386,7 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
 
   // ---- One quad per owned edge whose sign changes.
   //
-  // `p` runs 1..n on every axis: on the edge's own axis because that is the run of
+  // `p` runs 1..owned on every axis: on the edge's own axis because that is the run of
   // edges this chunk owns, and on the other two because the four cells need `p - 1` to
   // name a cell.
   //
@@ -330,10 +395,10 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
   // at `p` — and take `p - 1` or `p` on the other two. Derived from strides rather
   // than written out three times, because writing it out three times is how the y and z
   // rows came to disagree with the x one.
-  for (let pz = 1; pz <= samples; pz++) {
-    for (let py = 1; py <= samples; py++) {
-      for (let px = 1; px <= samples; px++) {
-        const base = (pz * cells + py) * cells + px;
+  for (let pz = 1; pz <= ownedZ; pz++) {
+    for (let py = 1; py <= ownedY; py++) {
+      for (let px = 1; px <= ownedX; px++) {
+        const base = (pz * cellsY + py) * cellsX + px;
         const nearInside = sample(px, py, pz) < 0;
 
         for (let axis = 0; axis < 3; axis++) {
@@ -365,11 +430,11 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
   }
 };
 
-/** The linear stride of one cell step along each axis, for `cells` cells a side. */
-const strideTable = (cells: number): readonly number[] => [
+/** The linear stride of one cell step along each axis, of a rectangular cell grid. */
+const cellStrides = (cellsX: number, cellsY: number): readonly number[] => [
   1,
-  cells,
-  cells * cells,
+  cellsX,
+  cellsX * cellsY,
 ];
 
 /** The two axes other than each axis. */
@@ -406,6 +471,9 @@ const quadAcross = (
   }
 };
 
-/** Scratch for a chunk meshing `samples` samples per axis. */
-export const scratchFor = (samples: number): SurfaceNetsScratch =>
-  new SurfaceNetsScratch(samples);
+/** Scratch for a chunk meshing `samples` samples per axis, owning `maxExtra` more. */
+export const scratchFor = (samples: number, maxExtra = 0): SurfaceNetsScratch =>
+  new SurfaceNetsScratch(samples, maxExtra);
+
+/** The default `extra`: a chunk that owns exactly the cells it was promised. */
+const NO_EXTRA: readonly [number, number, number] = [0, 0, 0];

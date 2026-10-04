@@ -26,17 +26,24 @@
  * documented in the meantime. The same-level test above is a plain `it`: it is the
  * control, and it must keep passing for the mixed-level ones to mean anything.
  *
- * ## A skirt covers the visible crack without fixing this
+ * ## What the overlap fixes, and what it deliberately does not
  *
- * `skirt.ts` drops a short flap from the finer chunk's open boundary at a level step, which
- * hides the hairline slit from the camera — the terrain gets no visible crack. It does *not*
- * make the two meshes share vertices, which is what these tests assert, so they stay
- * `it.fails`. An exact fix still means evaluating the coarse boundary strip at the fine
- * stride (ADR 0004); until then the visible symptom is covered and this stays pinned.
+ * The overlap does not make the two meshes share a vertex, so the two tests above stay
+ * `it.fails`. It does remove the *visible* gap, and that is the property this file holds it
+ * to: the coarser chunk meshes one cell into the finer one, so its surface crosses the
+ * plane between them rather than stopping on it, and the two sheets — one surface of one
+ * field at two strides — differ by at most the level-of-detail error where they overlap.
+ *
+ * A weld is a different thing and is not what anybody can see. Making it exact means
+ * evaluating the coarse boundary strip at the fine stride (ADR 0004), which is stitched
+ * surface nets: a second mesher, a stitching pass, and a seam rule that has to agree with
+ * itself across two resolutions. The tests below are the ones that would fail if the seam
+ * opened up again.
  */
 
 import { describe, expect, it } from "vitest";
 
+import { BLOCK_WORLD } from "../constants";
 import {
   DEFAULT_TERRAIN,
   Field,
@@ -44,7 +51,14 @@ import {
   terrainField,
 } from "@big-mesh-studios/csg";
 import type { CellCoord, Lod } from "../world";
-import { lodSampleSize, lodSamples } from "../world";
+import {
+  lodAt,
+  lodSampleSize,
+  lodSamples,
+  overlapMaskAt,
+  OVERLAP_X_NEG,
+  OVERLAP_X_POS,
+} from "../world";
 
 import type { ChunkMesh } from "@big-mesh-studios/meshing";
 import { chunkRegion, SurfaceNetsChunkMesher } from "./chunk-mesher";
@@ -64,6 +78,15 @@ interface Point {
 
 const LEFT: CellCoord = { x: 0, y: 0, z: 0 };
 const RIGHT: CellCoord = { x: 1, y: 0, z: 0 };
+
+/**
+ * The world plane the two cells share, on x.
+ *
+ * Derived rather than written down: a chunk's extent is `samples * sampleSize` from its
+ * centre at every level (ADR 0004), so the plane between two adjacent cells is half a
+ * chunk from either centre whatever stride either side is meshed at.
+ */
+const SEAM_X = BLOCK_WORLD / 2;
 
 const mesherOverTerrain = (): SurfaceNetsChunkMesher => {
   const terrain = terrainField(DEFAULT_TERRAIN);
@@ -198,4 +221,104 @@ describe("LOD seams", () => {
       expect(distance(fine, coarse)).toBeLessThanOrEqual(lodSampleSize(0));
     },
   );
+});
+
+/**
+ * The seam as a player meets it.
+ *
+ * Not watertightness — that is the pair of `it.fails` above, and they are still failing,
+ * because nothing here makes two chunks share a vertex. What is pinned instead is that the
+ * coarse chunk's surface *crosses* the plane between the two cells and lands close enough
+ * to the fine chunk's that nothing is left showing through (ADR 0035).
+ *
+ * Both halves matter, and the second is the one a test that only counted vertices would
+ * pass without trying. A sheet that crosses the plane and then disagrees with its
+ * neighbour by a coarse sample has replaced a slit with a step; a sheet that agrees but
+ * stops short has left the original slit. The bound below is one fine sample, which is
+ * also the width the crack was measured at before — so a regression to stopping short
+ * fails here by a wide margin rather than by a hair.
+ */
+describe("a level step, covered by overlap", () => {
+  const mesher = mesherOverTerrain();
+
+  /** The coarse chunk, told which way its finer neighbour lies. */
+  const coarse = (overlap: number) =>
+    mesher.mesh({ cell: RIGHT, lod: 1, overlap });
+
+  it("carries the coarse chunk's surface across the plane into its neighbour", () => {
+    // A surface that reaches the plane and stops there is the crack; one that crosses it is
+    // not. Measured as how far the mesh reaches *past* the plane rather than as a count of
+    // vertices there, because a vertex sits in the middle of its own cell and the count
+    // would depend on how the terrain happens to cross the cells beside the seam.
+    //
+    // The plain chunk does put vertices past the plane — its low padding cell is a whole
+    // coarse cell of the neighbour's ground, taken for the interface quads — which is
+    // exactly why "has vertices there" is too weak a test to fail on.
+    const reachPast = (mesh: ChunkMesh): number => {
+      const lowest = Math.min(...points(mesh).map((p) => p.x));
+      return SEAM_X - lowest;
+    };
+    const plain = coarse(0);
+    const overlapping = coarse(OVERLAP_X_NEG);
+    expect(plain.vertexCount).toBeGreaterThan(0);
+    expect(overlapping.vertexCount).toBeGreaterThan(plain.vertexCount);
+
+    // Padding alone: half a coarse sample, the middle of the cell beyond the plane.
+    expect(reachPast(plain)).toBeLessThan(lodSampleSize(1));
+    // Padding and the overlapped cell: a full coarse cell into the finer chunk.
+    expect(reachPast(overlapping)).toBeGreaterThan(lodSampleSize(1));
+  });
+
+  it("keeps the two sheets within one fine sample of each other", () => {
+    // The premise the whole arrangement rests on, and the one that would fail if the two
+    // meshes ever stopped describing the same surface: over the overlap the coarse sheet
+    // and the fine sheet are two tessellations of one field, so they differ by the
+    // level-of-detail error and nothing else. Where they differ by more than that, the
+    // overlap is not hiding anything — it is two surfaces with a gap between them, which
+    // is the defect this replaced.
+    const fine = points(mesher.mesh({ cell: LEFT, lod: 0 }));
+    const strip = points(coarse(OVERLAP_X_NEG)).filter(
+      (p) => p.x < SEAM_X - 1e-6,
+    );
+    expect(fine.length).toBeGreaterThan(0);
+    expect(strip.length).toBeGreaterThan(0);
+
+    let worst = 0;
+    for (const p of strip) {
+      let closest = Infinity;
+      for (const q of fine)
+        closest = Math.min(
+          closest,
+          Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z),
+        );
+      worst = Math.max(worst, closest);
+    }
+    expect(worst).toBeLessThanOrEqual(lodSampleSize(0));
+  });
+
+  it("puts the overlap on one side of the seam, so only one of them pays", () => {
+    // The pair of masks the window would supply for two cells that really are at different
+    // levels, and the consequence: the coarse mesh crosses the plane and the fine mesh is
+    // byte-for-byte the mesh it always was. Both sides reaching across would draw two
+    // coarse sheets over the same fine geometry, which is the same cost as the overlap and
+    // twice the chance of the two of them z-fighting where they cross.
+    const bands = { full: 0, coarse: 1 };
+    const focus: CellCoord = { x: 0, y: 0, z: 0 };
+    expect(lodAt(LEFT, focus, bands)).toBe(0);
+    expect(lodAt(RIGHT, focus, bands)).toBe(1);
+
+    const fineOverlap = overlapMaskAt(LEFT, focus, bands);
+    const coarseOverlap = overlapMaskAt(RIGHT, focus, bands);
+    expect(fineOverlap & OVERLAP_X_POS).toBe(0);
+    expect(coarseOverlap & OVERLAP_X_NEG).toBe(OVERLAP_X_NEG);
+
+    const fine = mesher.mesh({ cell: LEFT, lod: 0, overlap: fineOverlap });
+    const plainFine = mesher.mesh({ cell: LEFT, lod: 0 });
+    expect(fine.vertexCount).toBe(plainFine.vertexCount);
+    expect([...fine.indices]).toEqual([...plainFine.indices]);
+    // And the coarse one, meshed with what the window would have told it, does reach over.
+    expect(
+      mesher.mesh({ cell: RIGHT, lod: 1, overlap: coarseOverlap }).vertexCount,
+    ).toBeGreaterThan(mesher.mesh({ cell: RIGHT, lod: 1 }).vertexCount);
+  });
 });

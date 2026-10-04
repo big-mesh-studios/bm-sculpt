@@ -49,6 +49,10 @@ recorded cost is a decision nobody thought about.
 | [0029](0029-the-site-root-is-a-front-page.md)                           | The site root is a front page, and the applications sit beside it                      | accepted |
 | [0030](0030-two-meshers-and-a-report.md)                                | The modeller offers two meshers, and reports what came back                            | accepted |
 | [0031](0031-the-nearest-surface-carries-a-points-colour.md)             | The nearest surface carries a point's colour, not the last one in the list             | accepted |
+| [0032](0032-a-model-leaves-as-a-3mf.md)                                 | A model leaves as a 3MF, stood on a bed at a height in millimetres                     | accepted |
+| [0033](0033-a-project-file-is-a-manifest-and-the-model.md)              | A project file is a manifest and the model, and Save writes back to where it came from | accepted |
+| [0034](0034-a-draft-survives-a-reload.md)                               | A draft survives a reload, and the files you opened are remembered                     | accepted |
+| [0035](0035-the-coarser-chunk-overlaps-the-finer-one.md)                | The coarser chunk overlaps the finer one, and there is no skirt                        | accepted |
 
 ## What is decided so far
 
@@ -58,6 +62,14 @@ Phases 1 through 3, in the order the decisions constrain each other:
   after this is a consequence of the field being computed.
 - **0003, 0004** — how that field becomes triangles, per chunk, at a chunk's own level of
   detail. 0003 carries the seam rule; 0004 carries the LOD cracks it does not solve.
+- **0035** — what is done about those cracks, and it supersedes the sentence in both of
+  them that ranked the insurance policies. They ended with _"evaluate the boundary strip at
+  the finer neighbour's stride, then add skirts"_; the strip was never built, the skirt was
+  built and then removed, and what is there now is that the coarser chunk meshes one cell
+  into the finer one. The rest of that ranking is untouched — stitched surface nets is still
+  deferred, and the two `it.fails` cases in `mesh/lod-seam.test.ts` are still failing, which
+  is what keeps the difference between _no visible gap_ and _a weld_ written down rather
+  than assumed.
 - **0005, 0006, 0007** — the shapes around it: which chunks exist and in which slot, how
   far a distance is trusted, and what a query may read from a slot being rebuilt.
 - **0008** — the boundary a chunk's mesh crosses to get to the screen.

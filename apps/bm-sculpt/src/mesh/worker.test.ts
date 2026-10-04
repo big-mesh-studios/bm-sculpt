@@ -194,10 +194,10 @@ describe("a worker handling messages", () => {
     expect(handled.reply).toMatchObject({ kind: "meshReady", empty: false });
   });
 
-  it("passes a request's skirt mask through to the mesher", () => {
-    // The mask has to survive the message boundary, or a chunk at a level boundary is
-    // meshed flat and the crack it was meant to cover is back — with nothing else to show
-    // for it, because the geometry is still a perfectly valid mesh of the chunk.
+  it("passes a request's overlap mask through to the mesher", () => {
+    // The mask has to survive the message boundary, or a chunk at a level boundary stops at
+    // its own edge and the seam opens again — with nothing else to show for it, because the
+    // geometry is still a perfectly valid mesh of the chunk.
     const seen: MeshRequest[] = [];
     const factory: MesherFactory = () => ({
       mesh: (request) => {
@@ -207,10 +207,30 @@ describe("a worker handling messages", () => {
     });
     handleMeshMessage(
       { ...emptyWorkerState(), model: model() },
-      { kind: "meshChunk", cell: cell(0), lod: 0, generation: 1, skirt: 5 },
+      { kind: "meshChunk", cell: cell(0), lod: 0, generation: 1, overlap: 5 },
       factory,
     );
-    expect(seen[0]?.skirt).toBe(5);
+    expect(seen[0]?.overlap).toBe(5);
+  });
+
+  it("asks the skip gate about the cells an overlap reaches into", () => {
+    // The gate decides whether a chunk is meshed at all, and a chunk whose only surface is
+    // in the cell it reaches into would be ruled out by a gate that only heard about its
+    // own extent — a hole that nothing would ever ask again.
+    const asked: Array<number | undefined> = [];
+    const factory: MesherFactory = () => ({
+      mesh: () => meshOf(9),
+      couldHaveMesh: (_cell, _lod, overlap) => {
+        asked.push(overlap);
+        return false;
+      },
+    });
+    handleMeshMessage(
+      { ...emptyWorkerState(), model: model() },
+      { kind: "meshChunk", cell: cell(0), lod: 1, generation: 1, overlap: 3 },
+      factory,
+    );
+    expect(asked).toEqual([3]);
   });
 
   it("answers a chunk the mesher rules out, without meshing it", () => {

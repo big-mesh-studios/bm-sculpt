@@ -27,17 +27,17 @@ export {
   lodWorld,
 } from "../constants";
 
-export type { CellCoord, Lod, LodBands, SkirtMask } from "./level-data";
+export type { CellCoord, Lod, LodBands, OverlapMask } from "./level-data";
 export {
   DEFAULT_LOD_BANDS,
   LOD_OFF,
-  SKIRT_DIRECTIONS,
-  SKIRT_X_NEG,
-  SKIRT_X_POS,
-  SKIRT_Y_NEG,
-  SKIRT_Y_POS,
-  SKIRT_Z_NEG,
-  SKIRT_Z_POS,
+  OVERLAP_DIRECTIONS,
+  OVERLAP_X_NEG,
+  OVERLAP_X_POS,
+  OVERLAP_Y_NEG,
+  OVERLAP_Y_POS,
+  OVERLAP_Z_NEG,
+  OVERLAP_Z_POS,
   cellCentre,
   cellDistance,
   cellInSphere,
@@ -49,10 +49,10 @@ export {
   lodSampleSize,
   lodSamples,
   lodStride,
+  overlapMaskAt,
   sameCell,
   sampleIndexIn,
   sampleWorld,
-  skirtMaskAt,
   sphereCells,
 } from "./level-data";
 

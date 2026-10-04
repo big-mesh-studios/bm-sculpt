@@ -686,6 +686,132 @@ describe("reusing a scratch buffer", () => {
 });
 
 /**
+ * A chunk that owns cells outside its own extent.
+ *
+ * This is the mechanism a level-of-detail seam is closed with (ADR 0035): the coarser of
+ * two neighbouring chunks meshes one cell into the finer one, so the two surfaces overlap
+ * across the plane between them rather than stopping on it. The property worth pinning is
+ * that owning a cell and *being told* to own it are the same thing — that `extra` widens
+ * the run rather than adding a second, differently-placed surface — because the alternative
+ * reading of the parameter would put the extra cells somewhere the caller did not ask for.
+ */
+describe("a chunk owning cells beyond its own extent", () => {
+  // A blob filling the chunk and past it, so the extra cells are crossed rather than
+  // empty: a field that stops short of them would make "owns one more cell" and "owns the
+  // same cells" indistinguishable, because neither would put a vertex there.
+  const blob = (x: number, y: number, z: number): number =>
+    sphere(x - 85, y - 85, z - 85, 100);
+
+  const meshExtra = (
+    origin: readonly [number, number, number],
+    samples: number,
+    extra: readonly [number, number, number],
+    field: (x: number, y: number, z: number) => number,
+  ): ChunkMeshBuilder => {
+    const out = new ChunkMeshBuilder();
+    surfaceNets({
+      origin,
+      samples,
+      extra,
+      sampleSize: STEP,
+      sampler: { distance: field },
+      out,
+      scratch: scratchFor(samples, Math.max(...extra)),
+    });
+    return out;
+  };
+
+  it("is the same mesh as owning the cells outright", () => {
+    // The statement of the equivalence, and the reason the parameter is a count per axis
+    // rather than a range: a chunk told to own more cells than it was promised must
+    // produce exactly the mesh it produces owning those cells itself. Two chunks in the
+    // world reach different numbers of cells in the same place, and this is the property
+    // that lets them meet.
+    const wide = meshExtra([0, 0, 0], N, [1, 1, 1], blob).finish();
+    const owned = mesh([0, 0, 0], N + 1, blob).finish();
+
+    expect(owned.vertexCount).toBeGreaterThan(0);
+    expect(wide.vertexCount).toBe(owned.vertexCount);
+    expect([...wide.indices]).toEqual([...owned.indices]);
+    for (let i = 0; i < owned.vertexCount; i++) {
+      expect(wide.positions[i * 3], `vertex ${i}`).toBe(owned.positions[i * 3]);
+      expect(wide.positions[i * 3 + 1], `vertex ${i}`).toBe(
+        owned.positions[i * 3 + 1],
+      );
+      expect(wide.positions[i * 3 + 2], `vertex ${i}`).toBe(
+        owned.positions[i * 3 + 2],
+      );
+    }
+  });
+
+  it("reaches no further than the cells it was given", () => {
+    // The other direction, and the one that would be invisible if only the first were
+    // tested: a vertex past the widened run would be a vertex belonging to a neighbour
+    // further still, drawn in two places. The run is `samples + extra` cells from
+    // `origin`, so that is where the padding stops.
+    const out = meshExtra([0, 0, 0], N, [1, 1, 0], blob);
+    const span = (N + 1) * STEP;
+    expect(out.vertexCount).toBeGreaterThan(0);
+    for (let i = 0; i < out.vertexCount; i++) {
+      for (const [axis, value] of [
+        ["x", out.positions.at(i * 3)],
+        ["y", out.positions.at(i * 3 + 1)],
+        ["z", out.positions.at(i * 3 + 2)],
+      ] as const) {
+        expect(value, `vertex ${i} ${axis}`).toBeGreaterThanOrEqual(-STEP);
+        expect(value, `vertex ${i} ${axis}`).toBeLessThanOrEqual(span);
+      }
+    }
+  });
+
+  it("leaves an axis alone that takes no extra cell", () => {
+    // Per axis, not per chunk. A chunk with one finer neighbour on one face owns one more
+    // cell on that axis and none on the others; a shell of them on all six would be a
+    // third of the mesh again, on seams that need nothing.
+    const plain = mesh([0, 0, 0], N, blob);
+    const oneAxis = meshExtra([0, 0, 0], N, [1, 0, 0], blob);
+    const allAxes = meshExtra([0, 0, 0], N, [1, 1, 1], blob);
+
+    expect(oneAxis.vertexCount).toBeGreaterThan(plain.vertexCount);
+    expect(allAxes.vertexCount).toBeGreaterThan(oneAxis.vertexCount);
+
+    /** How far the mesh reaches on one component, which is what an extra cell moves. */
+    const reach = (out: ChunkMeshBuilder, component: 0 | 1 | 2): number => {
+      let furthest = -Infinity;
+      for (let i = 0; i < out.vertexCount; i++) {
+        furthest = Math.max(furthest, out.positions.at(i * 3 + component));
+      }
+      return furthest;
+    };
+    expect(reach(oneAxis, 0)).toBeGreaterThan(reach(plain, 0));
+    expect(reach(oneAxis, 1)).toBe(reach(plain, 1));
+    expect(reach(oneAxis, 2)).toBe(reach(plain, 2));
+    expect(reach(allAxes, 1)).toBeGreaterThan(reach(plain, 1));
+  });
+
+  it("refuses a scratch too small for the cells it is asked to own", () => {
+    // Sized to `samples` when it will own `samples + 1`, the sample buffer is one cell
+    // short along one axis and the cell buffer one short in every direction — which is the
+    // silent corruption the guard exists to catch, and not something a mesh comparison
+    // would attribute to the right cause.
+    expect(() => meshExtra([0, 0, 0], N, [1, 0, 0], blob)).not.toThrow();
+
+    const out = new ChunkMeshBuilder();
+    expect(() =>
+      surfaceNets({
+        origin: [0, 0, 0],
+        samples: N,
+        extra: [1, 0, 0],
+        sampleSize: STEP,
+        sampler: { distance: blob },
+        out,
+        scratch: scratchFor(N),
+      }),
+    ).toThrow(/scratch/);
+  });
+});
+
+/**
  * Unevenly spaced samples.
  *
  * "Evenly spaced" is an assumption about the world rather than about this algorithm, and

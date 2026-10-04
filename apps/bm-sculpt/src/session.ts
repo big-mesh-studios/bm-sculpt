@@ -468,9 +468,14 @@ export class Session {
     if (existing !== undefined) this.inFlight.delete(key);
 
     const revision = this.store.revisionOf(slot);
-    // The skirt mask comes from the window, which chose the level from the same `lodAt`;
-    // passing it here is what keeps the mask and the level from being decided twice.
-    const wanted = this.pool.request(cell, entry.targetLod, entry.targetSkirt);
+    // The overlap mask comes from the window, which chose the level from the same
+    // `lodAt`; passing it here is what keeps the mask and the level from being decided
+    // twice.
+    const wanted = this.pool.request(
+      cell,
+      entry.targetLod,
+      entry.targetOverlap,
+    );
     this.inFlight.set(key, { slot, revision, wanted });
   }
 

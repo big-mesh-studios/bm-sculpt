@@ -14,12 +14,16 @@ import {
   LOD_OFF,
   lodSampleSize,
   lodSamples,
+  OVERLAP_DIRECTIONS,
   sampleIndexIn,
   sampleWorld,
-  SKIRT_X_NEG,
-  SKIRT_Z_NEG,
-  SKIRT_Z_POS,
-  skirtMaskAt,
+  OVERLAP_X_NEG,
+  OVERLAP_X_POS,
+  OVERLAP_Y_NEG,
+  OVERLAP_Y_POS,
+  OVERLAP_Z_NEG,
+  OVERLAP_Z_POS,
+  overlapMaskAt,
   sphereCells,
   type CellCoord,
 } from "./level-data";
@@ -323,41 +327,87 @@ describe("the window", () => {
   });
 });
 
-describe("skirt masks", () => {
+describe("overlap masks", () => {
   const focus: CellCoord = { x: 0, y: 0, z: 0 };
 
   it("is empty where every neighbour is at the same level", () => {
-    // A same-level seam is watertight, so a skirt there would be geometry nobody needs.
-    expect(skirtMaskAt({ x: 0, y: 5, z: 0 }, focus)).toBe(0);
+    // A same-level seam is watertight, so there is nothing to reach into and nothing to pay
+    // for. This is most faces in most of the world.
+    expect(overlapMaskAt({ x: 0, y: 5, z: 0 }, focus)).toBe(0);
   });
 
-  it("sets the face whose neighbour is one band finer", () => {
+  it("sets the face whose neighbour is one band finer, and only that one", () => {
     // The outermost chunk of a band is one step coarser than the neighbour behind it, so
-    // the face towards that neighbour is the one that steps up in detail. Written against
-    // `coarse` rather than a literal, since which chunk that is depends on the bands.
+    // the face towards that neighbour is the one it reaches into. Written against `coarse`
+    // rather than a literal, since which chunk that is depends on the bands.
+    //
+    // The other three vertical faces are coarser or equal neighbours, and the mask says so
+    // by not being set: only one of the two chunks either side of a level step reaches
+    // across, and it is always the coarse one (ADR 0035).
     const { coarse } = DEFAULT_LOD_BANDS;
-    const mask = skirtMaskAt({ x: coarse, y: 0, z: 0 }, focus);
+    const mask = overlapMaskAt({ x: coarse, y: 0, z: 0 }, focus);
     expect(lodAt({ x: coarse, y: 0, z: 0 }, focus)).toBe(1);
     expect(lodAt({ x: coarse - 1, y: 0, z: 0 }, focus)).toBe(0);
-    expect(mask & SKIRT_X_NEG).toBe(SKIRT_X_NEG);
+    expect(mask & OVERLAP_X_NEG).toBe(OVERLAP_X_NEG);
+    expect(mask & OVERLAP_X_POS).toBe(0);
+    expect(mask & OVERLAP_Z_NEG).toBe(0);
+    expect(mask & OVERLAP_Z_POS).toBe(0);
   });
 
-  it("sets every face that steps, including the outer z side", () => {
-    const mask = skirtMaskAt({ x: 0, y: 0, z: 0 }, focus, {
-      full: 0,
-      coarse: 1,
-    });
-    // With a single full chunk at the focus, only the origin cell is level 0 and all six
-    // faces step down in detail.
-    expect(mask).not.toBe(0);
-    expect(mask & SKIRT_Z_POS).toBe(SKIRT_Z_POS);
-    expect(mask & SKIRT_Z_NEG).toBe(SKIRT_Z_NEG);
+  it("marks no face of a chunk whose neighbours are all coarser", () => {
+    // The other half of the pair, and the reason the mask is directional rather than a
+    // test for inequality: the finest chunk in the window has nothing to reach into, so it
+    // meshes exactly its own cells and pays nothing for the seams around it.
+    const { full } = DEFAULT_LOD_BANDS;
+    const mask = overlapMaskAt({ x: full, y: 0, z: 0 }, focus);
+    expect(lodAt({ x: full, y: 0, z: 0 }, focus)).toBe(0);
+    expect(mask).toBe(0);
   });
 
-  it("does not skirt a face where the level matches, only where it steps", () => {
-    const mask = skirtMaskAt({ x: 0, y: 6, z: 0 }, focus);
+  it("reaches back towards the focus from every side of it", () => {
+    // With a single full chunk at the focus, every one of its six neighbours is a step
+    // coarser and reaches back into it, so the ring of masks around it is six inward
+    // faces rather than six outward ones. Written as a walk round the ring because that is
+    // the shape the property has: the level step is a shell, and the overlap is the inside
+    // of it.
+    const bands = { full: 0, coarse: 1 };
+    expect(overlapMaskAt({ x: 0, y: 0, z: 0 }, focus, bands)).toBe(0);
+    for (const [cell, face, name] of [
+      [{ x: -1, y: 0, z: 0 }, OVERLAP_X_POS, "x pos"],
+      [{ x: 1, y: 0, z: 0 }, OVERLAP_X_NEG, "x neg"],
+      [{ x: 0, y: 0, z: -1 }, OVERLAP_Z_POS, "z pos"],
+      [{ x: 0, y: 0, z: 1 }, OVERLAP_Z_NEG, "z neg"],
+      [{ x: 0, y: -1, z: 0 }, OVERLAP_Y_POS, "y pos"],
+      [{ x: 0, y: 1, z: 0 }, OVERLAP_Y_NEG, "y neg"],
+    ] as const) {
+      expect(overlapMaskAt(cell, focus, bands) & face, name).toBe(face);
+    }
+  });
+
+  it("does not mark a face where the level matches, only where it steps", () => {
+    const mask = overlapMaskAt({ x: 0, y: 6, z: 0 }, focus);
     // (0,5,0) is level 2 at distance 5, so is its neighbour above; (0,4,0) is also level 2,
     // so no face reports a change.
     expect(mask).toBe(0);
+  });
+
+  it("is derived from the same levels the window schedules with", () => {
+    // The mask and the level are two answers about the same neighbourhood, so a mask that
+    // disagreed with them would put the overlap on the wrong face of a chunk meshed at the
+    // wrong level — which is a crack in a place nothing is looking.
+    for (const cell of sphereCells(focus, 3, 2)) {
+      const self = lodAt(cell, focus);
+      for (let face = 0; face < OVERLAP_DIRECTIONS.length; face++) {
+        const [dx, dy, dz] = OVERLAP_DIRECTIONS[face];
+        const neighbour = lodAt(
+          { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz },
+          focus,
+        );
+        const marked = (overlapMaskAt(cell, focus) & (1 << face)) !== 0;
+        expect(marked, `${cell.x},${cell.y},${cell.z} face ${face}`).toBe(
+          neighbour < self,
+        );
+      }
+    }
   });
 });

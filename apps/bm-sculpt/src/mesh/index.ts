@@ -20,7 +20,13 @@
  * assertion is in `worker.test.ts`.
  */
 
-export { addSkirts } from "./skirt";
+export {
+  NO_OVERLAP,
+  OVERLAP_CELLS,
+  overlapCells,
+  paddingOf,
+  type OverlapCells,
+} from "./overlap";
 
 export type {
   ChunkMesher,

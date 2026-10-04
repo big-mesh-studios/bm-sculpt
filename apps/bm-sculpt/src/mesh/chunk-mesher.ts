@@ -16,11 +16,17 @@
 import type { Bounds, Vec3 } from "@big-mesh-studios/core";
 import type { SurfaceColour } from "@big-mesh-studios/csg";
 import { BLOCK_WORLD, VOXEL_SIZE } from "../constants";
-import type { CellCoord, Lod, SkirtMask } from "../world";
+import type { CellCoord, Lod, OverlapMask } from "../world";
 import { lodSampleSize, lodSamples } from "../world";
 
 import { ChunkMeshBuilder, type ChunkMesh } from "@big-mesh-studios/meshing";
-import { addSkirts } from "./skirt";
+import {
+  NO_OVERLAP,
+  OVERLAP_CELLS,
+  overlapCells,
+  paddingOf,
+  type OverlapCells,
+} from "./overlap";
 import {
   scratchFor,
   surfaceNets,
@@ -38,15 +44,15 @@ export interface MeshRequest {
   readonly cell: CellCoord;
   readonly lod: Lod;
   /**
-   * Faces of this chunk whose neighbour is at a different level of detail, as a
-   * `SkirtMask`.
+   * Faces of this chunk whose neighbour is at a *finer* level of detail, as an
+   * `OverlapMask`.
    *
-   * Optional, and absent means "no skirt", because a mesher that cannot be told about its
-   * neighbours must still produce a mesh — just one with the hairline crack at a level
-   * boundary that a skirt exists to cover. The window supplies it from the same `lodAt`
-   * that chose this chunk's level.
+   * Optional, and absent means "reach into nobody", because a mesher that cannot be told
+   * about its neighbours must still produce a mesh — just one that stops on the shared
+   * plane and leaves the slit a level step opens (ADR 0035). The window supplies it from
+   * the same `lodAt` that chose this chunk's level.
    */
-  readonly skirt?: SkirtMask;
+  readonly overlap?: OverlapMask;
 }
 
 /** Builds the mesh for a chunk. */
@@ -65,8 +71,13 @@ export interface ChunkMesher {
    * world that nothing will re-mesh, while answering `true` costs one chunk's samples and
    * nothing else. So a mesher with no answer available simply omits this, and a caller
    * treats its absence as "mesh it".
+   *
+   * Takes the same overlap the request does, because the cells a chunk reaches into are
+   * part of the region the answer is about: a gate that tested only the chunk's own extent
+   * could skip a chunk whose only surface is in its overlap, which is a hole with nothing
+   * to fill it.
    */
-  couldHaveMesh?(cell: CellCoord, lod: Lod): boolean;
+  couldHaveMesh?(cell: CellCoord, lod: Lod, overlap?: OverlapMask): boolean;
 }
 
 /**
@@ -78,59 +89,85 @@ export interface ChunkMesher {
  * surface comes out with holes in it.
  */
 export interface ChunkRegion {
-  /** The world position of the chunk's own first sample's voxel. */
+  /**
+   * The world position of the run's first cell's low corner, which is the mesher's
+   * `origin`.
+   *
+   * **Not always the chunk's own corner.** A chunk that reaches below its own extent into a
+   * finer neighbour runs from one cell lower, because the mesher's run of owned cells always
+   * begins at its origin and a cell below index one does not exist.
+   */
   readonly origin: Vec3;
   /** Samples a chunk owns per axis, and so the sample grid's inner size. */
   readonly samples: number;
+  /** Cells owned beyond the chunk's own extent, per axis. */
+  readonly extra: readonly [number, number, number];
   /** World units between samples. */
   readonly sampleSize: number;
-  /** The chunk's own world extent. */
+  /** The chunk's own world extent, which the overlap reaches outside. */
   readonly bounds: Bounds;
   /**
    * Every sample taken, padding included.
    *
-   * Wider than `bounds` by one sample on each side: the seam rule needs one cell of low
+   * Wider than `bounds` by one sample on each side — the seam rule needs one cell of low
    * padding to give the interface edges their vertices, and the high side is padded to
-   * match so the sampling loop is a plain cube.
+   * match so the sampling loop is a plain cube. On a face the chunk overlaps, by one more
+   * than that: the overlap cell's far sample is a sample beyond the padding, and a region
+   * that does not cover every sample taken gets its distances answered from candidates
+   * gathered for somewhere else.
    */
   readonly sampleBounds: Bounds;
 }
 
-/** The region a chunk at a level meshes. */
-export const chunkRegion = (cell: CellCoord, lod: Lod): ChunkRegion => {
+/** The region a chunk at a level meshes, reaching `overlap` cells into finer neighbours. */
+export const chunkRegion = (
+  cell: CellCoord,
+  lod: Lod,
+  overlap: OverlapCells = NO_OVERLAP,
+): ChunkRegion => {
   const samples = lodSamples(lod);
   const sampleSize = lodSampleSize(lod);
+  const pad = paddingOf(overlap);
 
-  // A chunk's world centre is the middle of its samples. Its *origin* — the first sample
-  // it owns — sits half a sample inside that, and the seam rule counts ownership from
+  // A chunk's world centre is the middle of its samples. Its own low edge — the first
+  // sample it owns — sits half a chunk inside that, and the seam rule counts ownership from
   // there. Both are derived from the centre rather than from the chunk's edge, so that
   // the chunk's own extent is exactly `samples * sampleSize` and lands on a chunk
   // boundary at every level, which is what lets a coarse chunk stand in for four fine
   // ones.
-  const centre = cell.x * BLOCK_WORLD;
-  const centreY = cell.y * BLOCK_WORLD;
-  const centreZ = cell.z * BLOCK_WORLD;
-  const originX = centre - (samples / 2) * sampleSize;
-  const originY = centreY - (samples / 2) * sampleSize;
-  const originZ = centreZ - (samples / 2) * sampleSize;
+  //
+  // The overlap is then a matter of where the run starts and how far it reaches: one cell
+  // lower on an axis whose low neighbour is finer, one cell further out on an axis whose
+  // high neighbour is. `bounds` stays the chunk's own extent either way, because that is
+  // what the window places by and what a query about the world asks about.
+  const lowX = cell.x * BLOCK_WORLD - (samples / 2) * sampleSize;
+  const lowY = cell.y * BLOCK_WORLD - (samples / 2) * sampleSize;
+  const lowZ = cell.z * BLOCK_WORLD - (samples / 2) * sampleSize;
+  const originX = lowX - overlap.low[0] * sampleSize;
+  const originY = lowY - overlap.low[1] * sampleSize;
+  const originZ = lowZ - overlap.low[2] * sampleSize;
 
   const span = samples * sampleSize;
-  const pad = sampleSize;
 
   return {
     origin: { x: originX, y: originY, z: originZ },
     samples,
+    extra: overlap.extra,
     sampleSize,
     bounds: {
-      min: { x: originX, y: originY, z: originZ },
-      max: { x: originX + span, y: originY + span, z: originZ + span },
+      min: { x: lowX, y: lowY, z: lowZ },
+      max: { x: lowX + span, y: lowY + span, z: lowZ + span },
     },
     sampleBounds: {
-      min: { x: originX - pad, y: originY - pad, z: originZ - pad },
+      min: {
+        x: lowX - pad.low[0] * sampleSize,
+        y: lowY - pad.low[1] * sampleSize,
+        z: lowZ - pad.low[2] * sampleSize,
+      },
       max: {
-        x: originX + span + pad,
-        y: originY + span + pad,
-        z: originZ + span + pad,
+        x: lowX + span + pad.high[0] * sampleSize,
+        y: lowY + span + pad.high[1] * sampleSize,
+        z: lowZ + span + pad.high[2] * sampleSize,
       },
     },
   };
@@ -179,7 +216,11 @@ export class SurfaceNetsChunkMesher implements ChunkMesher {
     private readonly field: MeshField,
     samples: number = lodSamples(0),
   ) {
-    this.scratch = scratchFor(samples);
+    // Sized for the widest run this mesher will ever be asked for rather than for the
+    // widest chunk: a chunk that reaches one cell into a finer neighbour owns one more per
+    // axis, and a scratch one cell short of the grid it is given does not fail — it reads
+    // air where the field said solid, and the mesher invents a surface inside rock.
+    this.scratch = scratchFor(samples, OVERLAP_CELLS);
   }
 
   /**
@@ -190,8 +231,8 @@ export class SurfaceNetsChunkMesher implements ChunkMesher {
    * 34,304 field evaluations. `couldHoldSurface` returns true when it cannot tell, so
    * this never produces a wrong answer — only a missed saving.
    */
-  couldHaveMesh(cell: CellCoord, lod: Lod): boolean {
-    const region = chunkRegion(cell, lod);
+  couldHaveMesh(cell: CellCoord, lod: Lod, overlap?: OverlapMask): boolean {
+    const region = chunkRegion(cell, lod, overlapCells(overlap));
     // The region that decides whether anything is in the chunk is the chunk's own extent
     // plus its padding: a surface just outside the padding still puts vertices inside the
     // chunk, so testing the bare bounds would skip chunks that have visible geometry.
@@ -199,7 +240,11 @@ export class SurfaceNetsChunkMesher implements ChunkMesher {
   }
 
   mesh(request: MeshRequest): ChunkMesh {
-    const region = chunkRegion(request.cell, request.lod);
+    const region = chunkRegion(
+      request.cell,
+      request.lod,
+      overlapCells(request.overlap),
+    );
 
     // The candidate cache is told the whole sample region for the duration. Without this
     // the cache is rebuilt every few cells instead of once per chunk, which on the
@@ -211,6 +256,10 @@ export class SurfaceNetsChunkMesher implements ChunkMesher {
       surfaceNets({
         origin: [region.origin.x, region.origin.y, region.origin.z],
         samples: region.samples,
+        // The overlap is not geometry appended afterwards; it is more cells owned, which
+        // is the only way to get a surface that *continues* across the shared plane rather
+        // than one that stops on it (ADR 0035).
+        extra: region.extra,
         sampleSize: region.sampleSize,
         sampler: {
           distance: (x, y, z) => this.field.distance(x, y, z),
@@ -234,13 +283,6 @@ export class SurfaceNetsChunkMesher implements ChunkMesher {
       // threw, because a worker that kept a stale region would silently mesh every
       // chunk after a failure with the wrong candidates.
       endRegion();
-    }
-
-    // After the surface and before `finish`, because a skirt is appended geometry that has
-    // to leave in the same buffers. A level-of-detail neighbour is the only reason to add
-    // one, so a chunk with no such neighbour pays a single mask test.
-    if (request.skirt !== undefined) {
-      addSkirts(this.builder, request.skirt, region.bounds, region.sampleSize);
     }
 
     // `finish` copies to exact length, which is what leaves the thread by transfer.
