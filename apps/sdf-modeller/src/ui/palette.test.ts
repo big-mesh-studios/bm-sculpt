@@ -85,3 +85,70 @@ describe("a palette", () => {
     expect(palette.has({ ...red, a: 128 })).toBe(true);
   });
 });
+
+describe("setting a palette outright, for a file being opened", () => {
+  it("replaces every colour", () => {
+    const palette = createPalette([red, blue]);
+    palette.set([blue]);
+    settle();
+    expect(palette.colours()).toEqual([blue]);
+  });
+
+  it("takes an empty list, which is a file whose model was never painted", () => {
+    const palette = createPalette([red]);
+    palette.set([]);
+    settle();
+    expect(palette.colours()).toEqual([]);
+  });
+
+  it("keeps the order it was given, rather than reordering by use", () => {
+    // **The order is the panel's, not the model's.** The panel shows the most recent first, so
+    // a file's palette arrives in the order its author saw it and reopening it looks the same
+    // as it did when it was saved.
+    const palette = createPalette();
+    palette.set([blue, red]);
+    settle();
+    expect(palette.colours()).toEqual([blue, red]);
+  });
+
+  it("caps at the limit rather than showing a longer list than a file asked for", () => {
+    const palette = createPalette();
+    const many = Array.from({ length: PALETTE_LIMIT + 4 }, (_, i) => ({
+      r: i,
+      g: 0,
+      b: 0,
+      a: 255,
+    }));
+    palette.set(many);
+    settle();
+    expect(palette.colours()).toHaveLength(PALETTE_LIMIT);
+  });
+
+  it("keeps the first of what it was given when it caps, rather than the last", () => {
+    // **Which end it drops is the same question `remember` answers**, and the answer is the
+    // oldest, because refusing or dropping the newest makes the colour somebody just chose the
+    // one thing a cap actually costs.
+    const palette = createPalette();
+    const many = Array.from({ length: PALETTE_LIMIT + 1 }, (_, i) => ({
+      r: i,
+      g: 0,
+      b: 0,
+      a: 255,
+    }));
+    palette.set(many);
+    settle();
+    expect(palette.colours()[0]).toEqual({ r: 0, g: 0, b: 0, a: 255 });
+    expect(palette.has({ r: PALETTE_LIMIT, g: 0, b: 0, a: 255 })).toBe(false);
+  });
+
+  it("does not copy the list it was given", () => {
+    // **So a caller mutating its own array afterwards cannot change the palette** — which is
+    // the difference between the palette holding a value and holding a reference to one.
+    const mine = [red, blue];
+    const palette = createPalette();
+    palette.set(mine);
+    settle();
+    mine.push({ r: 0, g: 255, b: 0, a: 255 });
+    expect(palette.colours()).toHaveLength(2);
+  });
+});

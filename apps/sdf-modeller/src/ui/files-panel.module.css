@@ -1,0 +1,348 @@
+/*
+ * "Your files": a bar of actions across the top, then a grid of cards.
+ *
+ * ## `container-type: inline-size` is what makes the rest of this file work
+ *
+ * **Because the panel is inset from the window by a clearance on a desktop screen.** A viewport
+ * query would fire at the wrong size: at a 712px window the panel is 620px and wants the narrow
+ * layout, while the window is nowhere near a breakpoint of its own. So everything below is a
+ * `@container` query measuring the panel, and the numbers are the panel's.
+ */
+
+/*
+ * ## Three rows, and the middle one is `1fr` with `min-height: 0`
+ *
+ * `min-height: 0` is load-bearing and easy to drop: without it a grid item's default
+ * `min-height: auto` refuses to shrink below its content, the `1fr` row never actually shrinks,
+ * and the panel grows past the dialogue instead of the cards scrolling inside it. So the
+ * **cards** scroll and the **dialogue** does not, which is the difference between a sheet you can
+ * read and a sheet that runs off the bottom of a phone.
+ */
+.panel {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+  container-type: inline-size;
+
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+
+  color: var(--ui-front);
+  font: inherit;
+  overflow: hidden;
+}
+
+/*
+ * ## The bar
+ *
+ * **A grid of named areas rather than a flex row**, because the name of the document belongs in
+ * the middle and everything else belongs at the edges — and a flex row puts those two in
+ * competition, with the name the thing that loses.
+ *
+ * The four actions get equal `1fr` columns so the row is a rhythm rather than a ragged edge, the
+ * name takes `minmax(0, 1fr)` so it absorbs all the slack and can ellipsis, and `close` is `auto`
+ * because a square close button has no business being stretched.
+ */
+.bar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1fr) auto;
+  grid-template-areas: "new open save export close title";
+  align-items: center;
+  gap: var(--ui-margin);
+
+  padding: var(--ui-margin);
+  border-bottom: 1px solid var(--ui-dark-grey);
+}
+
+.new,
+.open,
+.save,
+.export {
+  grid-area: var(--area);
+}
+
+.new {
+  --area: new;
+}
+.open {
+  --area: open;
+}
+.save {
+  --area: save;
+}
+.export {
+  --area: export;
+}
+.close {
+  grid-area: close;
+}
+
+.title {
+  grid-area: title;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc(var(--ui-margin) * 1.5);
+
+  margin: 0;
+  padding: 0 calc(var(--ui-margin) * 1.5);
+  font-size: 1rem;
+  font-weight: 600;
+
+  /* **The name is what is shown and it is allowed to be long.** `min-width: 0` on the flex child
+   * carrying it is what makes the ellipsis happen instead of the bar growing.
+   */
+  min-width: 0;
+}
+
+.where {
+  color: var(--ui-grey);
+  font-size: 0.75rem;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+/*
+ * ## The export panel
+ *
+ * **`inset: unset` and `position: absolute` come from `controls.popover`** — the UA centres every
+ * popover with `margin: auto`, which silently defeats an anchor. Here the panel hangs *below* its
+ * trigger and lines up with the trigger's own left edge, so the choices in it read as belonging
+ * to the word they came out of.
+ */
+.exportPanel {
+  &:popover-open {
+    top: calc(anchor(bottom) + var(--ui-margin));
+    left: anchor(left);
+    width: 16rem;
+  }
+}
+
+.report {
+  margin: 0;
+  color: var(--ui-grey);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+/* A refusal, and the draft's age. Both are sentences, so both wrap rather than clip. */
+.notice,
+.draft {
+  margin: 0;
+  padding: 0 calc(var(--ui-margin) * 2);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.notice {
+  color: #ff9a8a;
+  padding-block: calc(var(--ui-margin) * 1.5);
+}
+
+.draft {
+  color: var(--ui-grey);
+  padding-block: calc(var(--ui-margin) * 1.5);
+  border-bottom: 1px solid var(--ui-dark-grey);
+}
+
+.empty {
+  margin: 0;
+  padding: calc(var(--ui-margin) * 4) calc(var(--ui-margin) * 2);
+  color: var(--ui-grey);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+/*
+ * ## The cards
+ *
+ * **`repeat(auto-fill, minmax(min(132px, 100%), 1fr))`**, and the outer `min()` is the whole
+ * trick: it is the overflow guard, so a panel narrower than 132px degrades to one column rather
+ * than overflowing. `auto-fill` rather than `auto-fit` so that cards keep their width on a
+ * mostly-empty list instead of stretching to fill it.
+ *
+ * Four across on a desktop panel, three on a full-width phone, two on a small one. No media query
+ * is involved in any of those.
+ */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(9rem, 100%), 1fr));
+  gap: calc(var(--ui-margin) * 2);
+
+  padding: calc(var(--ui-margin) * 2);
+  /* **The panel scrolls, not the dialogue.** See the header.
+   */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  align-content: start;
+}
+
+.card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: var(--ui-margin);
+
+  padding: var(--ui-margin);
+  border: 1px solid transparent;
+  border-radius: calc(var(--ui-size) / 4);
+
+  &:hover {
+    border-color: var(--ui-grey);
+  }
+
+  /* **Focused as well as hovered**, so an affordance only a mouse can find is still available to
+   * somebody using a keyboard.
+   */
+  &:focus-within {
+    border-color: var(--ui-light-grey);
+  }
+}
+
+/*
+ * **The opening button spans both columns**, so the whole card is the click target for opening
+ * and the forget button is a separate small target beside it — rather than a button inside a
+ * button, which is not a thing that should exist.
+ */
+.openCard {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--ui-margin);
+
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+
+  &[disabled] {
+    cursor: default;
+  }
+}
+
+/*
+ * **A count rather than a picture.**
+ *
+ * A rendered thumbnail per remembered file means rendering on every autosave to store a picture
+ * that will mostly never be looked at again, and the alternative costs nothing: how many parts a
+ * file holds is what tells a sphere from a character.
+ */
+.preview {
+  aspect-ratio: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+
+  background: #101015;
+  border: 1px solid var(--ui-dark-grey);
+  border-radius: calc(var(--ui-size) / 4);
+}
+
+.partCount {
+  font-size: 1.5rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.partLabel {
+  color: var(--ui-grey);
+  font-size: 0.7rem;
+}
+
+.name {
+  display: flex;
+  align-items: baseline;
+  gap: calc(var(--ui-margin) / 2);
+  min-width: 0;
+
+  > span:last-child {
+    font-size: 0.8rem;
+  }
+}
+
+.when {
+  color: var(--ui-grey);
+  font-size: 0.75rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * **The forget button is hidden behind a hover on a pointer device and always there on a touch
+ * one**, because `hover: none` is the honest test and there is no hover to wait for.
+ */
+.forget {
+  display: grid;
+  place-items: center;
+  min-width: var(--ui-size);
+  min-height: var(--ui-size);
+  padding: 0;
+
+  color: var(--ui-grey);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--ui-size) / 4);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms;
+
+  &:hover {
+    color: var(--ui-front);
+  }
+
+  .card:hover &,
+  &:focus-visible {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    opacity: 1;
+  }
+}
+
+/*
+ * ## Narrow panels: the name goes, the buttons keep their glyphs
+ *
+ * **At 560px the four actions and the name cannot both have their labels.** The labels go rather
+ * than the actions, because an action with a glyph and a title still says what it does and a name
+ * with no room does not say what the document is. The glyph's own `title` is the accessible name,
+ * so this is a visual decision rather than an accessibility one.
+ */
+@container (max-width: 560px) {
+  .bar {
+    grid-template-columns: repeat(4, auto) auto minmax(0, 1fr);
+    grid-template-areas: "new open save export close title";
+  }
+
+  .bar > button > .label {
+    display: none;
+  }
+
+  .bar > button {
+    justify-content: center;
+  }
+}
+
+/*
+ * ## And narrower still: the actions become a row of their own
+ *
+ * **A row that cannot fit becomes two.** This is the same bargain the sibling's action bar
+ * strikes at 400px, and it is a grid rather than a wrap because a wrap would leave the name
+ * stranded on a row of its own.
+ */
+@container (max-width: 380px) {
+  .bar {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-areas:
+      "new   open  save  export close"
+      "title title title title title";
+  }
+}

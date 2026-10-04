@@ -61,6 +61,19 @@ export interface Palette {
    * colour was already there.
    */
   readonly remember: (colour: RGBA) => boolean;
+  /**
+   * Replaces every colour, for a file being opened.
+   *
+   * **And not part of undo**, for the same reason `remember` is not: a palette entry is not a
+   * fact about the model's geometry, so rewinding it alongside would take a colour away from a
+   * model that is still using it. Opening a file sets the palette outside the history entirely,
+   * which is the honest description of what happened — the colours arrived with the parts.
+   *
+   * **Capped at `PALETTE_LIMIT` like `remember`, dropping from the end.** A file may name more
+   * colours than the panel shows, and the alternative to dropping is showing a list whose length
+   * a file decides.
+   */
+  readonly set: (colours: readonly RGBA[]) => void;
   /** Forgets every colour. */
   readonly clear: () => void;
 }
@@ -98,6 +111,14 @@ export const createPalette = (initial: readonly RGBA[] = []): Palette => {
 
     clear: () => {
       setColours([]);
+    },
+
+    set: (incoming) => {
+      // **Written as one array rather than through `remember` in a loop**, because `remember`
+      // reads `colours()` before writing and Solid 2 defers the write — so thirty-two calls in a
+      // row would each compose against the same stale list and the last one would win. The
+      // updater form composes against the pending value, which is what it is for.
+      setColours([...incoming].slice(0, PALETTE_LIMIT));
     },
   };
 };

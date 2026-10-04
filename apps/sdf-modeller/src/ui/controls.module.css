@@ -1,0 +1,237 @@
+/**
+ * The controls every part of this interface is built from: buttons, tabs, popovers and the bar
+ * they gather into.
+ *
+ * ## The tokens, and why there are six
+ *
+ * **One spacing unit and one control size, and every other measurement is a multiple of one of
+ * them.** That is what makes the interface read as one thing: a gap is the same wherever it
+ * appears, a control is the same size whatever is in it, and a change to either is one number
+ * rather than a sweep through a file. The sibling's `index.css` states the same two values and
+ * this is that, with `--size` at the touch size rather than the desktop one.
+ *
+ * `--size: 44px` is deliberately larger than the 36px the sibling uses. That application is
+ * desktop-first with a phone layout; this one is a canvas you put a finger on, and 44px is the
+ * guideline for that. It is one number, so everything derived from it — the dialogue's
+ * clearance, the grid columns — moves with it.
+ */
+
+/*
+ * The tokens themselves are in `../index.css`, because the shell uses them too and two files
+ * both declaring `--ui-size` is one of them being wrong.
+ *
+ * **`--ui-size: 44px` is the touch guideline rather than the sibling's 36px**, because this is a
+ * canvas a finger goes on and has one control size with no desktop-only affordances. It is one
+ * number, so the dialogue's clearance and the grid columns below all move with it.
+ */
+
+/*
+ * ## A button is at least `--ui-size` square, and disabled is grey text
+ *
+ * **Disabled by colour and not by opacity.** An opacity change lowers the contrast of the label
+ * against the background, and a control somebody can see is a control somebody can understand
+ * why is not working. Colour alone keeps the text readable and leaves the control in the tab
+ * order, which is where somebody who is navigating by keyboard needs to find it.
+ */
+.button {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-margin);
+  justify-content: start;
+
+  min-width: var(--ui-size);
+  min-height: var(--ui-size);
+  padding: var(--ui-margin);
+
+  color: var(--ui-light-grey);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--ui-size) / 4);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  touch-action: manipulation;
+
+  /* **Optically rather than actually.**** A label with a glyph before it and nothing after it
+   * reads as left-heavy, so the label gets trailing air and the pair looks centred.
+   */
+  > span {
+    padding-right: var(--ui-margin);
+  }
+
+  &:not([disabled]):hover {
+    color: var(--ui-front);
+  }
+
+  &[disabled] {
+    color: var(--ui-dark-grey);
+    cursor: default;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--ui-light-grey);
+    outline-offset: -2px;
+  }
+}
+
+/*
+ * **A labelled button centres its label and lets the text ellipsis, rather than the button
+ * growing.**
+ *
+ * `min-width: 0` on the label is what makes the ellipsis possible inside a grid track, and it is
+ * the one declaration whose absence turns "Duck.sdfmod" into a button that pushes its neighbours
+ * off the edge of the row.
+ */
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A tab is a button whose selected state is carried by `aria-selected` rather than a class. */
+.tab {
+  display: grid;
+  justify-content: center;
+  align-items: center;
+  gap: var(--ui-margin);
+
+  min-width: var(--ui-size);
+  min-height: var(--ui-size);
+  padding: 0 calc(var(--ui-margin) * 1.5);
+
+  color: var(--ui-grey);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: calc(var(--ui-size) / 4);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  touch-action: manipulation;
+
+  &:not([disabled]):not([aria-selected="true"]):hover {
+    color: var(--ui-light-grey);
+    border-color: var(--ui-grey);
+  }
+
+  &[aria-selected="true"] {
+    color: var(--ui-front);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.24);
+  }
+
+  &[disabled] {
+    color: var(--ui-dark-grey);
+    cursor: default;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--ui-light-grey);
+    outline-offset: -2px;
+  }
+}
+
+/** Every glyph is a square of its own, so labels line up across a row. */
+.icon {
+  flex: none;
+  align-content: center;
+  min-width: calc(var(--ui-size) - var(--ui-margin) * 3);
+  min-height: calc(var(--ui-size) - var(--ui-margin) * 3);
+
+  svg {
+    width: 100%;
+    height: 100%;
+  }
+}
+
+/*
+ * ## A bar is a floating pill, and the only thing in an overlay that takes presses
+ *
+ * **Every overlay in this application is `pointer-events: none`** so that the strip of screen it
+ * occupies is still part of the model you can orbit. A bar is the escape from that: it asks for
+ * the presses on itself and only itself.
+ *
+ * `flex-flow: column wrap` with `max-height: 100%` is the whole responsive story — a screen too
+ * short to stand the controls in spills them into another column beside rather than off the
+ * bottom, with no media query and no scrolling.
+ */
+.bar {
+  display: flex;
+  flex-flow: column wrap;
+  align-content: flex-start;
+  justify-content: flex-end;
+  gap: var(--ui-margin);
+  max-height: 100%;
+
+  padding: var(--ui-margin);
+  background: var(--ui-back);
+  border: 1px solid var(--ui-grey);
+  border-radius: var(--ui-size);
+
+  pointer-events: all;
+}
+
+/*
+ * ## A popover
+ *
+ * **`inset: unset` and `position: absolute`, and they come first.** The user agent gives every
+ * `[popover]` `position: fixed; inset: 0; margin: auto`, which centres it; `margin: auto` in
+ * particular silently defeats `left: anchor(left)` by centring the box within the anchored edge.
+ * A rule that sets a position without these two is a rule that does not work, which is why every
+ * popover stylesheet in this application opens with them.
+ */
+.popover {
+  inset: unset;
+  position: absolute;
+  margin: 0;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-margin);
+  width: max-content;
+  min-width: 12rem;
+  max-width: min(24rem, calc(100vw - 2rem));
+
+  padding: var(--ui-margin);
+  background: var(--ui-back);
+  border: 1px solid var(--ui-grey);
+  border-radius: calc(var(--ui-size) / 3);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  color: inherit;
+  font: inherit;
+
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/*
+ * ## A number in a row, as label / field / unit
+ *
+ * **Three columns rather than one**, because the label says what the number is and the unit says
+ * what it is measured in, and those are two separate facts. `Height 100` and `Height 100 mm`
+ * read differently when one of them is wrong.
+ */
+.field {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ui-margin);
+  width: 100%;
+  color: var(--ui-grey);
+  font-size: 0.85rem;
+}
+
+.field input {
+  min-width: 0;
+  min-height: var(--ui-size);
+  padding: 0 var(--ui-margin);
+  color: var(--ui-front);
+  background: var(--ui-back);
+  border: 1px solid var(--ui-grey);
+  border-radius: calc(var(--ui-size) / 4);
+  font: inherit;
+  font-size: 0.85rem;
+  touch-action: manipulation;
+}

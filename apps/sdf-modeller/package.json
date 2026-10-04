@@ -27,6 +27,7 @@
     "@random-mesh/rmsl": "catalog:",
     "@solidjs/signals": "catalog:",
     "@solidjs/web": "catalog:",
+    "jszip": "catalog:",
     "solid-js": "catalog:"
   },
   "devDependencies": {

@@ -22,3 +22,20 @@ body,
 body {
   background: #111114;
 }
+
+/*
+ * The two tokens every measurement in this application is a multiple of, declared here rather
+ * than in `ui/controls.module.css` so that the shell and the controls agree on them by
+ * construction. See that file's header for why there are six of them and why `--ui-size` is the
+ * touch size rather than the sibling's 36px.
+ */
+:root {
+  --ui-margin: 5px;
+  --ui-size: 44px;
+
+  --ui-front: #e6e6ea;
+  --ui-back: #17171c;
+  --ui-grey: #707070;
+  --ui-light-grey: #a9a9a9;
+  --ui-dark-grey: #343434;
+}

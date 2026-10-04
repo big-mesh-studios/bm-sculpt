@@ -97,6 +97,22 @@ export interface ModelStore {
   readonly part: (id: string) => Part | undefined;
   readonly select: (id: string | undefined) => void;
 
+  /**
+   * A part id nothing in this model is using.
+   *
+   * **The store hands these out rather than the panel that adds parts**, for two reasons and
+   * the second is the one that bit. The first is that two callers must not be able to hand out
+   * the same id, which is what a shared allocator is for. The second is that **opening a file
+   * brings ids with it**: a file saved with `part-1`, `part-2` and `part-3` would otherwise be
+   * followed by a panel whose counter was still at one, and the next part a person added would
+   * be refused by `add` for colliding with a part that is already on screen. So this skips any
+   * id the model currently holds.
+   *
+   * Never reuses a number either, because `Part.id` promises that and an undo entry, a selection
+   * and a save file all refer to an id meaning one thing at one time.
+   */
+  readonly nextId: () => string;
+
   /** Adds a part and selects it. Refused above `MAX_PARTS`. */
   readonly add: (part: Part) => boolean;
   /** Removes a part. Refused for an id that is not there. */
@@ -110,6 +126,19 @@ export interface ModelStore {
    */
   readonly transform: (id: string, change: PartTransform) => boolean;
 
+  /**
+   * Replaces the whole model, as one undoable step.
+   *
+   * **One step rather than a removal per part**, because a person who opens a file and presses
+   * ctrl-z wants the model they had, not the model minus the parts the file happened to add.
+   * A hundred removals would also be a hundred history entries against a limit of a hundred.
+   *
+   * **Refused for more than `MAX_PARTS` parts or for two parts sharing an id.** The first is
+   * the budget `add` enforces and a file is not a way around it; the second would make a
+   * selection, an undo entry and a save file each ambiguous about which part they name.
+   */
+  readonly load: (parts: readonly Part[], label: string) => boolean;
+
   readonly undo: () => void;
   readonly redo: () => void;
 }
@@ -122,6 +151,16 @@ export interface ModelStore {
  * rebuild's worst case, which is what the meshing budget assumes it has.
  */
 export const MAX_PARTS = 512;
+
+/**
+ * The next part number.
+ *
+ * **Module state, and that is the point.** An id has to be unique in a model, and a counter
+ * held by whichever component happened to add a part last cannot be — two panels, or a panel
+ * and a keyboard shortcut, would both start at one. See `ModelStore.nextId`, which also skips
+ * ids the model already holds so that opening a file cannot collide with it.
+ */
+let handed = 1;
 
 const sameVec3 = (a: Vec3, b: Vec3): boolean =>
   a.x === b.x && a.y === b.y && a.z === b.z;
@@ -219,6 +258,19 @@ export const createModelStore = (initial: readonly Part[] = []): ModelStore => {
       setSelected(
         id !== undefined && parts().some((p) => p.id === id) ? id : undefined,
       );
+    },
+
+    nextId: () => {
+      // **The skip is what makes opening a file safe, and it is why this is not a parse of the
+      // ids already held.** A file's ids are caller-chosen — `body`, `arm`, whatever — so there
+      // is no numbering in them to continue from, and a counter that tried to resume from the
+      // highest `part-N` it could find would miss any id that is not of that shape. Asking the
+      // model what it holds is a linear scan of at most `MAX_PARTS` entries, once per tap.
+      let candidate = `part-${handed++}`;
+      while (parts().some((part) => part.id === candidate)) {
+        candidate = `part-${handed++}`;
+      }
+      return candidate;
     },
 
     add: (part) => {
@@ -323,6 +375,49 @@ export const createModelStore = (initial: readonly Part[] = []): ModelStore => {
             shape: nextShape,
           }),
         invert: () => replace(id, before),
+      });
+      return true;
+    },
+
+    load: (incoming, label) => {
+      if (incoming.length > MAX_PARTS) return false;
+
+      // **Both refusals checked before anything is written**, so a refused load leaves the
+      // model exactly as it was rather than half-replaced. `add` refuses a duplicate id for the
+      // same reason and `load` cannot be a way around it.
+      const seen = new Set<string>();
+      for (const part of incoming) {
+        if (seen.has(part.id)) return false;
+        seen.add(part.id);
+      }
+
+      // **Captured before the write, not read after it.** Solid 2 defers a signal write until
+      // the batch is flushed, so a `parts()` read after `setParts` is the *old* list — which
+      // would make `invert` restore the model that was just loaded.
+      const before = parts();
+      const wasSelected = selected();
+      const next = [...incoming];
+      // **The first part selected rather than nothing**, because a model with parts in it and
+      // no selection shows an empty transform panel, which reads as a broken application
+      // rather than as "nothing is selected".
+      const nextSelected = next[0]?.id;
+
+      const install = (): void => {
+        setParts(next);
+        setSelected(nextSelected);
+      };
+
+      install();
+      record({
+        label,
+        apply: install,
+        // **The selection goes back to what it was, not to the first part.** Undoing an open is
+        // getting back to the state before it, and the part that happened to be selected before
+        // is part of that state.
+        invert: () => {
+          setParts(before);
+          setSelected(wasSelected);
+        },
       });
       return true;
     },

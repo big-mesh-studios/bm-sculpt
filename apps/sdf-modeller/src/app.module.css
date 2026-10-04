@@ -219,6 +219,78 @@
   cursor: default;
 }
 
+/*
+ * ## The "Your files" dialogue
+ *
+ * **All of its positioning lives here rather than in `ui/files-panel.module.css`**, and that is
+ * the arrangement worth copying: one stylesheet owns the whole screen's composition instead of
+ * each component owning a piece of it. The sibling does the same thing, and the reason is that a
+ * dialogue that positions itself has to know what is around it, and what is around it is the
+ * shell.
+ */
+.filesDialog {
+  /*
+   * **The room given away to the shell**, so the tools and the panels stay visible around the
+   * dialogue rather than being covered by it. Expressed in the same tokens as everything else, so
+   * it tracks `--ui-size` when that changes.
+   */
+  --clearance: calc(var(--ui-size) * 2 + var(--ui-margin) * 4);
+
+  /*
+   * **`margin: auto` and it is not optional.** A modal dialogue is centred by the browser using
+   * exactly that, and the baseline stylesheet zeroes every margin — so it has to be asked for
+   * again here rather than left to have been taken away.
+   *
+   * **`max-width`/`max-height: none` and `padding: 0`** for the same reason in the other
+   * direction: the UA's defaults are `fit-content` and a padding, and a dialogue sized by its
+   * content is a dialogue that cannot hold a grid of cards.
+   */
+  position: fixed;
+  inset: 0;
+  margin: auto;
+
+  width: calc(100vw - var(--clearance));
+  height: calc(100dvh - var(--clearance));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+
+  overflow: hidden;
+  color: var(--ui-front);
+  background: var(--ui-back);
+  border: 1px solid var(--ui-grey);
+  border-radius: calc(var(--ui-size) / 3);
+
+  /*
+   * **A flat scrim and no blur.** A backdrop that blurs the model behind it costs a filter over
+   * the whole viewport every frame it is shown, on a canvas application where the frame is the
+   * expensive thing.
+   */
+  &::backdrop {
+    background: rgb(0 0 0 / 40%);
+  }
+}
+
+/*
+ * ## On a screen this narrow the dialogue takes the whole window
+ *
+ * **One variable flipping changes both dimensions**, because `width` and `height` are written
+ * against it. There is no room to give away to a backdrop at this size, and no point in a click
+ * outside that has nowhere to land — so the dialogue's own close button stands in for it.
+ *
+ * The 500px is the same number the sibling uses, and the same one its `narrow()` reports to
+ * Solid: one breakpoint expressed twice, once for layout and once for behaviour, because a media
+ * query cannot tell a component what to do.
+ */
+@media (max-width: 500px) {
+  .filesDialog {
+    --clearance: 0px;
+
+    border: 0;
+    border-radius: 0;
+  }
+}
+
 .hint {
   font-size: 0.7rem;
   color: #707070;
@@ -412,6 +484,78 @@
     flex-wrap: wrap;
     padding-left: max(var(--ui-margin), var(--ui-safe-left, 0px));
     padding-right: max(var(--ui-margin), var(--ui-safe-right, 0px));
+  }
+
+  /*
+ * ## The "Your files" dialogue
+ *
+ * **All of its positioning lives here rather than in `ui/files-panel.module.css`**, and that is
+ * the arrangement worth copying: one stylesheet owns the whole screen's composition instead of
+ * each component owning a piece of it. The sibling does the same thing, and the reason is that a
+ * dialogue that positions itself has to know what is around it, and what is around it is the
+ * shell.
+ */
+  .filesDialog {
+    /*
+   * **The room given away to the shell**, so the tools and the panels stay visible around the
+   * dialogue rather than being covered by it. Expressed in the same tokens as everything else, so
+   * it tracks `--ui-size` when that changes.
+   */
+    --clearance: calc(var(--ui-size) * 2 + var(--ui-margin) * 4);
+
+    /*
+   * **`margin: auto` and it is not optional.** A modal dialogue is centred by the browser using
+   * exactly that, and the baseline stylesheet zeroes every margin — so it has to be asked for
+   * again here rather than left to have been taken away.
+   *
+   * **`max-width`/`max-height: none` and `padding: 0`** for the same reason in the other
+   * direction: the UA's defaults are `fit-content` and a padding, and a dialogue sized by its
+   * content is a dialogue that cannot hold a grid of cards.
+   */
+    position: fixed;
+    inset: 0;
+    margin: auto;
+
+    width: calc(100vw - var(--clearance));
+    height: calc(100dvh - var(--clearance));
+    max-width: none;
+    max-height: none;
+    padding: 0;
+
+    overflow: hidden;
+    color: var(--ui-front);
+    background: var(--ui-back);
+    border: 1px solid var(--ui-grey);
+    border-radius: calc(var(--ui-size) / 3);
+
+    /*
+   * **A flat scrim and no blur.** A backdrop that blurs the model behind it costs a filter over
+   * the whole viewport every frame it is shown, on a canvas application where the frame is the
+   * expensive thing.
+   */
+    &::backdrop {
+      background: rgb(0 0 0 / 40%);
+    }
+  }
+
+  /*
+ * ## On a screen this narrow the dialogue takes the whole window
+ *
+ * **One variable flipping changes both dimensions**, because `width` and `height` are written
+ * against it. There is no room to give away to a backdrop at this size, and no point in a click
+ * outside that has nowhere to land — so the dialogue's own close button stands in for it.
+ *
+ * The 500px is the same number the sibling uses, and the same one its `narrow()` reports to
+ * Solid: one breakpoint expressed twice, once for layout and once for behaviour, because a media
+ * query cannot tell a component what to do.
+ */
+  @media (max-width: 500px) {
+    .filesDialog {
+      --clearance: 0px;
+
+      border: 0;
+      border-radius: 0;
+    }
   }
 
   .hint {

@@ -322,3 +322,189 @@ describe("a transform", () => {
     expect(store.part("a")!.orientation).toEqual(fromEuler(0, 0, Math.PI / 2));
   });
 });
+
+describe("nextId", () => {
+  it("hands out a fresh number each time", () => {
+    const store = createModelStore();
+    expect(store.nextId()).not.toBe(store.nextId());
+  });
+
+  it("skips an id the model already holds", () => {
+    // **The reason this is on the store rather than in the panel.** A file saved with
+    // `part-1`, `part-2` and `part-3` would otherwise be followed by a counter that was still
+    // near one, and the next part a person added would be refused for colliding with a part
+    // already on screen — a button that silently does nothing.
+    const store = createModelStore([
+      placedPart("part-1", { type: "Sphere", radius: 1 }, { x: 0, y: 0, z: 0 }),
+      placedPart("part-2", { type: "Sphere", radius: 1 }, { x: 2, y: 0, z: 0 }),
+    ]);
+
+    const handed = store.nextId();
+    store.add(
+      placedPart(handed, { type: "Sphere", radius: 1 }, { x: 4, y: 0, z: 0 }),
+    );
+    settle();
+
+    expect(store.parts().filter((part) => part.id === handed)).toHaveLength(1);
+  });
+
+  it("skips an id that is not of the shape it hands out", () => {
+    // **Because it asks the model rather than parsing the ids.** A file's ids are
+    // caller-chosen, so there is no numbering in them to resume from, and a counter that
+    // continued from the highest `part-N` it could find would miss anything else.
+    const store = createModelStore([
+      placedPart("head", { type: "Sphere", radius: 1 }, { x: 0, y: 0, z: 0 }),
+    ]);
+    let handed = store.nextId();
+    while (handed === "head") handed = store.nextId();
+
+    expect(handed).not.toBe("head");
+  });
+
+  it("does not reuse a number after the part holding it is deleted", () => {
+    // **`Part.id` promises this**, and a selection, an undo entry and a save file all refer to
+    // an id meaning one thing at one time.
+    const store = createModelStore();
+    const first = store.nextId();
+    store.add(
+      placedPart(first, { type: "Sphere", radius: 1 }, { x: 0, y: 0, z: 0 }),
+    );
+    settle();
+    store.remove(first);
+    settle();
+
+    expect(store.nextId()).not.toBe(first);
+  });
+});
+
+describe("load", () => {
+  const three = [sphereAt("a", 0), sphereAt("b", 2), sphereAt("c", 4)];
+
+  it("replaces the whole model", () => {
+    const store = createModelStore(three);
+    expect(store.load([sphereAt("x", 9)], "open")).toBe(true);
+    settle();
+    expect(shape(store)).toEqual(["x@9"]);
+  });
+
+  it("is one undo step rather than a removal per part", () => {
+    // **What a person who opens a file and presses ctrl-z wants.** The model they had, not the
+    // model minus the parts the file happened to add — and a hundred removals would be a
+    // hundred entries against a limit of a hundred.
+    const store = createModelStore(three);
+    store.load([sphereAt("x", 9), sphereAt("y", 11)], "open");
+    settle();
+
+    store.undo();
+    settle();
+    expect(shape(store)).toEqual(["a@0", "b@2", "c@4"]);
+  });
+
+  it("redoes as the load it undid", () => {
+    const store = createModelStore(three);
+    store.load([sphereAt("x", 9)], "open");
+    settle();
+    store.undo();
+    settle();
+    store.redo();
+    settle();
+    expect(shape(store)).toEqual(["x@9"]);
+  });
+
+  it("puts the old parts back where they were, not at the end", () => {
+    // **Order is the fold order**, so a restore that appended would produce a different solid
+    // from the same parts — invisibly, because a union looks the same however it is arranged,
+    // until a `Subtract` is in the list.
+    const store = createModelStore(three);
+    store.load([sphereAt("x", 9)], "open");
+    settle();
+    store.undo();
+    settle();
+    store.add(sphereAt("added", 6));
+    settle();
+
+    expect(shape(store)).toEqual(["a@0", "b@2", "c@4", "added@6"]);
+  });
+
+  it("throws the redo branch away, like any other edit", () => {
+    const store = createModelStore(three);
+    store.transform("a", { origin: { x: 1, y: 0, z: 0 } });
+    settle();
+    store.undo();
+    settle();
+    store.load([sphereAt("x", 9)], "open");
+    settle();
+
+    expect(store.canRedo()).toBe(false);
+  });
+
+  it("labels the step, so ctrl-z says what it is undoing", () => {
+    const store = createModelStore(three);
+    store.load([sphereAt("x", 9)], "open duck.sdfmod");
+    settle();
+    expect(store.undoLabel()).toBe("open duck.sdfmod");
+  });
+
+  it("restores the selection it had, not the first part of the new model", () => {
+    // **Undoing an open is getting back to the state before it**, and which part happened to
+    // be selected is part of that state.
+    const store = createModelStore(three);
+    store.select("b");
+    settle();
+    store.load([sphereAt("x", 9)], "open");
+    settle();
+    expect(store.selected()).toBe("x");
+
+    store.undo();
+    settle();
+    expect(store.selected()).toBe("b");
+  });
+
+  it("selects the first part of what it loaded", () => {
+    // **Rather than nothing**, because a model with parts in it and no selection shows an
+    // empty transform panel, which reads as a broken application.
+    const store = createModelStore(three);
+    store.load([sphereAt("x", 9), sphereAt("y", 11)], "open");
+    settle();
+    expect(store.selected()).toBe("x");
+  });
+
+  it("selects nothing when it loaded nothing", () => {
+    const store = createModelStore(three);
+    store.load([], "open");
+    settle();
+    expect(store.selected()).toBeUndefined();
+  });
+
+  it("refuses more parts than the store would hold", () => {
+    // **And refuses them before writing anything**, so the model is left exactly as it was
+    // rather than half-replaced.
+    const store = createModelStore(three);
+    const tooMany = Array.from({ length: MAX_PARTS + 1 }, (_, i) =>
+      sphereAt(`p${i}`, i),
+    );
+
+    expect(store.load(tooMany, "open")).toBe(false);
+    settle();
+    expect(shape(store)).toEqual(["a@0", "b@2", "c@4"]);
+    expect(store.canUndo()).toBe(false);
+  });
+
+  it("refuses two parts sharing one id", () => {
+    // **Because `add` refuses them too, and a load must not be a way around that.** Two ids
+    // that are the same string are one part as far as a selection is concerned.
+    const store = createModelStore(three);
+    expect(store.load([sphereAt("same", 0), sphereAt("same", 2)], "open")).toBe(
+      false,
+    );
+    settle();
+    expect(shape(store)).toEqual(["a@0", "b@2", "c@4"]);
+  });
+
+  it("loads an empty model, which is a thing a file can hold", () => {
+    const store = createModelStore(three);
+    expect(store.load([], "open")).toBe(true);
+    settle();
+    expect(shape(store)).toEqual([]);
+  });
+});

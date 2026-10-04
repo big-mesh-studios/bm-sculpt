@@ -178,6 +178,9 @@ importers:
       '@solidjs/web':
         specifier: 'catalog:'
         version: 2.0.0-beta.29(solid-js@2.0.0-beta.29)
+      jszip:
+        specifier: 'catalog:'
+        version: 3.10.2
       solid-js:
         specifier: 'catalog:'
         version: 2.0.0-beta.29

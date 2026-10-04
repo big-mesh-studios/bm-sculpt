@@ -52,15 +52,6 @@ const defaultShape = (type: ShapeType): Part["shape"] => {
   }
 };
 
-/**
- * Ids are a counter rather than the primitive's name, because two capsules are two parts.
- *
- * **A counter in the store rather than in the panel**, so two panels — or a panel and a
- * keyboard shortcut — cannot both hand out the same id.
- */
-const nextId = (): string => `part-${nextId.n++}`;
-nextId.n = 1;
-
 export function PartsPanel(props: {
   store: ModelStore;
   primitives: readonly ShapeType[];
@@ -79,7 +70,10 @@ export function PartsPanel(props: {
               disabled={full()}
               onClick={() => {
                 props.store.add(
-                  placedPart(nextId(), defaultShape(primitive), {
+                  // **Ids come from the store, not from a counter here.** Two capsules are two
+                  // parts, so a name would not do — and a counter in this panel could not know
+                  // that a file just opened with `part-1` in it. See `ModelStore.nextId`.
+                  placedPart(props.store.nextId(), defaultShape(primitive), {
                     x: 0,
                     y: 0,
                     z: 0,
