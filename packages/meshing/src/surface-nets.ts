@@ -165,20 +165,53 @@ export class SurfaceNetsScratch {
   /** The eight corner samples of the cell being considered. */
   readonly corners = new Float32Array(8);
 
-  constructor(samplesPerAxis: number, maxExtra = 0) {
-    const n = samplesPerAxis;
-    const grid = SURFACE_NETS_GRID(n, maxExtra);
-    const cells = SURFACE_NETS_CELLS(n, maxExtra);
-    this.samples = new Float32Array(grid ** 3);
-    this.cellVertex = new Int32Array(cells ** 3);
+  /**
+   * @param samplesPerAxis samples on each axis, or the three counts when they differ.
+   *
+   * **Per-axis because a region on a sphere is not cubic.** A patch of a cube face is square in its
+   * own two parameters but is sampled across a radial depth as well, and the three counts are set
+   * by what is being sampled rather than by the shape of the chunk. A scalar constructor is kept
+   * because every existing caller is cubic and passing three equal numbers to say so is noise.
+   */
+  constructor(
+    samplesPerAxis: number | readonly [number, number, number],
+    maxExtra: number | readonly [number, number, number] = 0,
+  ) {
+    const [nx, ny, nz] = perAxis(samplesPerAxis);
+    const [ex, ey, ez] = perAxis(maxExtra);
+    const gx = SURFACE_NETS_GRID(nx, ex);
+    const gy = SURFACE_NETS_GRID(ny, ey);
+    const gz = SURFACE_NETS_GRID(nz, ez);
+    const cx = SURFACE_NETS_CELLS(nx, ex);
+    const cy = SURFACE_NETS_CELLS(ny, ey);
+    const cz = SURFACE_NETS_CELLS(nz, ez);
+    this.samples = new Float32Array(gx * gy * gz);
+    this.cellVertex = new Int32Array(cx * cy * cz);
   }
 }
+
+/**
+ * Three counts from either three counts or one.
+ *
+ * **A scalar means all three, which is every existing call.** The alternative — three required
+ * numbers everywhere — would put `[32, 32, 32]` at nine call sites to say "a cube", and the ones
+ * that are genuinely cubic would stop looking cubic.
+ */
+const perAxis = (
+  n: number | readonly [number, number, number],
+): readonly [number, number, number] => (typeof n === "number" ? [n, n, n] : n);
 
 export interface SurfaceNetsParams {
   /** The world position of the chunk's own first sample's voxel. */
   origin: readonly [number, number, number];
-  /** Samples this chunk owns per axis. The sample grid is two larger. */
-  samples: number;
+  /**
+   * Samples this chunk owns, per axis. The sample grid is two larger on each.
+   *
+   * A scalar is all three, which is every chunk on a cubic lattice. **A patch of a cube face is
+   * not cubic** — it is square in its two face parameters and sampled across a radial depth — so it
+   * passes three.
+   */
+  samples: number | readonly [number, number, number];
   /**
    * Cells this chunk owns beyond `samples`, on each axis.
    *
@@ -216,6 +249,32 @@ export interface SurfaceNetsParams {
    * interpolation crosses zero at the same *fraction* of an edge whatever its length.
    */
   lanes?: SampleLanes;
+  /**
+   * Where the sample at a grid index sits, given the index rather than the position.
+   *
+   * **This is what makes a warped region meshable, and `lanes` could not do it.** `lanes` gives each
+   * axis its own list of positions, so it describes a grid whose sample positions are *separable* —
+   * axis `x`'s positions do not depend on `y` or `z`. A region on a sphere is not separable: the
+   * sample at face parameters `(u, v)` and radial depth `w` sits at `directionAt(u, v) · (r + w)`,
+   * so every position depends on all three indices at once. No product of three per-axis lists can
+   * express that.
+   *
+   * **Positions and not values, because a vertex is placed from positions.** A value-only hook was
+   * tried first and it silently produced nonsense: the samples were right, and the vertices came
+   * out at a radius of 8 on a planet of radius 4000, because a dual vertex is placed by
+   * interpolating along the cell's edges and that interpolation was reading the *lane* positions —
+   * which for a warped grid are the placeholders above. There is no way to place a vertex from
+   * values alone.
+   *
+   * Given one, `lanes`, `origin` and `sampleSize` are unused — but they are still required, because
+   * `lanes` is how a caller says where a *separable* grid runs and the two are alternatives rather
+   * than additions.
+   */
+  positionAt?: (
+    x: number,
+    y: number,
+    z: number,
+  ) => readonly [number, number, number];
   sampler: SurfaceSampler;
   out: SurfaceOutput;
   scratch: SurfaceNetsScratch;
@@ -263,9 +322,10 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
   // extra cell, which is every call but one kind, so the general form costs nothing to
   // read: `grid` is `owned + 2` and `cells` is one fewer than that.
   const extra = params.extra ?? NO_EXTRA;
-  const ownedX = samples + extra[0];
-  const ownedY = samples + extra[1];
-  const ownedZ = samples + extra[2];
+  const counts = perAxis(samples);
+  const ownedX = counts[0] + extra[0];
+  const ownedY = counts[1] + extra[1];
+  const ownedZ = counts[2] + extra[2];
   const gridX = SURFACE_NETS_GRID(ownedX);
   const gridY = SURFACE_NETS_GRID(ownedY);
   const gridZ = SURFACE_NETS_GRID(ownedZ);
@@ -300,16 +360,36 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
 
   const sample = (x: number, y: number, z: number): number =>
     scratch.samples[(z * gridY + y) * gridX + x];
-  for (let z = 0; z < gridZ; z++) {
-    const wz = pz[z] as number;
-    for (let y = 0; y < gridY; y++) {
-      const wy = py[y] as number;
-      for (let x = 0; x < gridX; x++) {
-        scratch.samples[(z * gridY + y) * gridX + x] = sampler.distance(
-          px[x] as number,
-          wy,
-          wz,
-        );
+
+  // **Two fill loops, not one with a branch.** The separable case is the hot path for every chunk
+  // on a cubic lattice, and a branch there would sit in the innermost loop of the densest routine
+  // in the project. The warped case is rare enough that duplicating four lines is the cheaper trade.
+  const positionAt = params.positionAt;
+  if (positionAt) {
+    for (let z = 0; z < gridZ; z++) {
+      for (let y = 0; y < gridY; y++) {
+        for (let x = 0; x < gridX; x++) {
+          const p = positionAt(x, y, z);
+          scratch.samples[(z * gridY + y) * gridX + x] = sampler.distance(
+            p[0],
+            p[1],
+            p[2],
+          );
+        }
+      }
+    }
+  } else {
+    for (let z = 0; z < gridZ; z++) {
+      const wz = pz[z] as number;
+      for (let y = 0; y < gridY; y++) {
+        const wy = py[y] as number;
+        for (let x = 0; x < gridX; x++) {
+          scratch.samples[(z * gridY + y) * gridX + x] = sampler.distance(
+            px[x] as number,
+            wy,
+            wz,
+          );
+        }
       }
     }
   }
@@ -350,24 +430,72 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
           crossings++;
         }
 
-        // The average is in the cell's own corner coordinates, 0..1, on each axis. That is
-        // a *fraction of the cell*, not a distance, which is why it survives the cell
-        // being a different width from its neighbours: the cell's own two samples give
-        // where its low corner is and how wide it is, and the fraction says how far along
-        // it the crossing fell. Subtracting a half centres it on the cell, which is what
-        // makes it a dual vertex rather than a point somewhere near one.
+        // Where the vertex goes, and the reason there are two ways to work it out.
         //
-        // Cell `c` is the cell of world voxel `origin + c - 1`, so its own samples are
-        // `c` and `c + 1` on the lane and its centre is their middle.
-        const worldX =
-          (px[cx] as number) +
-          (sumX / crossings) * ((px[cx + 1] as number) - (px[cx] as number));
-        const worldY =
-          (py[cy] as number) +
-          (sumY / crossings) * ((py[cy + 1] as number) - (py[cy] as number));
-        const worldZ =
-          (pz[cz] as number) +
-          (sumZ / crossings) * ((pz[cz + 1] as number) - (pz[cz] as number));
+        // **Separable: the average is in the cell's own corner coordinates, 0..1, on each axis.**
+        // That is a *fraction of the cell*, not a distance, which is why it survives the cell being
+        // a different width from its neighbours: the cell's own two samples give where its low
+        // corner is and how wide it is, and the fraction says how far along it the crossing fell.
+        // Subtracting a half centres it on the cell, which is what makes it a dual vertex rather
+        // than a point somewhere near one. Cell `c` is the cell of world voxel `origin + c - 1`,
+        // so its own samples are `c` and `c + 1` on the lane and its centre is their middle.
+        //
+        // **Warped: the same fractions, but interpolated between the corners' actual positions.**
+        // The separable arithmetic cannot be reused, because it assumes each axis moves at its own
+        // constant rate — which is exactly what a warped grid does not do. So each crossing is
+        // taken along its edge in three dimensions and the vertex is the mean of those points.
+        // This costs twelve position lookups per cell instead of six array reads, which is why it
+        // is not the default.
+        let worldX: number;
+        let worldY: number;
+        let worldZ: number;
+        if (positionAt) {
+          let ax = 0;
+          let ay = 0;
+          let az = 0;
+          let n = 0;
+          for (let e = 0; e < CELL_EDGES.length; e++) {
+            const ca = CELL_EDGES[e]![0];
+            const cb = CELL_EDGES[e]![1];
+            const [ax0, ay0, az0] = CORNER_OFFSETS[ca] as readonly [
+              number,
+              number,
+              number,
+            ];
+            const [bx0, by0, bz0] = CORNER_OFFSETS[cb] as readonly [
+              number,
+              number,
+              number,
+            ];
+            const va = sample(cx + ax0, cy + ay0, cz + az0);
+            const vb = sample(cx + bx0, cy + by0, cz + bz0);
+            if (va < 0 === vb < 0) continue;
+            const t = va / (va - vb);
+            const pa = positionAt(cx + ax0, cy + ay0, cz + az0);
+            const pb = positionAt(cx + bx0, cy + by0, cz + bz0);
+            ax += pa[0] + t * (pb[0] - pa[0]);
+            ay += pa[1] + t * (pb[1] - pa[1]);
+            az += pa[2] + t * (pb[2] - pa[2]);
+            n++;
+          }
+          // Both branches walk `CELL_EDGES`, so both count the same crossings and
+          // `crossings === n`. It is not asserted at runtime — a mismatch would divide by a count
+          // it did not earn, which is the kind of thing to catch in a test rather than in the
+          // innermost loop of every mesh on the planet.
+          worldX = ax / crossings;
+          worldY = ay / crossings;
+          worldZ = az / crossings;
+        } else {
+          worldX =
+            (px[cx] as number) +
+            (sumX / crossings) * ((px[cx + 1] as number) - (px[cx] as number));
+          worldY =
+            (py[cy] as number) +
+            (sumY / crossings) * ((py[cy + 1] as number) - (py[cy] as number));
+          worldZ =
+            (pz[cz] as number) +
+            (sumZ / crossings) * ((pz[cz + 1] as number) - (pz[cz] as number));
+        }
 
         scratch.cellVertex[(cz * cellsY + cy) * cellsX + cx] = out.vertex(
           worldX,
@@ -472,8 +600,10 @@ const quadAcross = (
 };
 
 /** Scratch for a chunk meshing `samples` samples per axis, owning `maxExtra` more. */
-export const scratchFor = (samples: number, maxExtra = 0): SurfaceNetsScratch =>
-  new SurfaceNetsScratch(samples, maxExtra);
+export const scratchFor = (
+  samples: number | readonly [number, number, number],
+  maxExtra: number | readonly [number, number, number] = 0,
+): SurfaceNetsScratch => new SurfaceNetsScratch(samples, maxExtra);
 
 /** The default `extra`: a chunk that owns exactly the cells it was promised. */
 const NO_EXTRA: readonly [number, number, number] = [0, 0, 0];

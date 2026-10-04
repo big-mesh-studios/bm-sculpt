@@ -78,7 +78,7 @@ const model = (revision = 1): ModelMessage => ({
   revision,
   operations: new ArrayBuffer(8),
   paint: [],
-  base: "none",
+  base: undefined,
 });
 
 describe("the protocol", () => {
@@ -902,7 +902,7 @@ describe("the pool", () => {
       revision: 2,
       operations: new ArrayBuffer(8),
       paint: [],
-      base: "none",
+      base: undefined,
     });
 
     for (const fake of fakes) {

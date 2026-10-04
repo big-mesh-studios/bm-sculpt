@@ -11,23 +11,96 @@
 import { describe, expect, it } from "vitest";
 
 import { PerspectiveCamera } from "@random-mesh/rmsl/scene";
-import { Field, OperationBVH, makeOperation } from "@big-mesh-studios/csg";
+import {
+  DEFAULT_TERRAIN,
+  Field,
+  OperationBVH,
+  makeOperation,
+  terrainField,
+} from "@big-mesh-studios/csg";
 
 import type { InputController } from "../player/input";
 import type { Session } from "../session";
 import type { SculptSession } from "../sculpt";
 import type { Viewport } from "../render/viewport";
-import { Game, type GameOptions } from "./game";
+import { DEFAULT_SPACE_ALTITUDE, Game, type GameOptions } from "./game";
+import type { Player } from "../player/player";
+import { dot } from "@big-mesh-studios/core";
+
+/**
+ * A player's fall, as the one number the flight and no-clip tests care about.
+ *
+ * **The velocity's component along their own up**, which is what `vy` used to be outright. Read
+ * through the frame rather than off a field, so the tests say the same thing on a planet.
+ */
+const fallOf = (player: Player): number => dot(player.velocity, player.up);
+
+/** Sets a player's fall, leaving any horizontal motion alone. */
+const setFall = (player: Player, speed: number): void => {
+  const delta = speed - fallOf(player);
+  player.velocity = {
+    x: player.velocity.x + player.up.x * delta,
+    y: player.velocity.y + player.up.y * delta,
+    z: player.velocity.z + player.up.z * delta,
+  };
+};
+
+/**
+ * A player's heading, as the signed angle about their own up that world `+Z` is zero of.
+ *
+ * **Not derived from `right`, which cannot be.** `right` is defined as `forward × up`, so it is
+ * perpendicular to the look direction by construction and carries no information about which way
+ * round the player is facing. The angle comes from the look direction's own components against
+ * the tangent-plane projections of the world axes — which is exactly the pair the old `yaw` was,
+ * and the reason `yaw` was a world-axis quantity in the first place.
+ *
+ * On a flat frame with the player facing world `+Z` this is 0, and a positive angle is a turn
+ * toward world `+X`, which is the sign the old `yaw` had.
+ */
+const facingOf = (player: Player): number => {
+  const up = player.up;
+  const inPlane = (v: {
+    x: number;
+    y: number;
+    z: number;
+  }): { x: number; y: number; z: number } => {
+    const k = v.x * up.x + v.y * up.y + v.z * up.z;
+    const t = { x: v.x - up.x * k, y: v.y - up.y * k, z: v.z - up.z * k };
+    const l = Math.hypot(t.x, t.y, t.z) || 1;
+    return { x: t.x / l, y: t.y / l, z: t.z / l };
+  };
+  const heading = inPlane(player.forward);
+  const towardX = inPlane({ x: 1, y: 0, z: 0 });
+  const towardZ = inPlane({ x: 0, y: 0, z: 1 });
+  const across =
+    heading.x * towardX.x + heading.y * towardX.y + heading.z * towardX.z;
+  const along =
+    heading.x * towardZ.x + heading.y * towardZ.y + heading.z * towardZ.z;
+  return Math.atan2(-across, along);
+};
 
 /** A game whose player spawns on flat ground, over collaborators nothing reads. */
+/**
+ * A field whose surface is `y = 0`, which is what the spawn query now reads.
+ *
+ * **A real field rather than a stub, because the spawn asks it a question.** The spawn used to
+ * take the terrain's analytic height and never touched the field, so a mock could hand `Game` an
+ * empty object and the tests only exercised the flight and teleport paths. `spawnOnTheSurface`
+ * asks the world the same question the physics asks — a distance along the local up to the
+ * surface — so the mock has to be able to answer it, and a stub that cannot would fail every
+ * test in this file for a reason that has nothing to do with any of them.
+ */
+const flatCollisionField = (): SculptSession["collisionField"] =>
+  new Field(new OperationBVH([]), {
+    base: terrainField(DEFAULT_TERRAIN),
+    extent: terrainField(DEFAULT_TERRAIN),
+  });
+
 const game = (): Game =>
   new Game({
     session: {} as Session,
     sculpt: {
-      // Never read: the analytic height answers the spawn query instead, so the
-      // field is not sampled and its shape does not matter here.
-      collisionField: {} as SculptSession["collisionField"],
-      terrainHeight: () => 0,
+      collisionField: flatCollisionField(),
     } as unknown as SculptSession,
     viewport: {} as Viewport,
     input: {} as InputController,
@@ -56,22 +129,22 @@ describe("flight", () => {
     // walk left it, so a fall still in the first frame would carry the player
     // through whatever they were aiming at.
     const subject = game();
-    subject.player.vy = -180;
+    setFall(subject.player, -180);
     subject.player.onGround = true;
 
     subject.setFlying(true);
-    expect(subject.player.vy).toBe(0);
+    expect(fallOf(subject.player)).toBe(0);
     expect(subject.player.onGround).toBe(false);
   });
 
   it("leaves the fall alone on the way off, since the walk resumes it", () => {
     const subject = game();
     subject.setFlying(true);
-    subject.player.vy = 12;
+    setFall(subject.player, 12);
     subject.player.onGround = false;
 
     subject.setFlying(false);
-    expect(subject.player.vy).toBe(12);
+    expect(fallOf(subject.player)).toBe(12);
   });
 });
 
@@ -95,11 +168,11 @@ describe("no-clip", () => {
     // Same reason as flight: no-clip never settles a velocity itself, so the
     // one it inherits is the walk's.
     const subject = game();
-    subject.player.vy = -180;
+    setFall(subject.player, -180);
     subject.player.onGround = true;
 
     subject.setNoClip(true);
-    expect(subject.player.vy).toBe(0);
+    expect(fallOf(subject.player)).toBe(0);
     expect(subject.player.onGround).toBe(false);
   });
 
@@ -141,7 +214,10 @@ describe("teleporting the player", () => {
   it("faces them where they were told to face", () => {
     const subject = game();
     subject.teleportPlayer({ x: 0, y: 0, z: 0 }, 1.5);
-    expect(subject.player.yaw).toBe(1.5);
+    // **A heading angle about the player's own up, measured as a direction.** There is no `yaw`
+    // any more — it was a rotation about a world axis — so the assertion turns the angle back
+    // into the direction the player should be facing and compares that.
+    expect(facingOf(subject.player)).toBeCloseTo(1.5, 6);
   });
 
   it("leaves the facing alone when none was given", () => {
@@ -149,24 +225,21 @@ describe("teleporting the player", () => {
     // its bridge and says nothing about facing would otherwise snap them to
     // north, which is the one direction a bridge never goes.
     const subject = game();
-    subject.player.yaw = 2.5;
+    subject.teleportPlayer({ x: 0, y: 0, z: 0 }, 2.5);
+    const before = subject.player.forward;
     subject.teleportPlayer({ x: 10, y: 10, z: 10 });
-    expect(subject.player.yaw).toBe(2.5);
+    expect(subject.player.forward).toEqual(before);
   });
 
   it("discards the fall, so arriving on a platform is not a suggestion", () => {
     const subject = game();
-    subject.player.vy = -180;
-    subject.player.vx = 40;
-    subject.player.vz = -12;
+    subject.player.velocity = { x: 40, y: -180, z: -12 };
 
     subject.teleportPlayer({ x: 0, y: 30, z: 0 });
-    // **All three components, not just the fall.** Arriving with a sideways
+    // **The whole velocity, not just the fall.** Arriving with a sideways
     // velocity slides the player off the thing they were just placed on, and a
     // place cannot know that its own platform has an edge.
-    expect(subject.player.vy).toBe(0);
-    expect(subject.player.vx).toBe(0);
-    expect(subject.player.vz).toBe(0);
+    expect(subject.player.velocity).toEqual({ x: 0, y: 0, z: 0 });
   });
 });
 
@@ -232,11 +305,9 @@ describe("a place scaling the player's movement", () => {
     // slow world would make it walk at the default half — the opposite of asked.
     const subject = new Game({
       session: {} as Session,
+      // A real field, for the same reason as `game()` above: the spawn asks it for the surface.
       sculpt: {
-        collisionField: {} as SculptSession["collisionField"],
-        // Read once, by the spawn: a world built here has no terrain of its own,
-        // so the spawn has to come from somewhere.
-        terrainHeight: () => 0,
+        collisionField: flatCollisionField(),
       } as unknown as SculptSession,
       viewport: {} as Viewport,
       input: {} as InputController,
@@ -249,11 +320,9 @@ describe("a place scaling the player's movement", () => {
   it("unscales back to the world's own speed, not the default's", () => {
     const subject = new Game({
       session: {} as Session,
+      // A real field, for the same reason as `game()` above: the spawn asks it for the surface.
       sculpt: {
-        collisionField: {} as SculptSession["collisionField"],
-        // Read once, by the spawn: a world built here has no terrain of its own,
-        // so the spawn has to come from somewhere.
-        terrainHeight: () => 0,
+        collisionField: flatCollisionField(),
       } as unknown as SculptSession,
       viewport: {} as Viewport,
       input: {} as InputController,
@@ -474,5 +543,25 @@ describe("a place casting a ray", () => {
     // direction walks the tracer a hundred units in one step and overshoots the
     // slab entirely, which reads as "no surface" for every vertical ray.
     expect(far!.distance).toBeCloseTo(near!.distance, 0);
+  });
+});
+
+describe("placing the player in space", () => {
+  it("puts them at the altitude with flight on and no leftover fall", () => {
+    // The debug command's whole job: a player in space fast, without the climb. On a flat world the
+    // altitude is a world `y`, which is the branch this harness exercises.
+    const subject = game();
+    subject.player.velocity = { x: 4, y: -9, z: 2 };
+    const line = subject.placeInSpace(3000);
+    expect(subject.player.position.y).toBeCloseTo(3000, 6);
+    expect(subject.player.flying).toBe(true);
+    expect(subject.player.velocity).toEqual({ x: 0, y: 0, z: 0 });
+    expect(line).toContain("3000");
+  });
+
+  it("uses the game's default when given no altitude, so the number lives in one place", () => {
+    const subject = game();
+    expect(subject.placeInSpace()).toContain(String(DEFAULT_SPACE_ALTITUDE));
+    expect(subject.player.position.y).toBeCloseTo(DEFAULT_SPACE_ALTITUDE, 6);
   });
 });

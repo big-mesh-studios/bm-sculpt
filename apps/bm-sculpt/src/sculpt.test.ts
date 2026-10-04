@@ -68,7 +68,10 @@ const sessionOver = (
     session: stream.model,
     camera: camera(),
     operations,
-    terrain,
+    baseField:
+      terrain === undefined
+        ? undefined
+        : { kind: "terrain" as const, params: terrain },
   });
   return { session, ...stream };
 };

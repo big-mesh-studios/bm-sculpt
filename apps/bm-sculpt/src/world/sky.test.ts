@@ -17,6 +17,7 @@ import {
 } from "./day-night";
 import { SkyMaterial, createSky } from "./sky";
 import { FOV_Y } from "../render/viewport";
+import { ATMOSPHERE_HEIGHT, DEFAULT_PLANET_RADIUS } from "../render/atmosphere";
 
 /**
  * Compiling a material needs no graphics device.
@@ -103,6 +104,9 @@ describe("the sky dome compiles", () => {
       "uZenith",
       "uTwilight",
       "uStarTurn",
+      "uSkyRadius",
+      "uSkyAtmosphere",
+      "uSkyScale",
     ]) {
       expect(
         program.uniforms.map((u) => u.name),
@@ -330,13 +334,19 @@ describe("the starfield, on the CPU", () => {
   };
 
   /** One frame of the dome, with every binding a renderer would have supplied. */
-  const frame = (material: SkyMaterial, width: number, height: number) =>
+  const frame = (
+    material: SkyMaterial,
+    width: number,
+    height: number,
+    eye: [number, number, number] = [0, 0, 0],
+    elevationDeg: number = ELEVATION_DEG,
+  ) =>
     render(
       fromProgram(material.build(new Scene()), {
         // Device pixels, which is what a star's size is measured in.
         resolution: [width, height],
         uniforms: {
-          cameraPosition: [0, 0, 0],
+          cameraPosition: eye,
           viewMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
           projectionMatrix: perspective(FOV_Y, width / height, 0.1, 100000),
         },
@@ -346,18 +356,24 @@ describe("the starfield, on the CPU", () => {
         height,
         // One ray per fragment, from an eye at the origin looking `-Z` and tilted up.
         // `render` counts rows up from the bottom, as `fragCoord` does.
+        //
+        // **The dome is carried at the eye, as `createSky` carries it**, so the ray the shader
+        // recovers is the direction exactly. Placing the geometry at the origin and putting the eye
+        // in `cameraPosition` only approximates a direction while the eye is much nearer the origin
+        // than `SKY_EXTENT` is — and on a 136,000-unit planet the eye is not.
         inputs: ({ x, y }) => {
           const tan = Math.tan((FOV_Y / 2) * DEG);
           const d = [
             (((x + 0.5) / width) * 2 - 1) * tan * (width / height),
-            (((y + 0.5) / height) * 2 - 1) * tan +
-              Math.sin(ELEVATION_DEG * DEG),
+            (((y + 0.5) / height) * 2 - 1) * tan + Math.sin(elevationDeg * DEG),
             -1,
           ];
           const length = Math.hypot(...d);
           return {
             varyings: {
-              positionWorld: d.map((c) => (c / length) * SKY_EXTENT),
+              positionWorld: d.map(
+                (c, i) => (c / length) * SKY_EXTENT + eye[i]!,
+              ),
             },
           };
         },
@@ -379,9 +395,10 @@ describe("the starfield, on the CPU", () => {
     width = 160,
     height = 90,
     pixelRatio = 1.5,
+    eye: [number, number, number] = [0, 0, 0],
   ): { lit: number; meanLit: number; peak: number; busiest: number } => {
-    const lit = frame(domeAt(seconds, pixelRatio), width, height);
-    const plain = frame(domeAt(seconds, pixelRatio, 0), width, height);
+    const lit = frame(domeAt(seconds, pixelRatio), width, height, eye);
+    const plain = frame(domeAt(seconds, pixelRatio, 0), width, height, eye);
 
     let count = 0;
     let sum = 0;
@@ -439,6 +456,69 @@ describe("the starfield, on the CPU", () => {
     }
     console.log(report.join("\n"));
   }, 60_000);
+
+  it("goes black with altitude, because the daylight sky is the atmosphere", () => {
+    // The core of the change: the gradient and the glows are scaled by the air still
+    // overhead, so a noon sky read from above the shell is the black of space. Measured on
+    // the centre pixel, whose ray misses the shell entirely and so isolates the gradient
+    // from the new limb term.
+    const centre = (eye: [number, number, number]): number => {
+      const out = frame(domeAt(300, 1), 1, 1, eye);
+      const c = out.at(0, 0);
+      return (c[0]! + c[1]! + c[2]!) / 3;
+    };
+    const ground = centre([0, 0, 0]);
+    // A whole radius up, which is well clear of the 4,800-unit shell — an altitude barely above
+    // the shell top would still have a 30° ray grazing it on a planet this size.
+    const orbit = centre([0, DEFAULT_PLANET_RADIUS * 2, 0]);
+    console.log(
+      `noon sky: ground ${ground.toFixed(3)}, orbit ${orbit.toFixed(4)}`,
+    );
+    expect(ground).toBeGreaterThan(0.2);
+    expect(orbit).toBeLessThan(ground * 0.05);
+  });
+
+  it("draws no atmosphere looking straight up from space, though the line behind the eye meets the planet", () => {
+    // **The look-up bug, as a number.** The eye is outside the shell, so this ray never enters the
+    // atmosphere — but the *line* through it and the sky passes through the planet's centre behind
+    // the camera, and the limb sized its chord from that line. A straight-up look therefore carried
+    // a full atmosphere column that was behind the eye: a fog band across the black of space. Blue
+    // sky is about 0.75, so a value near zero is the difference between black and that band.
+    const out = frame(
+      domeAt(300, 1),
+      1,
+      1,
+      [0, DEFAULT_PLANET_RADIUS + 20000, 0],
+      89,
+    );
+    const c = out.at(0, 0);
+    const space = (c[0]! + c[1]! + c[2]!) / 3;
+    console.log(`straight-up sky from space: ${space.toFixed(4)}`);
+    expect(space).toBeLessThan(0.02);
+  });
+
+  it("lights stars in daylight once the eye is out of the atmosphere", () => {
+    // Noon, and the ground sky has no stars at all because `twilight` is zero. The same
+    // hour from above the shell must: the only thing that hid them was the atmosphere.
+    expect(stars(300, 160, 90, 1.5, [0, 0, 0]).lit).toBe(0);
+    // **And "out" means past the shell's top, not just "the air has thinned".** Half a shell up
+    // is still inside the atmosphere, and the old gate (`1 - atmosphere`) let stars in there —
+    // the same mistake that drew the from-outside limb on top of the gradient during the climb.
+    expect(
+      stars(300, 160, 90, 1.5, [
+        0,
+        DEFAULT_PLANET_RADIUS + ATMOSPHERE_HEIGHT / 2,
+        0,
+      ]).lit,
+    ).toBe(0);
+    const above = stars(300, 160, 90, 1.5, [
+      0,
+      DEFAULT_PLANET_RADIUS * 2,
+      0,
+    ]).lit;
+    console.log(`stars at noon from orbit: ${above} lit`);
+    expect(above).toBeGreaterThan(0);
+  });
 
   it("spreads them across the frame rather than crowding one side", () => {
     // The reported symptom, as a number. The stars live in a lattice, so a frame's

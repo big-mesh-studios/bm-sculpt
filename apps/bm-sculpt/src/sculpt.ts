@@ -13,11 +13,11 @@
  */
 
 import type { Vec3 } from "@big-mesh-studios/core";
-import { Field, OperationBVH, terrainField } from "@big-mesh-studios/csg";
+import { Field, OperationBVH, baseFieldFor } from "@big-mesh-studios/csg";
 import type {
+  BaseFieldSpec,
+  BuiltBaseField,
   Operation,
-  TerrainField,
-  TerrainParams,
 } from "@big-mesh-studios/csg";
 
 import {
@@ -62,7 +62,7 @@ export interface SculptSessionOptions {
    * independently configured terrains would put dabs in the air above the ground the mesher
    * drew, which is the one disagreement this whole design exists to rule out (ADR 0009).
    */
-  readonly terrain?: TerrainParams;
+  readonly baseField?: BaseFieldSpec;
 }
 
 /** The part of `Session` an edit talks to: told the model, and what it touched. */
@@ -100,10 +100,10 @@ export class SculptSession {
   private field: Field;
   /**
    * The landscape, held so every rebuild of the field uses the same one. Not rebuilt per
-   * edit: a terrain is four numbers and a permutation table, and rebuilding it per dab would
+   * edit: a base field is four numbers and a permutation table, and rebuilding it per dab would
    * put a 256-entry shuffle on the pointer path for no benefit.
    */
-  private readonly terrain: TerrainField | undefined;
+  private readonly base: BuiltBaseField | undefined;
   private brush: BrushSettings = DEFAULT_BRUSH;
   private readonly previewState: Preview = {
     visible: false,
@@ -150,8 +150,7 @@ export class SculptSession {
     this.places = new PlaceRegistry(this.document.order);
     this.document.add(options.operations ?? []);
     this.document.resetHistory();
-    this.terrain =
-      options.terrain !== undefined ? terrainField(options.terrain) : undefined;
+    this.base = baseFieldFor(options.baseField);
     this.field = this.buildField();
     this.targetImpl = this.target();
     this.tool = new SculptTool({
@@ -184,14 +183,23 @@ export class SculptSession {
   }
 
   /**
-   * The terrain surface height at a column, when the world has a height field.
+   * The landscape's surface height at a column, when the world has a height field.
    *
-   * Bound to the terrain the field was built from, so a spawn placed on the
-   * ground and a player collided against it cannot disagree about where the
-   * ground is.
+   * **`undefined` for a planet, and correctly so.** "The height of the surface above `(x, z)`" is
+   * a question about a height field; on a sphere the surface above a column is the column's whole
+   * length, and there is no such number. A place script asking gets the host's existing
+   * `?? 0` fallback rather than a plausible wrong answer, and asking the physics instead is the
+   * route that would work — see `PlayerWorld.getGroundDistanceAt`.
    */
   get terrainHeight(): ((x: number, z: number) => number) | undefined {
-    return this.terrain?.heightAt;
+    const base = this.base;
+    if (base === undefined) return undefined;
+    // `BuiltBaseField` is the union of what `terrainField` and `planetField` return, and only one
+    // of those two has a surface height. The narrowing is a type guard rather than a cast, so a
+    // third kind of base field without a height cannot quietly satisfy it.
+    return "heightAt" in base
+      ? (base.heightAt as (x: number, z: number) => number)
+      : undefined;
   }
 
   /** The brush settings, and a way to change them. */
@@ -336,9 +344,13 @@ export class SculptSession {
    */
   private buildField(): Field {
     return new Field(new OperationBVH(this.model()), {
-      base: this.terrain,
-      extent: this.terrain,
-      lipschitz: this.terrain?.lipschitz,
+      base: this.base,
+      extent: this.base,
+      lipschitz: this.base?.lipschitz,
+      // The same answer the worker gives, for the reason given in `BuiltBaseField`: a zero
+      // gradient on a planet means the centre, and `+Y` is not outward from anywhere in
+      // particular there.
+      fallbackNormal: this.base?.fallbackNormal,
     });
   }
 

@@ -48,6 +48,7 @@ const commands = () =>
   createCommands({
     setFlying: () => "flying",
     setNoClip: () => "no-clip",
+    toSpace: () => "in space",
     clock: {
       jumpTo: () => {},
       clearOverride: () => {},

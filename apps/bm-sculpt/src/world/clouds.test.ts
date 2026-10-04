@@ -9,9 +9,11 @@ import {
   CLOUD_TOP,
   LIGHT_STEPS,
   MAX_STEPS,
-  WEATHER_FEATURE,
   CloudMaterial,
+  cloudSpan,
+  driftAngleAt,
 } from "./clouds";
+import { DEFAULT_PLANET_RADIUS } from "../render/atmosphere";
 import { bakeCloudField } from "./cloud-field";
 import { shapeTexture, weatherTexture } from "./cloud-textures";
 
@@ -411,7 +413,6 @@ describe("the cloud material compiles", () => {
   it("reads every uniform the day-night cycle pushes at it", () => {
     const { fragment, program } = compile(make());
     for (const expected of [
-      "uTime",
       "uSunDirection",
       "uSunLight",
       "uMoonDirection",
@@ -420,8 +421,8 @@ describe("the cloud material compiles", () => {
       "uSkyColour",
       "uCoverage",
       "uDensity",
-      "uDriftX",
-      "uDriftZ",
+      "uSeaRadius",
+      "uDriftAngle",
     ]) {
       expect(
         program.uniforms.map((u) => u.name),
@@ -495,18 +496,25 @@ describe("the layer's defaults", () => {
   // a file whose first one is already reduced for exactly this reason.
   const baked = bakeCloudField(20260901, 30, 60);
 
+  /** `seaRadius / CLOUD_FEATURE`, the radius of the direction sphere inside the volume. */
+  const SHAPE_SCALE = DEFAULT_PLANET_RADIUS / CLOUD_FEATURE;
+
   /**
-   * The shape volume, addressed in 0..1 on each axis and repeating.
+   * The shape volume, addressed on each axis and repeating.
    *
-   * Floored and clamped, which is not tidiness: a fractional index into a `Uint8Array`
-   * reads `undefined`, `undefined / 255` is `NaN`, and a `NaN` in a comparison is
-   * simply false — so the whole grid below would report clear sky and no assertion
-   * would fail for the reason anyone was looking at.
+   * The coordinate wraps and then floors, which is not tidiness on either count: the shader
+   * samples a *direction* scaled past one tile, so the coordinate leaves `0..1` and has to
+   * come back; and a fractional index into a `Uint8Array` reads `undefined`,
+   * `undefined / 255` is `NaN`, and a `NaN` in a comparison is simply false — so the whole
+   * grid below would report clear sky and no assertion would fail for the reason anyone was
+   * looking at.
    */
   const shape = (u: number, v: number, w: number, channel: number): number => {
     const n = baked.shape.size;
-    const cell = (t: number): number =>
-      Math.min(n - 1, Math.max(0, (t * n) | 0));
+    const cell = (t: number): number => {
+      const wrapped = ((t % 1) + 1) % 1;
+      return Math.min(n - 1, Math.max(0, (wrapped * n) | 0));
+    };
     return (
       baked.shape.data[(cell(u) + n * (cell(v) + n * cell(w))) * 4 + channel]! /
       255
@@ -537,6 +545,16 @@ describe("the layer's defaults", () => {
     coverage: number,
     density: number,
   ): number => {
+    // The direction the ray leaves the planet on, from the same longitude/latitude the
+    // weather map is addressed by. The shape volume is sampled at that direction scaled to
+    // `seaRadius / CLOUD_FEATURE`, exactly as the shader does — altitude is the profile's,
+    // not the volume's.
+    const latitude = (w - 0.5) * Math.PI;
+    const longitude = u * Math.PI * 2;
+    const cosLat = Math.cos(latitude);
+    const dx = cosLat * Math.cos(longitude) * SHAPE_SCALE;
+    const dy = Math.sin(latitude) * SHAPE_SCALE;
+    const dz = cosLat * Math.sin(longitude) * SHAPE_SCALE;
     let depth = 0;
     for (let i = 0; i < STEPS; i++) {
       const height = (i + 0.5) / STEPS;
@@ -546,11 +564,11 @@ describe("the layer's defaults", () => {
         Math.min(height / 0.09, 1) *
         (1 - Math.min(Math.max((height - (core - 0.34)) / 0.34, 0), 1));
       const threshold = Math.max(weather(u, w, 0) * coverage * profile, 0.02);
-      const base = shape(u, height, w, 0);
+      const base = shape(dx, dy, dz, 0);
       const detail =
-        shape(u, height, w, 1) * 0.55 +
-        shape(u, height, w, 2) * 0.3 +
-        shape(u, height, w, 3) * 0.15;
+        shape(dx, dy, dz, 1) * 0.55 +
+        shape(dx, dy, dz, 2) * 0.3 +
+        shape(dx, dy, dz, 3) * 0.15;
       const eroded = Math.min(
         Math.max((detail * 0.6 + 0.4 - (1 - base)) / 0.4, 0),
         1,
@@ -634,89 +652,79 @@ describe("the layer's defaults", () => {
 });
 
 /**
- * The volume's address: where a world altitude lands in the shape volume.
+ * The shell's address: what a sample's direction and altitude each mean.
  *
- * The single most consequential number in the shader, and the one whose fault was
- * invisible for as long as it was there. The shape volume's third axis is the layer's
- * *thickness*, so an altitude has to address it as `(y - CLOUD_BOTTOM) / THICKNESS` —
- * 0 at the underside, 1 at the top. Written as a scale and an offset that is
- * `1 / THICKNESS` and `-CLOUD_BOTTOM / THICKNESS`, and subtracting the altitude instead
- * leaves every sample at about −699. The dimensional profile then multiplies the
- * coverage by `saturate(height / 0.09)`, so the coverage was multiplied by zero at every
- * height in the layer, and the sky had no clouds in it at all — with the layer built, its
- * shader compiling, its field well-formed, and every other assertion in this file green.
+ * The layer stopped being a slab, so the address stopped being a scale and an offset into a
+ * world `x`/`z`/`y` volume. The shape volume is now sampled at the **direction from the
+ * planet's centre**, scaled so one tile is `CLOUD_FEATURE` of surface, and the altitude is
+ * not in the volume at all — it is the vertical profile, `(radius − seaRadius −
+ * CLOUD_BOTTOM) / CLOUD_THICKNESS`. That has its own single number to get wrong, and it is
+ * the same class of fault as the old one: the profile multiplies the coverage by
+ * `saturate(height / 0.09)`, so an altitude that is not divided by the thickness empties the
+ * layer at its underside.
  *
- * So the assertion is on the address's own arithmetic, read out of the emitted shader:
- * the layer's underside must address zero and its top must address one. Those two
- * numbers are what the density threshold consumes, and nothing else in the file would
- * have noticed their being wrong.
+ * Both halves are read out of the emitted shader, because both are arithmetic that a rename
+ * or an inverted subtraction would break silently.
  */
-describe("the volume's address", () => {
-  /**
-   * The scale and the offset, read out of the emitted shader.
-   *
-   * Matched by pattern rather than by "every `vec3(...)` on the line", because the
-   * offset is `vec3(fract(uDriftX), …)` and a `[^)]*` cannot span `fract`'s own
-   * parentheses — it stops inside the first one and hands back `fract(uDriftX`, which
-   * parses as `NaN` and is the same rmsl trap the file's own header warns about, in a
-   * different costume.
-   */
-  const addressOf = (
-    fragment: string,
-  ): { scale: number[]; offset: number[] } => {
-    const scale =
-      /\*\s*vec3\(\s*([\d.eE+-]+),\s*([\d.eE+-]+),\s*([\d.eE+-]+)\s*\)/.exec(
-        fragment,
-      );
-    const offset =
-      /vec3\(\s*fract\(uDriftX\),\s*([\d.eE+-]+),\s*fract\(uDriftZ\)\s*\)/.exec(
-        fragment,
-      );
-    if (scale === null || offset === null) {
-      throw new Error(
-        "the volume's scale and offset were not found in the shader",
-      );
-    }
-    return {
-      scale: [Number(scale[1]), Number(scale[2]), Number(scale[3])],
-      // The two drifts are a tile fraction each and take no part in the arithmetic here.
-      offset: [0, Number(offset[1]), 0],
-    };
-  };
-
-  it("maps the layer's altitudes onto the volume's whole range", () => {
-    // The single most consequential number in the shader, and the one whose fault was
-    // invisible for as long as it was there. The shape volume's third axis is the
-    // layer's *thickness*, so an altitude addresses it as
-    // `(y - CLOUD_BOTTOM) / CLOUD_THICKNESS` — 0 at the underside, 1 at the top.
-    //
-    // Subtracting the altitude instead leaves every sample at about −699, and the
-    // dimensional profile multiplies the coverage by `saturate(height / 0.09)`, so the
-    // coverage became zero at every height in the layer: a sky with no clouds in it at
-    // all, at every hour, with the layer built, its shader compiling, its field
-    // well-formed, and every other assertion in this file green.
-    //
-    // The two numbers asserted here are what the density threshold consumes, and nothing
-    // else in this file would have noticed their being wrong.
-    const { scale, offset } = addressOf(compile(make()).fragment);
-    expect(scale[1]! * CLOUD_BOTTOM + offset[1]!).toBeCloseTo(0, 9);
-    expect(scale[1]! * CLOUD_TOP + offset[1]!).toBeCloseTo(1, 9);
-    // And so the offset is the altitude *divided by the thickness*, which is the half
-    // that was wrong: it matters whenever the two differ, which they do for any layer
-    // that does not start at zero.
-    expect(scale[1]!).toBeCloseTo(1 / CLOUD_THICKNESS, 12);
-    expect(offset[1]!).toBeCloseTo(-CLOUD_BOTTOM / CLOUD_THICKNESS, 9);
+describe("the shell's address", () => {
+  it("addresses the shape volume by direction, scaled by the sea radius", () => {
+    // `shapeScale` is `seaRadius / CLOUD_FEATURE`: the sea radius a uniform, so a world with
+    // a different planet moves its weather with it, and the reciprocal a constant.
+    const { fragment } = compile(make());
+    expect(fragment).toContain("uSeaRadius");
+    expect(fragment).toContain(String(1 / CLOUD_FEATURE));
   });
 
-  it("repeats on x and z in tiles of the shape feature, and in no altitude", () => {
-    // The horizontal axes are the drift's business: `CLOUD_FEATURE` units to a tile, and
-    // an offset that is a tile fraction and nothing else. Getting the vertical wrong the
-    // way it was wrong put an altitude into an axis that has no altitude in it.
-    const { scale, offset } = addressOf(compile(make()).fragment);
-    expect(scale[0]!).toBeCloseTo(1 / CLOUD_FEATURE, 12);
-    expect(scale[2]!).toBeCloseTo(1 / CLOUD_FEATURE, 12);
-    expect(offset[0]!).toBe(0);
-    expect(offset[2]!).toBe(0);
+  it("wraps the weather map around the planet once", () => {
+    // The equirectangular inverse: `atan` of two components and `asin` of the vertical. The
+    // read is what makes the weather a sphere rather than a plane.
+    const { fragment } = compile(make());
+    expect(fragment).toContain("atan(");
+    expect(fragment).toContain("asin(");
+  });
+
+  it("puts the layer's altitudes into the profile, not the volume", () => {
+    // `(length(world) − seaRadius − CLOUD_BOTTOM) / CLOUD_THICKNESS`, read off the source:
+    // zero at the underside, one at the top, feeding `heightGradient` rather than a volume
+    // axis — which is the change the whole phase is.
+    const { fragment } = compile(make());
+    expect(fragment).toMatch(/- uSeaRadius\) - 700\.0\) \/ 700\.0/);
+  });
+});
+
+describe("the shell's span", () => {
+  const sea = DEFAULT_PLANET_RADIUS;
+  const up = { x: 0, y: 1, z: 0 };
+  const down = { x: 0, y: -1, z: 0 };
+  const at = (altitude: number): { x: number; y: number; z: number } => ({
+    x: 0,
+    y: sea + altitude,
+    z: 0,
+  });
+
+  it("starts at the layer's underside when looking up from the ground", () => {
+    const span = cloudSpan(at(2), up, sea);
+    expect(span.enter).toBeCloseTo(CLOUD_BOTTOM - 2, 3);
+    expect(span.exit).toBeCloseTo(CLOUD_TOP - 2, 3);
+  });
+
+  it("starts at the eye when the eye is inside the layer", () => {
+    const span = cloudSpan(at(1000), down, sea);
+    expect(span.enter).toBe(0);
+    expect(span.exit).toBeCloseTo(1000 - CLOUD_BOTTOM, 3);
+  });
+
+  it("stops at the planet's near side when looking down from orbit", () => {
+    // The far side of the shell is behind the planet and is not marched, because the globe
+    // writes no depth for it to hide behind.
+    const span = cloudSpan(at(8000), down, sea);
+    expect(span.enter).toBeCloseTo(8000 - CLOUD_TOP, 3);
+    expect(span.exit).toBeCloseTo(8000 - CLOUD_BOTTOM, 3);
+  });
+
+  it("is empty when a ground eye looks down into the planet", () => {
+    const span = cloudSpan(at(2), down, sea);
+    expect(span.exit).toBeLessThanOrEqual(span.enter);
   });
 });
 
@@ -727,42 +735,40 @@ describe("the layer's geometry", () => {
     expect(CLOUD_THICKNESS).toBe(CLOUD_TOP - CLOUD_BOTTOM);
   });
 
-  it("keeps its box inside the camera's far plane", () => {
-    // Otherwise the corners are clipped and the sky has holes in it. The viewport's
-    // camera is `PerspectiveCamera(50, 1, 1, 100000)`.
-    const half = 40000;
-    expect(half * Math.sqrt(3)).toBeLessThan(100000);
+  it("keeps its carrier inside the camera's far plane", () => {
+    // A sphere centred on the eye, so its furthest point is its own radius away. The
+    // viewport's camera is `PerspectiveCamera(50, 1, 1, 400000)`.
+    expect(40000).toBeLessThan(400000);
   });
 
-  it("repeats the two fields on a joint period beyond the view", () => {
-    // The single most important number in the sky. One field at one scale is a
-    // texture; two fields are weather only if the eye cannot see them repeat
-    // *together*, and the eye cannot do that as long as their joint period is longer
-    // than the distance being looked at.
-    //
-    // The ratio being a whole number is not the problem and does not need to be
-    // dodged: 48 000 over 2 400 is twenty to one, an unremarkable ratio. What matters
-    // is that the least common repeat is the weather map's own period, so at a reach
-    // of seventeen thousand there is no common repeat anywhere in view.
-    const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
-    const joint =
-      (CLOUD_FEATURE * WEATHER_FEATURE) / gcd(CLOUD_FEATURE, WEATHER_FEATURE);
-    expect(joint).toBe(WEATHER_FEATURE);
-    // Longer than the march's reach, which is seventeen thousand units. Forty-eight
-    // thousand is 2.8 times that, and by the far end of the march the aerial
-    // perspective has taken more than half the contrast out anyway — so the point
-    // where both fields would line up again is somewhere the sky has already faded to
-    // nothing. Two and a half times would be the number to hold this to.
-    expect(joint).toBeGreaterThan(17000 * 2);
+  it("repeats the shape many times around the weather's single wrap", () => {
+    // The anti-repetition argument, in its spherical form. The shape volume is addressed by
+    // direction, so it repeats `2π · seaRadius / CLOUD_FEATURE` times around the equator —
+    // about ten — while the weather map wraps exactly once. A whole-number ratio would let
+    // the eye lock the two together; ten-point-something will not.
+    const around = (2 * Math.PI * DEFAULT_PLANET_RADIUS) / CLOUD_FEATURE;
+    expect(around).toBeGreaterThan(8);
+    expect(Math.abs(around - Math.round(around))).toBeGreaterThan(0.1);
   });
 
   it("draws its back faces and writes no depth", () => {
-    // The back faces because the camera is inside the box; the missing depth write so
-    // the layer occludes nothing drawn after it, and because the terrain is drawn
-    // before it and therefore z-rejects the box wherever there is a mountain.
+    // The back faces because the camera is inside the carrier; the missing depth write so
+    // the layer occludes nothing drawn after it, and because the terrain is drawn before it
+    // and therefore z-rejects the carrier wherever there is a mountain.
     const material = make();
     expect(material.side).toBe(Side.BackSide);
     expect(material.depthWrite).toBe(false);
     expect(material.transparent).toBe(true);
+  });
+});
+
+describe("the drift", () => {
+  it("turns the field so its surface speed is the same on any planet", () => {
+    // The angular speed is `DRIFT / seaRadius`, so `angle × seaRadius` — the speed at the
+    // surface — is the linear `DRIFT` whatever the radius. A player on a bigger world does
+    // not get slower clouds.
+    const small = driftAngleAt(1, 1000) * 1000;
+    const large = driftAngleAt(1, 8000) * 8000;
+    expect(small).toBeCloseTo(large, 9);
   });
 });

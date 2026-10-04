@@ -80,11 +80,67 @@ export type { TerrainField, TerrainParams } from "./terrain";
 export {
   DEFAULT_TERRAIN,
   FBM_AMPLITUDE_BOUND,
+  MOUNTAIN_FEATURE,
+  MOUNTAIN_MASK_FEATURE,
+  MOUNTAIN_MASK_OCTAVES,
   NOISE_GRADIENT_BOUND,
   PerlinNoise2D,
+  RIDGE_STRENGTH,
   TERRAIN_FEATURE,
   terrainField,
 } from "./terrain";
+
+export type { PlanetField, PlanetParams } from "./planet";
+export { DEFAULT_PLANET, planetField, radiusRangeOf } from "./planet";
+
+export type { PlanetMapSource, PlanetMaps } from "./planet-maps";
+export {
+  bakePlanetMaps,
+  directionAtEquirect,
+  equirectAtDirection,
+} from "./planet-maps";
+
+export type { Direction } from "./cube-face";
+export type { Patch, PatchSelection } from "./patch";
+export {
+  angleBetween,
+  PATCH_ROOT,
+  patchAngle,
+  patchCentre,
+  patchDirectionAt,
+  patchLevel,
+  patchLookupCost,
+  patchOf,
+  patchRange,
+  rootPatch,
+  selectPatches,
+  subdivide,
+} from "./patch";
+export {
+  cubePointAt,
+  directionAt,
+  faceOf,
+  FACE_COUNT,
+  FACE_NEG_X,
+  FACE_NEG_Y,
+  FACE_NEG_Z,
+  FACE_POS_X,
+  FACE_POS_Y,
+  FACE_POS_Z,
+} from "./cube-face";
+
+export {
+  FBM_AMPLITUDE_BOUND_3D,
+  NOISE_GRADIENT_BOUND_3D,
+  PerlinNoise3D,
+} from "./perlin3";
+
+export type {
+  BaseFieldKind,
+  BaseFieldSpec,
+  BuiltBaseField,
+} from "./base-field";
+export { baseFieldFor, isPlanetField } from "./base-field";
 
 export {
   FormatError,

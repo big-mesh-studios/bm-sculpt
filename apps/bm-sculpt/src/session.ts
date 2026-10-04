@@ -27,7 +27,7 @@
 
 import type { Vec3 } from "@big-mesh-studios/core";
 import { makeOperation, serialiseOperations } from "@big-mesh-studios/csg";
-import type { Operation, TerrainParams } from "@big-mesh-studios/csg";
+import type { BaseFieldSpec, Operation } from "@big-mesh-studios/csg";
 import type { Material, Scene } from "@random-mesh/rmsl/scene";
 
 import {
@@ -89,7 +89,7 @@ export interface SessionOptions {
    * the agreement ADR 0009 is about, and a base field that could only be built on one side
    * of the thread boundary could not be checked at all.
    */
-  readonly terrain?: TerrainParams;
+  readonly baseField?: BaseFieldSpec;
   /** Chunk radius in x and z. Defaults to `DEFAULT_WINDOW_RADIUS`. */
   readonly radius?: number;
   /** Chunk radius in y, normally smaller — see `sphereCells`. */
@@ -161,7 +161,7 @@ export class Session {
    * for the same reason the operations are held as a list: the picker builds its own field
    * and the two must not be able to drift.
    */
-  private readonly terrainParams: TerrainParams | undefined;
+  private readonly baseFieldSpec: BaseFieldSpec | undefined;
   private failures = 0;
   private disposed = false;
 
@@ -178,7 +178,7 @@ export class Session {
   private windowReady = false;
 
   constructor(options: SessionOptions) {
-    this.terrainParams = options.terrain;
+    this.baseFieldSpec = options.baseField;
     this.store = new ChunkMeshStore(
       options.scene,
       options.material,
@@ -244,26 +244,24 @@ export class Session {
    * The landscape this session streams, or undefined for an operations-only world.
    *
    * Public because the picker has to build the same field and cannot ask a worker what it
-   * built (ADR 0009). It is the same four numbers the workers read, from the same field, so
-   * the two cannot drift.
+   * built (ADR 0009). It is the same numbers the workers read, from the same union, so the two
+   * cannot drift — and it is a *union* now, so a world can be a height field or a planet without
+   * a second option and a second getter.
    */
-  get terrain(): TerrainParams | undefined {
-    return this.terrainParams;
+  get baseField(): BaseFieldSpec | undefined {
+    return this.baseFieldSpec;
   }
 
   /** The model, as the workers need it. */
   modelMessage(): ModelMessage {
-    const terrain = this.terrainParams;
     return {
       kind: "setModel",
       revision: this.revision,
       operations: serialiseOperations(this.currentOperations),
       paint: [],
-      base: terrain !== undefined ? "terrain" : "none",
-      // Carried only when there is terrain, so a world with no base field cannot arrive
-      // with half of one — which is why `ModelMessage` makes this a block rather than three
-      // optional numbers.
-      ...(terrain !== undefined ? { terrain } : {}),
+      // **One value, not a kind beside parameters.** The union carries its own parameters, so a
+      // message cannot name a planet and arrive holding a landscape's four numbers.
+      base: this.baseFieldSpec,
     };
   }
 

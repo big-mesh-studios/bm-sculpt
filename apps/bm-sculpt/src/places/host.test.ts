@@ -452,19 +452,22 @@ describe("a place's geometry is walkable, not merely visible", () => {
     const { host, world } = await start(buildsABox());
     const gameWorld = new GameWorld({
       field: () => new Field(new OperationBVH(world.places.flatten([]))),
-      heightAt: () => 0,
-      seaLevel: -10,
+      seaRadius: -10,
     });
 
     // **`len` is a half-extent** (see `PlaceShape`), so `len.y = 4` is a box eight tall
     // centred at y = 10: its top is y = 14 and a player standing over it is at 14.
-    expect(gameWorld.getSolidAt(0, 12, 0)).toBe(true);
-    const ground = gameWorld.getGroundHeightAt(0, 20, 0);
-    expect(ground).toBeGreaterThanOrEqual(13.9);
-    expect(ground).toBeLessThanOrEqual(14.1);
+    expect(gameWorld.getSolidAt({ x: 0, y: 12, z: 0 })).toBe(true);
+    // **A distance along the up, not a height.** Twenty above a top at fourteen, so six below
+    // the feet — the same answer as before, in the units the physics asks for.
+    const ground = gameWorld.getGroundDistanceAt(
+      { x: 0, y: 20, z: 0 },
+      { x: 0, y: 1, z: 0 },
+    );
+    expect(ground).toBeCloseTo(-6, 1);
 
     // And the floor of the world is still the floor: the box is additive, not a replacement.
-    expect(gameWorld.getSolidAt(500, 12, 0)).toBe(false);
+    expect(gameWorld.getSolidAt({ x: 500, y: 12, z: 0 })).toBe(false);
     host.dispose();
   });
 
@@ -480,13 +483,12 @@ describe("a place's geometry is walkable, not merely visible", () => {
     });
     const gameWorld = new GameWorld({
       field: () => new Field(new OperationBVH(world.places.flatten([]))),
-      heightAt: () => 0,
     });
     // Solid either side of the door, absent inside it — which is the whole of why `combine`
     // exists and the reason the fold order matters.
-    expect(gameWorld.getSolidAt(-40, 20, 0)).toBe(true);
-    expect(gameWorld.getSolidAt(40, 20, 0)).toBe(true);
-    expect(gameWorld.getSolidAt(0, 20, 0)).toBe(false);
+    expect(gameWorld.getSolidAt({ x: -40, y: 20, z: 0 })).toBe(true);
+    expect(gameWorld.getSolidAt({ x: 40, y: 20, z: 0 })).toBe(true);
+    expect(gameWorld.getSolidAt({ x: 0, y: 20, z: 0 })).toBe(false);
     host.dispose();
   });
 
@@ -505,7 +507,7 @@ describe("a place's geometry is walkable, not merely visible", () => {
     const gameWorld = new GameWorld({
       field: () => new Field(new OperationBVH(asASessionSeesIt)),
     });
-    expect(gameWorld.getSolidAt(0, 12, 0)).toBe(true);
+    expect(gameWorld.getSolidAt({ x: 0, y: 12, z: 0 })).toBe(true);
     host.dispose();
   });
 });

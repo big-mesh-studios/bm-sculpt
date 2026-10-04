@@ -37,6 +37,28 @@ export {
   type Vec3,
 } from "./constants";
 
+export type { Basis } from "./vec3";
+export {
+  ONE,
+  ZERO,
+  add,
+  angleBetween,
+  cross,
+  distance,
+  dot,
+  isFinite,
+  length,
+  lengthSq,
+  lerp,
+  negate,
+  normalize,
+  onbFromDirection,
+  rotateAboutAxis,
+  scale,
+  sub,
+  vec3,
+} from "./vec3";
+
 export type { HSVA, RGBA } from "./colour";
 export {
   byteToOpacity,

@@ -44,7 +44,6 @@ export {
 } from "./chunk-mesher";
 
 export type {
-  BaseFieldKind,
   CancelMessage,
   ChunkFailedMessage,
   ChunkMeshMessage,

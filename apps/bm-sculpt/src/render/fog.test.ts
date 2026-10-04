@@ -2,36 +2,81 @@ import { compileGlsl } from "@random-mesh/rmsl/glsl";
 import { Scene } from "@random-mesh/rmsl/scene";
 import { describe, expect, it } from "vitest";
 
+import type { Vec3 } from "@big-mesh-studios/core";
 import { BLOCK_WORLD } from "../constants";
 import { DEFAULT_WINDOW_RADIUS, GAME_WINDOW } from "../session";
 import { dayNightState } from "../world/day-night";
-import { FOG_FALLOFF, FOG_FAR, FOG_NEAR, Fog, fogColourOf } from "./fog";
+import { ATMOSPHERE_EXTINCTION, airMassShell } from "./atmosphere";
+import {
+  DEFAULT_PLANET_RADIUS,
+  FOG_FALLOFF,
+  FOG_FAR,
+  FOG_NEAR,
+  Fog,
+  fogColourOf,
+} from "./fog";
 import { SkyLight } from "./sky-light";
 import { SurfaceMaterial } from "./surface-material";
 
 /**
  * The fog and the sky bindings, on the host, as everywhere else.
  *
- * The questions here are about *where the distances are* rather than about what the
- * shader does with them. Fog's far distance is a fact about the streaming window
- * rather than a number someone picked, and that is the sort of coupling that stops
- * being true the moment either number changes and nothing notices.
+ * The fog is two terms now and they are tested as two. The distance questions below are the
+ * **near-field window term with the atmosphere switched off** — they are about where the streamed
+ * chunks stop, which is a fact about the window and not an art decision. The altitude questions are
+ * the **whole law**, because the point of the second term is what is left once the near term has gone.
+ *
+ * Each is written out by hand rather than imported, deliberately. The first version of this file
+ * omitted the clamp the shader had, returned a negative number for anything nearer than `FOG_NEAR`,
+ * and every test below it failed — which is how the shader's own copy of the same mistake was found.
+ * A test that calls the implementation cannot catch that a bug is in the implementation.
  */
 
 /**
- * How much of a surface the fog has taken, from the same law the shader uses.
+ * The near-field window term alone, as the shader computes it with the atmosphere ignored.
  *
- * Written out here rather than imported, deliberately: the first version of this file
- * omitted the clamp the shader now has, returned a negative number for anything nearer
- * than `FOG_NEAR`, and every test below it failed — which is how the shader's own copy
- * of the same mistake was found. A test that calls the implementation cannot catch that
- * a bug is in the implementation.
+ * The real shader adds the atmospheric column to this before the exponential; every test that uses
+ * this helper is about where the chunks stop, at distances where the window term is the whole story.
  */
-const fogAmount = (distance: number): number =>
+const nearAmount = (distance: number, nearField = 1): number =>
   1 -
   Math.exp(
-    -Math.max(distance - FOG_NEAR, 0) * (FOG_FALLOFF / (FOG_FAR - FOG_NEAR)),
+    -Math.max(distance - FOG_NEAR, 0) *
+      (FOG_FALLOFF / (FOG_FAR - FOG_NEAR)) *
+      nearField,
   );
+
+/** Both optical depths and one exponential: the shader's law, host-side. */
+const fullAmount = (eye: Vec3, point: Vec3, nearField: number): number => {
+  const distance = Math.hypot(
+    point.x - eye.x,
+    point.y - eye.y,
+    point.z - eye.z,
+  );
+  const nearTau =
+    Math.max(distance - FOG_NEAR, 0) *
+    (FOG_FALLOFF / (FOG_FAR - FOG_NEAR)) *
+    nearField;
+  const airTau =
+    ATMOSPHERE_EXTINCTION * airMassShell(eye, point, DEFAULT_PLANET_RADIUS);
+  return 1 - Math.exp(-nearTau - airTau);
+};
+
+/** A point on the ground `degrees` of arc away from the subsolar point, on the default planet. */
+const groundAt = (degrees: number): Vec3 => {
+  const angle = (degrees * Math.PI) / 180;
+  return {
+    x: DEFAULT_PLANET_RADIUS * Math.sin(angle),
+    y: DEFAULT_PLANET_RADIUS * Math.cos(angle),
+    z: 0,
+  };
+};
+
+const eyeAt = (altitude: number): Vec3 => ({
+  x: 0,
+  y: DEFAULT_PLANET_RADIUS + altitude,
+  z: 0,
+});
 
 describe("the fog's distances", () => {
   it("closes exactly where the chunk window stops", () => {
@@ -63,8 +108,8 @@ describe("the fog's distances", () => {
     expect(GAME_WINDOW.radius).toBeGreaterThan(DEFAULT_WINDOW_RADIUS);
     const edge = GAME_WINDOW.radius * BLOCK_WORLD;
     expect(edge).toBeGreaterThan(FOG_FAR);
-    expect(fogAmount(edge)).toBeGreaterThan(0.99);
-    expect(1 - fogAmount(edge)).toBeLessThan(0.01);
+    expect(nearAmount(edge)).toBeGreaterThan(0.99);
+    expect(1 - nearAmount(edge)).toBeLessThan(0.01);
   });
 
   it("starts inside the window, so the near ground is not hazed", () => {
@@ -72,16 +117,16 @@ describe("the fog's distances", () => {
     expect(FOG_NEAR).toBeLessThan(FOG_FAR);
     // And nothing at all at the origin: a player standing at the centre of a chunk is
     // looking at ground beside them.
-    expect(fogAmount(0)).toBeLessThan(0.001);
+    expect(nearAmount(0)).toBeLessThan(0.001);
   });
 
   it("leaves the window's edge effectively invisible", () => {
     // Ninety-seven per cent fogged at the nominal far distance, and rather less at the
     // actual edge — which is the number that matters, because that is where the terrain
     // stops, and a few per cent of a seam is a line across the horizon.
-    expect(fogAmount(FOG_FAR)).toBeGreaterThan(0.95);
-    expect(1 - fogAmount(FOG_FAR)).toBeLessThan(0.05);
-    expect(1 - fogAmount(FOG_FAR * 1.5)).toBeLessThan(0.005);
+    expect(nearAmount(FOG_FAR)).toBeGreaterThan(0.95);
+    expect(1 - nearAmount(FOG_FAR)).toBeLessThan(0.05);
+    expect(1 - nearAmount(FOG_FAR * 1.5)).toBeLessThan(0.005);
   });
 
   it("does nothing at all nearer than it starts", () => {
@@ -90,7 +135,7 @@ describe("the fog's distances", () => {
     // the player's feet comes out extrapolated past its own colour — away from the fog,
     // which is to say inverted.
     for (const distance of [0, 10, 100, FOG_NEAR - 1, FOG_NEAR]) {
-      expect(fogAmount(distance), `${distance} units`).toBe(0);
+      expect(nearAmount(distance), `${distance} units`).toBe(0);
     }
   });
 
@@ -105,9 +150,9 @@ describe("the fog's distances", () => {
     // fog is above one eight-bit step: a float runs out of room a few thousand units
     // out and the amount stops rising, which says nothing about the curve.
     let previousRate = Infinity;
-    let previous = fogAmount(FOG_NEAR);
+    let previous = nearAmount(FOG_NEAR);
     for (let d = FOG_NEAR + 25; d <= 2000; d += 25) {
-      const amount = fogAmount(d);
+      const amount = nearAmount(d);
       expect(amount).toBeGreaterThan(previous);
       expect((amount - previous) / 25).toBeLessThan(previousRate);
       previousRate = (amount - previous) / 25;
@@ -115,15 +160,15 @@ describe("the fog's distances", () => {
     }
     // Past that, what is left of the surface is below what an eight-bit channel can
     // represent, so "it reached solid" is not a thing anybody can see.
-    expect(1 - fogAmount(2000)).toBeLessThan(1 / 255);
-    expect(1 - fogAmount(1e6)).toBeLessThan(1e-12);
+    expect(1 - nearAmount(2000)).toBeLessThan(1 / 255);
+    expect(1 - nearAmount(1e6)).toBeLessThan(1e-12);
   });
 
   it("is monotonic, which is the property that makes it read as distance", () => {
     let previous = -1;
     for (let d = 0; d <= 2000; d += 10) {
-      expect(fogAmount(d)).toBeGreaterThanOrEqual(previous);
-      previous = fogAmount(d);
+      expect(nearAmount(d)).toBeGreaterThanOrEqual(previous);
+      previous = nearAmount(d);
     }
   });
 
@@ -148,9 +193,50 @@ describe("the fog, as a material uses it", () => {
     expect(fragment).toContain("exp(");
   });
 
-  it("costs one length and one exponential", () => {
+  it("sums the window term and the atmosphere through one exponential", () => {
+    // The shape of the change. Two optical depths add *before* the exponential, not after
+    // it: the near term is the window closure scaled by `uFogNearField`, and the air term
+    // is the column through the shell. Three `exp(` — two in the quadrature and one for
+    // the sum. Pinned because this is the shader every surface in the project runs, and
+    // the cost is the place a change hides; the shell's own `sqrt` and the quadrature's
+    // structure are pinned where the node is built, in `atmosphere.test.ts`, because the
+    // eight point lights in this material contribute `sqrt(` of their own.
     const { fragment } = compile(new SurfaceMaterial());
-    expect(fragment.split("exp(").length - 1).toBe(1);
+    expect(fragment.split("exp(").length - 1).toBe(3);
+    expect(fragment).toContain("uFogNearField");
+    expect(fragment).toContain("uFogAtmosphere");
+    expect(fragment).toContain("uFogRadius");
+    expect(fragment).toContain("uFogScale");
+  });
+
+  it("reveals the planet from the altitude the globe takes over at", () => {
+    // **The bug this whole arrangement exists to fix.** At 900 units the globe has fully
+    // taken over, so the near-field window term is off and the fog is the aerial
+    // perspective through the shell — a short, thin column straight down, and the ground
+    // reads. Switch the near term back on and the same view is a wall of sky, which is
+    // what the player saw before.
+    const fromOrbit = fullAmount(eyeAt(900), groundAt(0), 0);
+    const withWindow = fullAmount(eyeAt(900), groundAt(0), 1);
+    expect(fromOrbit).toBeLessThan(0.3);
+    expect(withWindow).toBeGreaterThan(0.8);
+  });
+
+  it("hazes the limb far more than straight down, which is what makes a rim", () => {
+    // The same air, crossed over a much longer chord. Distance from the eye cannot tell
+    // the two apart — this is the difference the shell was introduced for, and it is what
+    // the atmosphere shell in `atmosphere.ts` renders as the rim of the planet.
+    const down = fullAmount(eyeAt(900), groundAt(0), 0);
+    const limb = fullAmount(eyeAt(900), groundAt(85), 0);
+    expect(limb).toBeGreaterThan(0.7);
+    expect(limb).toBeGreaterThan(down * 3);
+  });
+
+  it("still closes the window from the ground, where the near field is on", () => {
+    // The near term's job is untouched: a ground eye and a fragment at the window's own
+    // distance are effectively the sky, and the atmosphere term only adds to that.
+    const eye: Vec3 = { x: 0, y: DEFAULT_PLANET_RADIUS + 2, z: 0 };
+    const out: Vec3 = { x: 0, y: DEFAULT_PLANET_RADIUS + 2, z: FOG_FAR };
+    expect(fullAmount(eye, out, 1)).toBeGreaterThan(0.97);
   });
 
   it("uses the horizon colour rather than the zenith, by default", () => {

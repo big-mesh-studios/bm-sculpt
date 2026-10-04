@@ -20,10 +20,11 @@ import type { Rgb8 } from "@big-mesh-studios/core";
 import {
   Field,
   OperationBVH,
+  baseFieldFor,
   deserialiseOperations,
-  terrainField,
 } from "@big-mesh-studios/csg";
-import type { PaintSource, TerrainField } from "@big-mesh-studios/csg";
+import type { PaintSource } from "@big-mesh-studios/csg";
+import type { BaseFieldSpec, BuiltBaseField } from "@big-mesh-studios/csg";
 import { cellCentre, chunkCellOf, sampleIndexIn, tileIndex } from "../world";
 
 import type { ChunkMesher } from "./chunk-mesher";
@@ -93,43 +94,41 @@ export class TilePaint implements PaintSource {
  */
 export const mesherFor = (model: ModelMessage): ChunkMesher => {
   const operations = deserialiseOperations(model.operations);
-  const terrain = terrainOf(model);
+  const base = baseFieldOf(model.base);
   const field = new Field(new OperationBVH(operations), {
-    // One value in three slots, because a height field is all three at once: the distance
+    // One value in three slots, because a base field is all three at once: the distance
     // function, the region it can answer for, and the Lipschitz bound that makes its
-    // distances safe to step by. Splitting them would allow a caller to send a terrain's
-    // distances with another terrain's bound, and the symptom would be a picker that walks
+    // distances safe to step by. Splitting them would allow a caller to send one field's
+    // distances with another's bound, and the symptom would be a picker that walks
     // through the ground.
-    base: terrain,
-    extent: terrain,
-    lipschitz: terrain?.lipschitz,
+    base,
+    extent: base,
+    lipschitz: base?.lipschitz,
+    // **Outward from the planet's centre, where the field has no gradient of its own.** A medial
+    // axis on a sphere has none either, and the default `+Y` is outward at the equator, sideways
+    // at the poles and inward on the far side — so without this a planet gets a speck of shading
+    // pointing into the ground at every one of them. It rides on the field rather than being
+    // spelled out here, so this thread and the player's collision cannot answer differently.
+    fallbackNormal: base?.fallbackNormal,
     paint: new TilePaint(paintTilesOf(model.paint)),
   });
   return new SurfaceNetsChunkMesher(field);
 };
 
 /**
- * The terrain behind the operations, if the model has one.
+ * The base field a message names, built on this side of the thread boundary.
  *
- * `undefined` for `"none"`, and a field built from the message's four parameters for
- * `"terrain"`. Deterministic in those parameters alone, which is the whole reason the
- * message carries numbers rather than something opaque: the main thread and every worker
- * build the same landscape from the same four numbers, so the picker and the mesher cannot
- * disagree about where the ground is (ADR 0009).
+ * **Deterministic in the parameters alone**, which is the whole reason the message carries numbers
+ * rather than something opaque: the main thread and every worker build the same world from the
+ * same numbers, so the picker and the mesher cannot disagree about where the ground is
+ * (ADR 0009). A planet's field is built by the same `baseFieldFor` the main thread calls, so a
+ * landscape that grew a third kind of base field could not be built twice differently.
  *
- * A message that claims terrain and omits the parameters is refused rather than given a
- * default. A default would be a landscape nobody asked for, on every worker, discovered
- * wherever the camera happened to be looking.
+ * `undefined` for a model with no base field, and that is the only way to get one.
  */
-const terrainOf = (model: ModelMessage): TerrainField | undefined => {
-  if (model.base === "none") return undefined;
-  if (model.terrain === undefined) {
-    throw new Error(
-      `model says ${model.base} but carries no terrain parameters`,
-    );
-  }
-  return terrainField(model.terrain);
-};
+export const baseFieldOf = (
+  spec: BaseFieldSpec | undefined,
+): BuiltBaseField | undefined => baseFieldFor(spec);
 
 /** The model's painted chunks, keyed for lookup. */
 export const paintTilesOf = (

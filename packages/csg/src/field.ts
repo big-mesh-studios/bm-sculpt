@@ -97,11 +97,30 @@ export interface FieldOptions {
    */
   lipschitz?: number;
   /**
+   * The normal to report where the field's own gradient is zero, as a function of position.
+   *
+   * **There is no answer that is right everywhere**, which is why this is an option and the
+   * default stands. A zero gradient is a point on a medial axis or in open space; nothing can be
+   * shaded from a direction there, and a normal of `(0, 0, 0)` propagates into a vertex buffer as
+   * a black triangle. So something finite is returned, and `+Y` is as good as anything *on a
+   * height field*.
+   *
+   * It is **wrong on a sphere** in a way that shows: `+Y` is outward at the equator, sideways at
+   * the poles, and inward on the far side, so a planet gets a speck of shading that points into
+   * the ground rather than out of it at every medial axis. A planet's field supplies
+   * `normalize(p)` and the speck disappears. The symptom without it is small and the cause is
+   * invisible, which is the usual combination.
+   */
+  fallbackNormal?: (x: number, y: number, z: number) => Vec3;
+  /**
    * The central-difference step for gradients. Left unset it is a tenth of a
    * voxel, which is the smallest distance the mesher can resolve.
    */
   step?: number;
 }
+
+/** The direction a field reports where it has none, unless told otherwise. See `FieldOptions`. */
+const UP: Vec3 = { x: 0, y: 1, z: 0 };
 
 export class Field {
   readonly bvh: OperationBVH;
@@ -119,11 +138,15 @@ export class Field {
   /** The central-difference step used by `gradient`. */
   readonly step: number;
 
+  /** Where `gradient` gets a direction when the field has none. See `FieldOptions`. */
+  private readonly fallbackNormal: (x: number, y: number, z: number) => Vec3;
+
   constructor(bvh: OperationBVH, options: FieldOptions = {}) {
     this.bvh = bvh;
     this.base = options.base;
     this.extent = options.extent;
     this.paint = options.paint;
+    this.fallbackNormal = options.fallbackNormal ?? (() => UP);
 
     const bound = options.lipschitz ?? 1;
     // Clamped rather than trusted. A base field that mis-measures its gradient
@@ -178,13 +201,10 @@ export class Field {
     const dy = this.distance(x, y + h, z) - this.distance(x, y - h, z);
     const dz = this.distance(x, y, z + h) - this.distance(x, y, z - h);
     const length = Math.hypot(dx, dy, dz);
-    // A zero gradient is a point with no surface near it, or one exactly on a
-    // medial axis where the field has a crease. Neither can be shaded from a
-    // direction, and a normal of `(0, 0, 0)` propagates into a vertex buffer as a
-    // black triangle, so up is as good an answer as any and is at least finite.
-    return length === 0
-      ? { x: 0, y: 1, z: 0 }
-      : { x: dx / length, y: dy / length, z: dz / length };
+    // A zero gradient is a point with no surface near it, or one exactly on a medial axis where
+    // the field has a crease. See `FieldOptions.fallbackNormal` for why this is an option.
+    if (length === 0) return this.fallbackNormal(x, y, z);
+    return { x: dx / length, y: dy / length, z: dz / length };
   }
 
   /**

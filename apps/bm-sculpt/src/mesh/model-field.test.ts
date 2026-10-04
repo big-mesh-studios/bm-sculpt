@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { makeOperation, serialiseOperations } from "@big-mesh-studios/csg";
-import type { Operation } from "@big-mesh-studios/csg";
+import type {
+  BaseFieldSpec,
+  Operation,
+  TerrainParams,
+} from "@big-mesh-studios/csg";
 import { BLOCK_WORLD, CHUNK_VOXELS } from "../constants";
 import { type CellCoord, cellCentre, tileIndex, TILE_COLOURS } from "../world";
 
@@ -30,7 +34,13 @@ const model = (
   revision: 1,
   operations: serialiseOperations(operations),
   paint,
-  base: "none",
+  base: undefined,
+});
+
+/** A base field spec for a landscape, as `ModelMessage` now carries it. */
+const terrainBase = (params: TerrainParams): BaseFieldSpec => ({
+  kind: "terrain",
+  params,
 });
 
 /**
@@ -97,13 +107,18 @@ describe("building a mesher from a model message", () => {
     expect([...fromMessage.indices]).toEqual([...direct.indices]);
   });
 
-  it("refuses a model that claims terrain and does not say which", () => {
+  it("refuses a base field kind it does not know", () => {
     // Failing loudly costs one message and says why. A default landscape would be one
     // nobody asked for, on every worker, discovered wherever the camera happened to be
     // pointing — which is the worst of both: it costs a session and explains nothing.
-    expect(() => mesherFor({ ...model([]), base: "terrain" })).toThrow(
-      /terrain parameters/,
-    );
+    //
+    // **Unreachable through the type**, which is the point of the union: `base` carries its own
+    // parameters, so a message cannot name a planet and arrive holding a landscape's four numbers.
+    // The runtime check is for a *third* kind added on one side of the thread boundary, which is
+    // exactly the case the type cannot see.
+    expect(() =>
+      mesherFor({ ...model([]), base: { kind: "moon", params: {} } } as never),
+    ).toThrow(/unknown base field/);
   });
 
   it("gives a model that says which terrain the same landscape twice", () => {
@@ -113,8 +128,7 @@ describe("building a mesher from a model message", () => {
     // agreement the picker and the mesher rely on (ADR 0009).
     const withTerrain = {
       ...model([aSphere(45)]),
-      base: "terrain" as const,
-      terrain: { origin: -70, scale: 96, octaves: 4, seed: 7 },
+      base: terrainBase({ origin: -70, scale: 96, octaves: 4, seed: 7 }),
     };
     const first = mesherFor(withTerrain).mesh({ cell: cell(0), lod: 0 });
     const second = mesherFor(withTerrain).mesh({ cell: cell(0), lod: 0 });
@@ -129,13 +143,11 @@ describe("building a mesher from a model message", () => {
     const terrain = { origin: -70, scale: 96, octaves: 4 };
     const one = mesherFor({
       ...model([]),
-      base: "terrain",
-      terrain: { ...terrain, seed: 1 },
+      base: terrainBase({ ...terrain, seed: 1 }),
     }).mesh({ cell: cell(0), lod: 0 });
     const two = mesherFor({
       ...model([]),
-      base: "terrain",
-      terrain: { ...terrain, seed: 2 },
+      base: terrainBase({ ...terrain, seed: 2 }),
     }).mesh({ cell: cell(0), lod: 0 });
 
     expect(one.vertexCount).toBeGreaterThan(0);
@@ -315,7 +327,10 @@ describe("a worker end to end, against a fake scope", () => {
     // A worker that throws is a worker the main thread's request waits on forever.
     const fake = scope();
     runWorker(fake);
-    fake.send({ ...model([aSphere(45)]), base: "terrain" });
+    fake.send({
+      ...model([aSphere(45)]),
+      base: { kind: "moon", params: {} } as never,
+    });
     fake.send({ kind: "meshChunk", cell: cell(0), lod: 0, generation: 1 });
 
     expect(fake.posted).toHaveLength(1);

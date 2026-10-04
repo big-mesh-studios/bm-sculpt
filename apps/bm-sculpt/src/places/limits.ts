@@ -177,10 +177,11 @@ export const MAX_LIGHTS = 256;
 /**
  * How far one light may reach, in world units.
  *
- * **A hundred thousand, which is the far plane.** A light reaching further than anything can be
- * drawn is a light that costs a term in every fragment of the world and reaches no fragment that
- * is not already past the fog. The same bound as `MAX_ZONE_SIZE`'s cousin `MAX_COORDINATE`, and
- * chosen so that "a light that covers everything" is expressible without being unbounded.
+ * **A hundred thousand, well inside the four-hundred-thousand far plane.** A light reaching further
+ * than anything sensible is a light that costs a term in every fragment of the world and reaches no
+ * fragment that is not already past the fog. The same bound as `MAX_ZONE_SIZE`'s cousin
+ * `MAX_COORDINATE`, and chosen so that "a light that covers everything" is expressible without being
+ * unbounded.
  */
 export const MAX_LIGHT_RADIUS = 1e5;
 

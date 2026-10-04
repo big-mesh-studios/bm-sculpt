@@ -19,7 +19,7 @@
  * a world whose shadows do not.
  *
  * Fog arrived with it, for a related reason. The chunk window ends four chunks out —
- * 1280 world units — while the far plane is a hundred thousand, so the terrain's edge is
+ * 1280 world units — while the far plane is four hundred thousand, so the terrain's edge is
  * a line across the horizon at a distance the eye resolves easily. `fog.ts` closes that
  * gap, and its far distance is the window's radius rather than a number chosen to look
  * right, because that is not an art decision.
@@ -114,6 +114,18 @@ export class SurfaceMaterial extends NodeMaterial {
   /** How much the volume's red channel darkens what it does not cover. */
   volumeStrength = 0.75;
 
+  /**
+   * How opaque the chunks are, 0 to 1.
+   *
+   * **Driven by altitude, so the streamed terrain can fade out as the far-field globe fades in.**
+   * The globe is the same field at a coarser resolution, and drawing one over the other is only a
+   * crossfade if the terrain can be partly transparent too — otherwise the opaque chunks simply
+   * overwrite it. Opaque by default, so the editor and the spike, which have no globe, are
+   * unchanged.
+   */
+  override opacity = 1;
+
+  private opacityUniform?: UniformNode<"float">;
   private volumeSampler?: UniformNode<"sampler3D">;
   private volumeScaleUniform?: UniformNode<"float">;
   private volumeStrengthUniform?: UniformNode<"float">;
@@ -147,6 +159,11 @@ export class SurfaceMaterial extends NodeMaterial {
       "uVolumeStrength",
       "float",
       () => this.volumeStrength,
+    );
+    this.opacityUniform = b.materialUniform(
+      "uTerrainOpacity",
+      "float",
+      () => this.opacity,
     );
 
     // Only bound when there is a volume. The sampler has to be named for the
@@ -227,6 +244,6 @@ export class SurfaceMaterial extends NodeMaterial {
 
     // Fog last, after the lighting and the volume, because it is what the air between
     // the surface and the eye does to it rather than anything the surface is.
-    return vec4(this.fog.apply(b, shaded), float(1));
+    return vec4(this.fog.apply(b, shaded), this.opacityUniform!);
   }
 }

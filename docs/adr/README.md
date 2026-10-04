@@ -16,43 +16,49 @@ recorded cost is a decision nobody thought about.
 
 ## Records
 
-| #                                                                       | Decision                                                                               | Status   |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------- |
-| [0001](0001-rmsl-over-three.md)                                         | Render with `@random-mesh/rmsl`, not three.js                                          | accepted |
-| [0002](0002-computed-field-never-stored.md)                             | The field is computed from an operation list, never stored                             | accepted |
-| [0003](0003-surface-nets.md)                                            | Surface Nets per chunk, not marching cubes                                             | accepted |
-| [0004](0004-csg-per-chunk.md)                                           | Each chunk evaluates the operation list at its own LOD                                 | accepted |
-| [0005](0005-streaming-shape.md)                                         | Slot-indexed flat arrays and a coordinate map, not a keyed map                         | accepted |
-| [0006](0006-field-saturation.md)                                        | The field saturates at a fixed distance                                                | accepted |
-| [0007](0007-window-presence-and-lod-reset.md)                           | Invalidating a slot invalidates what a query may read from it                          | accepted |
-| [0008](0008-worker-pool-and-generations.md)                             | One chunk per worker, and a generation on every request                                | accepted |
-| [0009](0009-picking-and-history.md)                                     | The picker and the mesher read one field, and edits undo                               | accepted |
-| [0010](0010-suspend-the-pointer-lock-not-the-input.md)                  | Suspend the pointer lock, not the input                                                | accepted |
-| [0011](0011-the-sun-is-placed-by-a-solar-model.md)                      | The sun is placed by a solar model, not by a drawn curve                               | accepted |
-| [0012](0012-the-cloud-layer-is-a-raymarched-slab.md)                    | The cloud layer is a raymarched slab with a carrier geometry                           | accepted |
-| [0013](0013-fog-is-exponential-and-closes-at-the-window.md)             | Fog is exponential, and closes at the window's radius                                  | accepted |
-| [0014](0014-the-sky-dome-is-drawn-first.md)                             | The sky dome is drawn first and ignores depth                                          | accepted |
-| [0015](0015-place-scripts-run-in-a-quickjs-interpreter.md)              | Place scripts run in QuickJS, and all three caps are set                               | accepted |
-| [0016](0016-a-place-is-a-named-group-of-operations.md)                  | A place is a named group of operations, and `flatten` decides the fold order           | accepted |
-| [0017](0017-the-vocabulary-is-a-table.md)                               | The vocabulary is a table, and a payload is accepted whole or refused whole            | accepted |
-| [0018](0018-a-place-is-bundled-and-the-guest-library-is-a-real-file.md) | A place is bundled into one reproducible program, and the guest library is a real file | accepted |
-| [0019](0019-the-host-owns-what-it-can-own.md)                           | The host owns what it can own, and asks for the eight things it cannot                 | accepted |
-| [0020](0020-a-place-runs-on-the-frame.md)                               | A place runs on the frame, and the console is how a person meets it                    | accepted |
-| [0021](0021-a-place-arrives-as-a-zip-with-a-manifest.md)                | A place arrives as a zip with a manifest at its root                                   | accepted |
-| [0022](0022-a-field-is-a-box-that-moves-the-player.md)                  | A medium is a box the physics reads, and the host supplies it                          | accepted |
-| [0023](0023-lights-are-a-fixed-table-of-uniforms.md)                    | Lights are a fixed table of uniforms, not per-object state                             | accepted |
-| [0024](0024-packages-is-what-has-no-opinion.md)                         | `/packages` is what has no opinion, and `/apps` is what does                           | accepted |
-| [0025](0025-a-primitive-is-one-table-entry.md)                          | A primitive is one table entry, and the capsule points up                              | accepted |
-| [0026](0026-the-mobile-rules-live-in-a-package.md)                      | The mobile rules live in a package, because they were never this application's         | accepted |
-| [0027](0027-the-modeller-is-a-flat-list-of-placed-primitives.md)        | The modeller is a flat list of placed primitives, meshed not marched                   | accepted |
-| [0028](0028-a-colour-is-a-property-of-the-operation.md)                 | A colour is a property of the operation, and the model is a boolean fold               | accepted |
-| [0029](0029-the-site-root-is-a-front-page.md)                           | The site root is a front page, and the applications sit beside it                      | accepted |
-| [0030](0030-two-meshers-and-a-report.md)                                | The modeller offers two meshers, and reports what came back                            | accepted |
-| [0031](0031-the-nearest-surface-carries-a-points-colour.md)             | The nearest surface carries a point's colour, not the last one in the list             | accepted |
-| [0032](0032-a-model-leaves-as-a-3mf.md)                                 | A model leaves as a 3MF, stood on a bed at a height in millimetres                     | accepted |
-| [0033](0033-a-project-file-is-a-manifest-and-the-model.md)              | A project file is a manifest and the model, and Save writes back to where it came from | accepted |
-| [0034](0034-a-draft-survives-a-reload.md)                               | A draft survives a reload, and the files you opened are remembered                     | accepted |
-| [0035](0035-the-coarser-chunk-overlaps-the-finer-one.md)                | The coarser chunk overlaps the finer one, and there is no skirt                        | accepted |
+| #                                                                        | Decision                                                                               | Status               |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- | -------------------- |
+| [0001](0001-rmsl-over-three.md)                                          | Render with `@random-mesh/rmsl`, not three.js                                          | accepted             |
+| [0002](0002-computed-field-never-stored.md)                              | The field is computed from an operation list, never stored                             | accepted             |
+| [0003](0003-surface-nets.md)                                             | Surface Nets per chunk, not marching cubes                                             | accepted             |
+| [0004](0004-csg-per-chunk.md)                                            | Each chunk evaluates the operation list at its own LOD                                 | accepted             |
+| [0005](0005-streaming-shape.md)                                          | Slot-indexed flat arrays and a coordinate map, not a keyed map                         | accepted             |
+| [0006](0006-field-saturation.md)                                         | The field saturates at a fixed distance                                                | accepted             |
+| [0007](0007-window-presence-and-lod-reset.md)                            | Invalidating a slot invalidates what a query may read from it                          | accepted             |
+| [0008](0008-worker-pool-and-generations.md)                              | One chunk per worker, and a generation on every request                                | accepted             |
+| [0009](0009-picking-and-history.md)                                      | The picker and the mesher read one field, and edits undo                               | accepted             |
+| [0010](0010-suspend-the-pointer-lock-not-the-input.md)                   | Suspend the pointer lock, not the input                                                | accepted             |
+| [0011](0011-the-sun-is-placed-by-a-solar-model.md)                       | The sun is placed by a solar model, not by a drawn curve                               | accepted             |
+| [0012](0012-the-cloud-layer-is-a-raymarched-slab.md)                     | The cloud layer is a raymarched slab with a carrier geometry                           | superseded by `0040` |
+| [0013](0013-fog-is-exponential-and-closes-at-the-window.md)              | Fog is exponential, and closes at the window's radius                                  | extended by `0040`   |
+| [0014](0014-the-sky-dome-is-drawn-first.md)                              | The sky dome is drawn first and ignores depth                                          | accepted             |
+| [0015](0015-place-scripts-run-in-a-quickjs-interpreter.md)               | Place scripts run in QuickJS, and all three caps are set                               | accepted             |
+| [0016](0016-a-place-is-a-named-group-of-operations.md)                   | A place is a named group of operations, and `flatten` decides the fold order           | accepted             |
+| [0017](0017-the-vocabulary-is-a-table.md)                                | The vocabulary is a table, and a payload is accepted whole or refused whole            | accepted             |
+| [0018](0018-a-place-is-bundled-and-the-guest-library-is-a-real-file.md)  | A place is bundled into one reproducible program, and the guest library is a real file | accepted             |
+| [0019](0019-the-host-owns-what-it-can-own.md)                            | The host owns what it can own, and asks for the eight things it cannot                 | accepted             |
+| [0020](0020-a-place-runs-on-the-frame.md)                                | A place runs on the frame, and the console is how a person meets it                    | accepted             |
+| [0021](0021-a-place-arrives-as-a-zip-with-a-manifest.md)                 | A place arrives as a zip with a manifest at its root                                   | accepted             |
+| [0022](0022-a-field-is-a-box-that-moves-the-player.md)                   | A medium is a box the physics reads, and the host supplies it                          | accepted             |
+| [0023](0023-lights-are-a-fixed-table-of-uniforms.md)                     | Lights are a fixed table of uniforms, not per-object state                             | accepted             |
+| [0024](0024-packages-is-what-has-no-opinion.md)                          | `/packages` is what has no opinion, and `/apps` is what does                           | accepted             |
+| [0025](0025-a-primitive-is-one-table-entry.md)                           | A primitive is one table entry, and the capsule points up                              | accepted             |
+| [0026](0026-the-mobile-rules-live-in-a-package.md)                       | The mobile rules live in a package, because they were never this application's         | accepted             |
+| [0027](0027-the-modeller-is-a-flat-list-of-placed-primitives.md)         | The modeller is a flat list of placed primitives, meshed not marched                   | accepted             |
+| [0028](0028-a-colour-is-a-property-of-the-operation.md)                  | A colour is a property of the operation, and the model is a boolean fold               | accepted             |
+| [0029](0029-the-site-root-is-a-front-page.md)                            | The site root is a front page, and the applications sit beside it                      | accepted             |
+| [0030](0030-two-meshers-and-a-report.md)                                 | The modeller offers two meshers, and reports what came back                            | accepted             |
+| [0031](0031-the-nearest-surface-carries-a-points-colour.md)              | The nearest surface carries a point's colour, not the last one in the list             | accepted             |
+| [0032](0032-a-model-leaves-as-a-3mf.md)                                  | A model leaves as a 3MF, stood on a bed at a height in millimetres                     | accepted             |
+| [0033](0033-a-project-file-is-a-manifest-and-the-model.md)               | A project file is a manifest and the model, and Save writes back to where it came from | accepted             |
+| [0034](0034-a-draft-survives-a-reload.md)                                | A draft survives a reload, and the files you opened are remembered                     | accepted             |
+| [0035](0035-the-coarser-chunk-overlaps-the-finer-one.md)                 | The coarser chunk overlaps the finer one, and there is no skirt                        | accepted             |
+| [0036](0036-the-planets-centre-is-the-origin.md)                         | The planet's centre is the world origin                                                | accepted             |
+| [0037](0037-up-is-a-function-of-where-you-are.md)                        | Up is a function of where you are                                                      | accepted             |
+| [0038](0038-the-planets-chunks-are-patches-of-a-warped-cube.md)          | The chunks are patches of a warped cube                                                | superseded by `0039` |
+| [0039](0039-past-a-height-the-planet-is-a-displaced-globe.md)            | Past a height, the planet is a displaced globe                                         | accepted             |
+| [0040](0040-the-atmosphere-is-a-shell-and-the-clouds-wrap-the-planet.md) | The atmosphere is a spherical shell, and the clouds wrap the planet                    | accepted             |
+| [0041](0041-the-planet-is-thirty-four-times-larger.md)                   | The planet is 34× larger, and its body scales with it                                  | accepted             |
 
 ## What is decided so far
 
@@ -361,3 +367,23 @@ fraction of a landscape and the whole of a figure.** `0031` is the short version
 surface takes a point's colour, and the reach is left doing the one job it is good at, which
 is rejecting a query that is nowhere near anything. It supersedes one sentence of `0028`,
 which was right about its own decision and wrong about the rule underneath it.
+
+**0040 is the record where the sky stopped being flat, and it was forced by 0039.** Making the
+planet visible from above exposed the fact that the fog, the clouds and the sky were all still
+shaped for a landscape. The finding worth carrying forward is that **one law was doing two jobs
+that cannot share a number**: hiding the chunk window needs an extinction that also swallows the
+planet from orbit, so the fog was split into a near-field term gated on the globe's own crossfade
+and an atmospheric column that depends on where the ray goes. The rest follows from the same
+realisation stated geometrically — the clouds became a concentric shell addressed by direction,
+and the sky became a function of the eye's altitude, so it goes black and shows stars once there
+is no air left to scatter.
+
+**0041 is the record where a decision from 0036 turned out to be about the wrong quantity.** 0036
+chose the planet's radius from its circumference — how long it takes to walk around — and that
+argument was sound but pointed at the wrong feeling: the horizon, `√(2·R·h)`, was 219 units, less
+than one terrain feature, so the ground curved away inside a hillside. The record's real content is
+the split it makes: **the planet's body scales with the radius, and its surface detail does not.**
+Everything a player walks on and sculpts at stays at its absolute size, which is why the change is a
+constant plus a re-derivation rather than a rescaling of the repository, and why the terrain reads
+flatter as the price. It also pays off 0039 by confirming, with the patch tests it makes fail, that
+the warped-cube lattice could not have served a planet this size.

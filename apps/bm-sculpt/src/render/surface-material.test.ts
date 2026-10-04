@@ -75,6 +75,16 @@ describe("the spike material compiles", () => {
     );
   });
 
+  it("carries an opacity the crossfade can drive, opaque by default", () => {
+    // The terrain's half of the globe crossfade: the chunks fade out as the globe fades in. Opaque
+    // by default, so the editor and the spike — which build a `SurfaceMaterial` with no globe in
+    // the scene — are unchanged.
+    const material = new SurfaceMaterial();
+    expect(material.opacity).toBe(1);
+    const { fragment } = compile(material);
+    expect(fragment).toContain("uTerrainOpacity");
+  });
+
   it("declares both vertex attributes, and the varyings that carry them", () => {
     const { program } = compile(new SurfaceMaterial());
 

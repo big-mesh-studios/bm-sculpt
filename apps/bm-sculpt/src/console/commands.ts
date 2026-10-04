@@ -138,6 +138,14 @@ export interface CommandsParams {
   /** Turns no-clip on or off, toggling when `noclip` is omitted. */
   setNoClip(noclip?: boolean): string;
   /**
+   * Puts the player in space above their current ground, for debugging the far field.
+   *
+   * A debug command rather than a game mechanic: flying up the old way takes minutes, and the
+   * only way to look at the globe, the atmosphere or the fog from outside was to sit through the
+   * climb. The altitude is optional so the default lives in one place.
+   */
+  toSpace(altitude?: number): string;
+  /**
    * The day-night clock, for `/clock:` — the four methods voxelscape's commands use
    * and no others.
    *
@@ -270,6 +278,7 @@ const jumpToPhase = (clock: ClockCommands, phase: Phase): string => {
 export const createCommands = ({
   setFlying,
   setNoClip,
+  toSpace,
   clock,
   cloud,
 }: CommandsParams): Commander => {
@@ -370,6 +379,22 @@ export const createCommands = ({
       run: (rest) => {
         const argument = readToggle(rest[0], "/player:no-clip");
         return typeof argument === "string" ? argument : setNoClip(argument);
+      },
+    },
+    "/player:space": {
+      description:
+        "put the player in space above the current ground, with flight on (debug)",
+      args: "[altitude]",
+      run: (rest) => {
+        // No argument uses the game's own default, so the two cannot drift.
+        if (rest[0] === undefined) return toSpace();
+        const altitude = readNumber(
+          rest[0],
+          "usage: /player:space [altitude]  (0 or more, world units)",
+          0,
+        );
+        if (typeof altitude === "string") return altitude;
+        return toSpace(altitude);
       },
     },
     "/fullscreen": {

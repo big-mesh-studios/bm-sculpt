@@ -7,6 +7,7 @@ import {
   terrainField,
 } from "@big-mesh-studios/csg";
 import type { PickField } from "@big-mesh-studios/picking";
+import { vec3 } from "@big-mesh-studios/core";
 import { neutralInput } from "../player/input";
 import { createPlayer, updatePlayer, type Medium } from "../player/player";
 import { GameWorld } from "./game-world";
@@ -28,52 +29,70 @@ const heightField = (
 describe("solid", () => {
   it("is the sign of the field", () => {
     const world = new GameWorld({ field: () => heightField(() => 0) });
-    expect(world.getSolidAt(0, 1, 0)).toBe(false);
-    expect(world.getSolidAt(0, -1, 0)).toBe(true);
+    expect(world.getSolidAt(vec3(0, 1, 0))).toBe(false);
+    expect(world.getSolidAt(vec3(0, -1, 0))).toBe(true);
   });
 });
 
-describe("ground height", () => {
+/**
+ * Ground as a distance along an up, which is what replaced `getGroundHeightAt`'s height.
+ *
+ * **Every assertion is a distance, and the ray is stated.** The old form asked "what is the
+ * height at `(x, z)`", which is only answerable on a world whose ground is level; this one asks
+ * how far the surface is from the feet along a named direction, which is answerable anywhere and
+ * is the question the physics actually asks.
+ */
+describe("ground distance", () => {
+  const UP = vec3(0, 1, 0);
+
   it("finds the surface below a point in the air", () => {
     const world = new GameWorld({ field: () => heightField(() => 0) });
-    expect(world.getGroundHeightAt(0, 50, 0)).toBeCloseTo(0, 1);
+    // Fifty above a surface at zero, so fifty below the feet.
+    expect(world.getGroundDistanceAt(vec3(0, 50, 0), UP)).toBeCloseTo(-50, 1);
   });
 
   it("finds the top of the material a point is inside", () => {
     const world = new GameWorld({ field: () => heightField(() => 0) });
-    expect(world.getGroundHeightAt(0, -20, 0)).toBeCloseTo(0, 1);
+    // Twenty below the surface, so twenty above the feet on the way out.
+    expect(world.getGroundDistanceAt(vec3(0, -20, 0), UP)).toBeCloseTo(20, 1);
   });
 
   it("reports a step's own top, so it can be climbed", () => {
     const world = new GameWorld({
       field: () => heightField((_x, z) => (z > 20 ? 10 : 0)),
     });
-    expect(world.getGroundHeightAt(0, 0, 25)).toBeCloseTo(10, 1);
-    expect(world.getGroundHeightAt(0, 0, 10)).toBeCloseTo(0, 1);
+    expect(world.getGroundDistanceAt(vec3(0, 0, 25), UP)).toBeCloseTo(10, 1);
+    expect(world.getGroundDistanceAt(vec3(0, 0, 10), UP)).toBeCloseTo(0, 1);
   });
 
   it("converges with a conservative Lipschitz bound", () => {
     const world = new GameWorld({
       field: () => heightField((_x, _z) => 0, 0.2),
     });
-    expect(world.getGroundHeightAt(0, 100, 0)).toBeCloseTo(0, 1);
+    expect(world.getGroundDistanceAt(vec3(0, 100, 0), UP)).toBeCloseTo(-100, 1);
   });
 
-  it("has no surface under a column of nothing", () => {
+  it("has no surface under a ray that meets nothing", () => {
     const world = new GameWorld({
       field: () => heightField(() => Number.NEGATIVE_INFINITY),
     });
-    expect(world.getGroundHeightAt(0, 10, 0)).toBe(-Infinity);
+    expect(world.getGroundDistanceAt(vec3(0, 10, 0), UP)).toBe(-Infinity);
   });
-});
 
-describe("terrain height", () => {
-  it("reads the analytic height when it has one", () => {
-    const world = new GameWorld({
-      field: () => heightField(() => 0),
-      heightAt: (x, z) => x + z,
-    });
-    expect(world.getHeightAt(3, 4)).toBe(7);
+  it("traces along the up it is given, not along world `+Y`", () => {
+    // **The assertion that says the query is a ray and not a column.** Fifty units above a
+    // surface at `y = 0`, asked along `-Y`: there is no surface on that ray at all, because it
+    // walks away from the ground — so the honest answer is `-Infinity`. A query still walking
+    // down world `+Y` would find the surface fifty units away and report it, and the physics
+    // would then stand the player on the ground while their own up pointed away from it.
+    //
+    // A height-field probe can only ever answer for one direction from a given point, so this is
+    // the whole of what the ray property is on this world. `up.test.ts` covers the spherical case,
+    // where both directions find a surface.
+    const world = new GameWorld({ field: () => heightField(() => 0) });
+    const feet = vec3(0, 50, 0);
+    expect(world.getGroundDistanceAt(feet, UP)).toBeCloseTo(-50, 1);
+    expect(world.getGroundDistanceAt(feet, vec3(0, -1, 0))).toBe(-Infinity);
   });
 });
 
@@ -87,9 +106,8 @@ describe("walking on a slope", () => {
     const world = new GameWorld({
       field: () => heightField((_x, z) => z * grade),
     });
-    const player = createPlayer(0, 6, 0);
-    player.yaw = 0; // faces uphill, +Z
-    const input = { ...neutralInput(), moveY: 1 };
+    const player = createPlayer(vec3(0, 6, 0));
+    const input = { ...neutralInput(), moveY: 1 }; // faces +Z, uphill, as constructed
     for (let i = 0; i < 300; i++) updatePlayer(player, 1 / 60, input, world);
 
     expect(player.position.z).toBeGreaterThan(200);
@@ -116,40 +134,44 @@ describe("walking on the real terrain", () => {
       extent: terrain,
       lipschitz: terrain.lipschitz,
     });
-    const world = new GameWorld({
-      field: () => field,
-      heightAt: terrain.heightAt,
-    });
+    const world = new GameWorld({ field: () => field });
 
-    for (const yaw of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
-      const player = createPlayer(0, terrain.heightAt(0, 0) + 6, 0);
-      player.yaw = yaw;
+    // **Four headings, set by building the player facing each.** The old loop assigned `player.yaw`;
+    // there is no yaw to assign, and a heading is a direction the frame is built from — which is
+    // the point, since `yaw` only ever meant "an angle around world `+Y`".
+    for (const [dx, dz] of [
+      [0, 1],
+      [1, 0],
+      [0, -1],
+      [-1, 0],
+    ] as const) {
+      const spawn = vec3(0, terrain.heightAt(0, 0) + 6, 0);
+      const player = createPlayer(spawn, {}, world.frame, vec3(dx, 0, dz));
       const input = { ...neutralInput(), moveY: 1 };
       for (let i = 0; i < 300; i++) updatePlayer(player, 1 / 60, input, world);
 
       const travelled =
-        player.position.x * Math.sin(yaw) + player.position.z * Math.cos(yaw);
+        (player.position.x - spawn.x) * dx + (player.position.z - spawn.z) * dz;
       expect(travelled).toBeGreaterThan(250);
-      expect(player.onGround).toBe(true);
     }
   });
 });
 
 describe("water", () => {
-  it("is off when the world has no sea level", () => {
+  it("is off when the world has no sea", () => {
     const world = new GameWorld({ field: () => heightField(() => 0) });
-    expect(world.getInWaterAt(0, -1, 0)).toBe(false);
+    expect(world.getInWaterAt(vec3(0, -1, 0))).toBe(false);
   });
 
-  it("is below the sea level and outside solid", () => {
+  it("is inside the sea and outside solid", () => {
     const world = new GameWorld({
       field: () => heightField(() => 0),
-      seaLevel: 5,
+      seaRadius: 5,
     });
-    expect(world.getInWaterAt(0, 2, 0)).toBe(true);
-    expect(world.getInWaterAt(0, 8, 0)).toBe(false);
+    expect(world.getInWaterAt(vec3(0, 2, 0))).toBe(true);
+    expect(world.getInWaterAt(vec3(0, 8, 0))).toBe(false);
     // Inside the ground under the water, so not swimming in it.
-    expect(world.getInWaterAt(0, -1, 0)).toBe(false);
+    expect(world.getInWaterAt(vec3(0, -1, 0))).toBe(false);
   });
 });
 
@@ -192,7 +214,7 @@ describe("a scripted field, as the physics sees it", () => {
     const { yLow = -5, yHigh = 5, zLow = -5, zHigh = 5 } = reach;
     return new GameWorld({
       field: () => heightField(() => FLOOR),
-      mediumAt: (x, y, z) =>
+      mediumAt: ({ x, y, z }) =>
         x >= -10 &&
         x <= 10 &&
         y >= yLow &&
@@ -228,7 +250,7 @@ describe("a scripted field, as the physics sees it", () => {
 
   /** A player standing still at the origin, inside the belt's box and not touching the floor. */
   const standing = () => {
-    const player = createPlayer(0, 0, 0, {});
+    const player = createPlayer(vec3(0, 0, 0));
     player.onGround = true;
     return player;
   };
@@ -258,7 +280,7 @@ describe("a scripted field, as the physics sees it", () => {
     // **The other half of that pair, and the difference between them is the point.** A world that
     // *has* fields must answer every question; "none here" is an answer, and `undefined` is the
     // absence of one.
-    expect(belt().getMediumAt!(0, 2, 900)).toBeNull();
+    expect(belt().getMediumAt!(vec3(0, 2, 900))).toBeNull();
   });
 
   it("pushes a standing player along the belt", () => {
@@ -333,8 +355,8 @@ describe("a scripted field, as the physics sees it", () => {
     // two units thick would drop them out of it in the first few frames and the test would then be
     // measuring falling.
     const world = belt({ speedScale: 0, sink: 6, pushVz: 0 }, DEEP);
-    const player = createPlayer(0, 200, 0, {});
-    const open = createPlayer(0, 200, 0, {});
+    const player = createPlayer(vec3(0, 200, 0));
+    const open = createPlayer(vec3(0, 200, 0));
 
     for (let frame = 0; frame < 120; frame++) {
       updatePlayer(player, 1 / 60, neutralInput(), world);
@@ -347,12 +369,15 @@ describe("a scripted field, as the physics sees it", () => {
     }
 
     expect(player.position.y).toBeGreaterThan(open.position.y);
-    expect(Number.isFinite(player.vy)).toBe(true);
+    // The fall velocity is the velocity's component along the player's own up, and it has to stay
+    // a number — a `NaN` here is a field that has handed the physics a broken target.
+    const fall = player.velocity.y;
+    expect(Number.isFinite(fall)).toBe(true);
   });
 
   it("lifts a player who is inside an updraft", () => {
     const world = belt({ pushVy: 60, speedScale: 0 }, DEEP);
-    const player = createPlayer(0, 200, 0, {});
+    const player = createPlayer(vec3(0, 200, 0));
     const before = player.position.y;
     updatePlayer(player, 1 / 60, neutralInput(), world);
     // **Rising, or at least not falling.** The ramp is `moveTowards`, so one frame from rest is

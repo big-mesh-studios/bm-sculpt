@@ -33,6 +33,8 @@ interface Table {
   /** Every value each setter was called with, in order; `undefined` is a flip. */
   flying: (boolean | undefined)[];
   noclip: (boolean | undefined)[];
+  /** Every altitude `/player:space` was called with, in order; `undefined` is the default. */
+  space: (number | undefined)[];
   clock: ClockCalls[];
   cloud: CloudCalls[];
   /** What the fake layer reports, so a test can pretend it does not exist yet. */
@@ -42,6 +44,7 @@ interface Table {
 const table = (): Table => {
   const flying: (boolean | undefined)[] = [];
   const noclip: (boolean | undefined)[] = [];
+  const space: (number | undefined)[] = [];
   const clock: ClockCalls[] = [];
   const cloud: CloudCalls[] = [];
   const built = { value: true };
@@ -58,6 +61,12 @@ const table = (): Table => {
     setNoClip: (value) => {
       noclip.push(value);
       return value === false ? "collisions on" : "no-clip";
+    },
+    toSpace: (value) => {
+      space.push(value);
+      return value === undefined
+        ? "in space at the default altitude; flight on"
+        : `in space at ${value} units above the sea; flight on`;
     },
     clock: {
       jumpTo: (seconds) => void clock.push({ kind: "jumpTo", seconds }),
@@ -90,7 +99,7 @@ const table = (): Table => {
       },
     },
   });
-  return { commander, flying, noclip, clock, cloud, built };
+  return { commander, flying, noclip, space, clock, cloud, built };
 };
 
 /** Runs a line and insists the answer is text rather than `/help`'s table. */
@@ -124,6 +133,7 @@ describe("the command table", () => {
       "/cloud:state",
       "/player:fly",
       "/player:no-clip",
+      "/player:space",
       "/fullscreen",
       "/clear",
     ]);
@@ -202,6 +212,37 @@ describe("/player:no-clip", () => {
     const recorder = table();
     expect(text(recorder, "/player:no-clip")).toBe("no-clip");
     expect(text(recorder, "/player:no_clip")).toContain("unknown command");
+  });
+});
+
+describe("/player:space", () => {
+  it("sends the player up with the game's own default when given no altitude", () => {
+    const recorder = table();
+    expect(text(recorder, "/player:space")).toContain("default altitude");
+    // `undefined` is the signal to use the default, so the number lives in one place rather than
+    // being repeated here and in the command.
+    expect(recorder.space).toEqual([undefined]);
+  });
+
+  it("passes an explicit altitude through", () => {
+    const recorder = table();
+    expect(text(recorder, "/player:space 40000")).toBe(
+      "in space at 40000 units above the sea; flight on",
+    );
+    expect(recorder.space).toEqual([40000]);
+  });
+
+  it("refuses anything that is not an altitude rather than guessing", () => {
+    const recorder = table();
+    expect(text(recorder, "/player:space high")).toBe(
+      "usage: /player:space [altitude]  (0 or more, world units)",
+    );
+    // A negative altitude would put the player inside the planet, which is not what the command
+    // is for, so `readNumber`'s minimum rejects it.
+    expect(text(recorder, "/player:space -100")).toBe(
+      "usage: /player:space [altitude]  (0 or more, world units)",
+    );
+    expect(recorder.space).toEqual([]);
   });
 });
 

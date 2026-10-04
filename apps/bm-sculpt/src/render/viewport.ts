@@ -78,7 +78,7 @@ export const createViewport = (
   });
 
   const scene = new Scene();
-  const camera = new PerspectiveCamera(FOV_Y, 1, 1, 100000);
+  const camera = new PerspectiveCamera(FOV_Y, 1, 1, 400000);
   camera.position.set(0, 0, 900);
 
   const maxPixelRatio = options.maxPixelRatio ?? 2;

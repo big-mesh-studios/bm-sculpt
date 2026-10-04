@@ -27,6 +27,7 @@
 import type { CellCoord, Lod, OverlapMask } from "../world";
 
 import type { ChunkMesh } from "@big-mesh-studios/meshing";
+import type { BaseFieldSpec } from "@big-mesh-studios/csg";
 
 /** Which chunk, which level, and which attempt. */
 export interface ChunkRequestMessage {
@@ -57,9 +58,6 @@ export interface PaintTileMessage {
   readonly colours: Uint8Array;
 }
 
-/** The kind of infinite world, if any, behind the operations. */
-export type BaseFieldKind = "none" | "terrain";
-
 /**
  * The model, as it crosses the boundary: data and nothing else.
  *
@@ -77,20 +75,16 @@ export interface ModelMessage {
   readonly operations: ArrayBuffer;
   /** Painted chunks, and only those — an unpainted chunk needs no message. */
   readonly paint: readonly PaintTileMessage[];
-  readonly base: BaseFieldKind;
   /**
-   * Terrain parameters, when `base` is `"terrain"`.
+   * The infinite world behind the operations, or `undefined` for a world of operations alone.
    *
-   * Carried as a separate optional rather than three optional numbers, so that a world
-   * with no base field cannot accidentally arrive with half of one.
+   * **A value rather than a kind beside a bag of parameters**, which is what this used to be and
+   * which could arrive wrong. `base: "planet"` with a terrain's four numbers was representable, and
+   * every worker would then have built a landscape of the wrong shape at the wrong scale. The
+   * union carries the kind that selects the parameters and the parameters together, so there is
+   * no such message to write. See `BaseFieldSpec`.
    */
-  readonly terrain?: {
-    /** The world y a height of zero sits at, and the vertical scale. */
-    readonly origin: number;
-    readonly scale: number;
-    readonly octaves: number;
-    readonly seed: number;
-  };
+  readonly base: BaseFieldSpec | undefined;
 }
 
 /** Cancels work the main thread no longer wants. */

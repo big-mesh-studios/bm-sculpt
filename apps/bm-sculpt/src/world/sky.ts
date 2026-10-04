@@ -32,12 +32,15 @@
 import type { Node, UniformNode } from "@random-mesh/rmsl";
 import {
   dot,
+  exp,
   float,
   fract,
   pow,
   saturate,
+  select,
   sin,
   smoothstep,
+  sqrt,
   step,
   vec3,
   vec4,
@@ -52,6 +55,12 @@ import {
 } from "@random-mesh/rmsl/scene";
 
 import type { Vec3 } from "@big-mesh-studios/core";
+import {
+  ATMOSPHERE_EXTINCTION,
+  ATMOSPHERE_HEIGHT,
+  ATMOSPHERE_SCALE_HEIGHT,
+  DEFAULT_PLANET_RADIUS,
+} from "../render/atmosphere";
 import { SkyLight } from "../render/sky-light";
 import {
   CYCLE_SECONDS,
@@ -62,7 +71,7 @@ import {
 /**
  * How far the dome reaches, in world units.
  *
- * Inside the camera's hundred-thousand far plane, and the same figure the cloud layer
+ * Inside the camera's four-hundred-thousand far plane, and the same figure the cloud layer
  * uses so the two agree about where the world stops. The dome is drawn first and writes
  * no depth, so this number affects nothing but whether the dome's own geometry is
  * clipped.
@@ -438,6 +447,15 @@ export class SkyMaterial extends NodeMaterial {
    */
   pixelScale = 1.5;
 
+  /** The planet's sea radius, so the shell the sky reads is this world's and not a constant's. */
+  readonly planetRadius: number;
+
+  /** How far the shell reaches above the sea. */
+  readonly atmosphereHeight: number;
+
+  /** How fast the air thins with height. */
+  readonly scaleHeight: number;
+
   private zenith?: UniformNode<"vec3">;
   private twilight?: UniformNode<"float">;
   private sunElevation?: UniformNode<"float">;
@@ -445,9 +463,19 @@ export class SkyMaterial extends NodeMaterial {
   private starTurn?: UniformNode<"float">;
   private starBrightnessUniform?: UniformNode<"float">;
   private pixelScaleUniform?: UniformNode<"float">;
+  private planetRadiusUniform?: UniformNode<"float">;
+  private atmosphereUniform?: UniformNode<"float">;
+  private scaleUniform?: UniformNode<"float">;
 
-  constructor() {
+  constructor(
+    planetRadius = DEFAULT_PLANET_RADIUS,
+    atmosphereHeight = ATMOSPHERE_HEIGHT,
+    scaleHeight = ATMOSPHERE_SCALE_HEIGHT,
+  ) {
     super();
+    this.planetRadius = planetRadius;
+    this.atmosphereHeight = atmosphereHeight;
+    this.scaleHeight = scaleHeight;
     // No depth at all. The dome is drawn first and fills the frame, and everything
     // after it lands on top; a dome that tested depth would have to be sorted against
     // forty thousand units of cloud and a terrain window, for no gain.
@@ -495,6 +523,23 @@ export class SkyMaterial extends NodeMaterial {
         ? 0
         : ((this.sky.lighting.elapsed / CYCLE_SECONDS) % 1) * Math.PI * 2,
     );
+    // The shell, so the sky can tell air from space: the eye's own altitude sets how much
+    // atmosphere is above it, and the same geometry draws the planet's rim.
+    this.planetRadiusUniform = b.materialUniform(
+      "uSkyRadius",
+      "float",
+      () => this.planetRadius,
+    );
+    this.atmosphereUniform = b.materialUniform(
+      "uSkyAtmosphere",
+      "float",
+      () => this.atmosphereHeight,
+    );
+    this.scaleUniform = b.materialUniform(
+      "uSkyScale",
+      "float",
+      () => this.scaleHeight,
+    );
   }
 
   protected override buildFragmentBody(b: Builder): Node<"vec4"> {
@@ -516,10 +561,34 @@ export class SkyMaterial extends NodeMaterial {
     // naive sign puts it due north instead, which is a sky that runs backwards.
     const field = turned(spin, raw).toVar();
 
+    // ---- how much air is left above the eye ----
+    // The sky *is* the atmosphere lit from behind. Once the eye is above the shell there is
+    // nothing left to scatter the daylight and the sky goes black, which is the whole reason
+    // a player who leaves the atmosphere sees stars at noon. `atmosphere` is the fraction of
+    // the ground's own column still overhead: one at sea level, nothing at the top.
+    const eyeRadius = b.cameraPosition.length();
+    const altitude = eyeRadius.sub(this.planetRadiusUniform!).max(float(0));
+    const atmosphere = exp(altitude.div(this.scaleUniform!).negate()).toVar();
+
+    // ---- how much of the view is *outside* the shell ----
+    // **"Above the shell", not "the air is thin".** The limb and the stars are the view from
+    // outside, and `1 - atmosphere` is a poor test for it: at two scale heights — still well inside
+    // the 4,800-unit shell — it is already 0.86, so the from-outside limb was drawn on top of the
+    // gradient's own horizon glow while the player climbed out, reading as a second fog band in the
+    // sky. The eye is genuinely in space only past the shell's top, so this is gated there and
+    // faded across one shell thickness so crossing it is not a pop.
+    const shellTop = this.planetRadiusUniform!.add(this.atmosphereUniform!);
+    const fromSpace = saturate(
+      eyeRadius.sub(shellTop).div(this.atmosphereUniform!),
+    ).toVar();
+
     // ---- the gradient ----
     const upward = saturate(raw.y);
     const gradient = pow(upward, float(GRADIENT_EXPONENT)).toVar();
-    const sky = this.sky.skyColour!.mix(this.zenith!, gradient).toVar();
+    const sky = this.sky
+      .skyColour!.mix(this.zenith!, gradient)
+      .mul(atmosphere)
+      .toVar();
 
     // ---- the glow around the sun, which is most of what a sunset is ----
     const toSun = saturate(dot(raw, this.sky.sunDirection!)).toVar();
@@ -534,25 +603,90 @@ export class SkyMaterial extends NodeMaterial {
     // first attempt — makes the glow vanish at exactly the moment a sunset is meant
     // to happen.
     const low = float(1).sub(saturate(this.sunElevation!.div(25)));
-    sky.addAssign(this.sky.sunLight!.mul(wide.add(narrow)).mul(low));
+    // The glow is atmosphere, so it goes out with the rest of the sky — the sun is left a
+    // hard disc in a black field when there is no air to spread it.
+    sky.addAssign(
+      this.sky.sunLight!.mul(wide.add(narrow)).mul(low).mul(atmosphere),
+    );
 
     // ---- the moon's, much weaker and cool ----
     const toMoon = saturate(dot(raw, this.sky.moonDirection!));
     sky.addAssign(
-      this.sky.moonLight!.mul(
-        pow(toMoon, float(MOON_GLOW)).mul(MOON_GLOW_STRENGTH),
-      ),
+      this.sky
+        .moonLight!.mul(pow(toMoon, float(MOON_GLOW)).mul(MOON_GLOW_STRENGTH))
+        .mul(atmosphere),
     );
 
-    // ---- the stars ----
-    // Only above the horizon, and only once the twilight parameter has climbed.
-    const night = saturate(this.twilight!).toVar();
-    const visible = saturate(pow(night, float(STAR_FADE))).mul(
-      upward.mul(0.35).add(0.65),
+    // ---- the rim of the atmosphere, seen from outside it ----
+    // The same shell `fog.ts` integrates, read here for the ray instead of for a fragment:
+    // the air mass is the length of the **ray**, not the line, inside the shell, minus the part
+    // the planet blocks, weighted by the density at its closest approach. It is zero until the
+    // eye is above the ground and grows as the ray grazes, so in space it draws the band around
+    // the silhouette and nothing else.
+    const eyeSquared = b.cameraPosition.dot(b.cameraPosition);
+    const along = b.cameraPosition.dot(raw);
+    const closestSq = eyeSquared.sub(along.mul(along)).max(float(0));
+    const closest = sqrt(closestSq);
+    const planetRadius = this.planetRadiusUniform!;
+    const outerRadius = planetRadius.add(this.atmosphereUniform!);
+
+    // **The roots are clamped to `t ≥ 0`, and that is the whole correction.** The chord's midpoint
+    // is at `t = -along`; when `along > 0` the ray points away from the planet and that midpoint is
+    // *behind the eye*. A player looking up makes exactly this ray, its perpendicular distance to
+    // the centre is zero, and the old code counted a full atmosphere column that was behind the
+    // camera — a fog band across the black of space. Each sphere's near and far roots are
+    // `-along ∓ half`, so clamping both to zero gives the length actually in front of the eye.
+    const tc = along.negate();
+    const outerHalf = sqrt(
+      outerRadius.mul(outerRadius).sub(closestSq).max(float(0)),
     );
+    const innerHalf = sqrt(
+      planetRadius.mul(planetRadius).sub(closestSq).max(float(0)),
+    );
+    const outerFront = tc
+      .add(outerHalf)
+      .max(float(0))
+      .sub(tc.sub(outerHalf).max(float(0)));
+    const innerFront = tc
+      .add(innerHalf)
+      .max(float(0))
+      .sub(tc.sub(innerHalf).max(float(0)));
+    // Inside the silhouette the planet blocks the middle of the chord, so only the caps of air in
+    // front of it count. Where the line does not cross the planet (`closest >= R`) nothing blocks.
+    const blocked = select(
+      closest.lessThan(planetRadius),
+      innerFront,
+      float(0),
+    );
+    const air = outerFront
+      .sub(blocked)
+      .mul(
+        exp(
+          closest
+            .sub(planetRadius)
+            .max(float(0))
+            .div(this.scaleUniform!)
+            .negate(),
+        ),
+      );
+    const limb = float(1).sub(exp(air.mul(float(-ATMOSPHERE_EXTINCTION))));
+    // Only from outside: on the ground the horizon is the gradient's and the fog's job, and a
+    // limb term there would white out the whole lower sky. `fromSpace`, defined above, is zero
+    // until the eye clears the shell's top.
+    sky.addAssign(this.sky.skyColour!.mul(limb).mul(fromSpace));
+
+    // ---- the stars ----
+    // Above the horizon, once the twilight parameter has climbed — **or once the eye is out
+    // of the atmosphere**, which is the half this change adds. The two are `max`ed rather
+    // than added: a star is revealed by the night or by the vacuum, and never twice as bright
+    // for being both.
+    const night = saturate(this.twilight!).toVar();
+    const horizonFade = upward.mul(0.35).add(0.65);
+    const inTheDark = saturate(pow(night, float(STAR_FADE))).mul(horizonFade);
+    const inSpace = fromSpace.mul(horizonFade);
     sky.addAssign(
       starfield(b, raw, field, spin, this.pixelScaleUniform!)
-        .mul(visible)
+        .mul(inTheDark.max(inSpace))
         .mul(this.starBrightnessUniform!),
     );
 

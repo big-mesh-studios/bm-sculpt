@@ -40,7 +40,8 @@ import {
   starterOperations,
   type SessionStats,
 } from "./session";
-import { DEFAULT_TERRAIN } from "@big-mesh-studios/csg";
+import { DEFAULT_PLANET, DEFAULT_TERRAIN } from "@big-mesh-studios/csg";
+import type { BaseFieldSpec } from "@big-mesh-studios/csg";
 import { LOD_OFF, lodIsOff, type LodBands } from "./world";
 import { SculptSession } from "./sculpt";
 import { DEFAULT_BRUSH } from "./edit/brush";
@@ -49,7 +50,8 @@ import { createInput } from "./player/input";
 import type { Medium } from "./player/player";
 import { TouchControls } from "./player/touch-controls";
 import { Game } from "./engine/game";
-import { createWater, SEA_LEVEL } from "./world/water";
+import { createWater, DEFAULT_SEA_RADIUS } from "./world/water";
+import { sphericalFrame } from "./world/up";
 import { createClouds, type Clouds } from "./world/clouds";
 import { createZoneLines, type ZoneLines } from "./places/zones";
 import { PlaceHost } from "./places/host";
@@ -65,6 +67,17 @@ import {
   bakeCloudFieldOffThread,
   type CloudBakeSource,
 } from "./world/cloud-bake-client";
+import {
+  bakePlanetMapsOffThread,
+  type PlanetBakeSource,
+} from "./world/planet-bake-client";
+import {
+  createGlobe,
+  GLOBE_MAP_HEIGHT,
+  GLOBE_MAP_WIDTH,
+  globeOpacityAt,
+  type Globe,
+} from "./world/globe";
 import { createSky } from "./world/sky";
 import { DayNightController } from "./world/day-night-controller";
 
@@ -83,6 +96,27 @@ const searchHas = (flag: string): boolean =>
 const isSpike = (): boolean => searchHas("spike");
 const isEdit = (): boolean => searchHas("edit");
 const isGame = (): boolean => !isSpike() && !isEdit();
+
+/**
+ * The world's base field, physics frame and sea — one planet, and no switch.
+ *
+ * **There was a `?flat` mode here and it is gone**, along with the two things that existed only to
+ * serve it: the sea's `level` variant and the water plane. The flag had a real cost that was easy to
+ * forget — a spherical frame with a sea at an altitude is an ocean at an infinite radius, and a flat
+ * frame with a sea radius is no ocean at all, because a flat frame's `radiusAt` is `Infinity`. Both
+ * are silent, and both would have been found by a player rather than by a test. With one world there
+ * is no pair to get wrong.
+ *
+ * `flatFrame` itself stays, and `Frame` stays an abstraction: a flat frame is its infinite-radius
+ * case, and `player.test.ts` runs the player against it as the control the spherical frames are
+ * compared to. Dropping the simplest case of an abstraction would weaken the suite, not shrink it.
+ */
+const GAME_BASE_FIELD: BaseFieldSpec = {
+  kind: "planet",
+  params: DEFAULT_PLANET,
+};
+const GAME_FRAME = sphericalFrame({ x: 0, y: 0, z: 0 });
+const GAME_SEA = DEFAULT_SEA_RADIUS;
 
 /** Whether this device points with something coarse, so the touch UI shows. */
 const isCoarsePointer = (): boolean =>
@@ -124,6 +158,15 @@ const describeBands = (bands: LodBands): string =>
  * a broken sky looks like. So the state is on screen rather than in a log, and it names
  * the failure rather than only the absence.
  */
+type PlanetBakeStatus =
+  | { readonly state: "baking" }
+  | {
+      readonly state: "ready";
+      readonly maps: Extract<PlanetBakeSource, "worker" | "main thread">;
+      readonly width: number;
+    }
+  | { readonly state: "failed"; readonly reason: string };
+
 type CloudStatus =
   | { readonly state: "baking" }
   | {
@@ -158,6 +201,19 @@ const describePlace = (id: string, host: PlaceHost): string => {
   ]
     .filter((line) => line !== "")
     .join("\n");
+};
+
+/**
+ * The planet bake, in one line.
+ *
+ * **The name, not just the state.** A globe baked on the main thread means the player watched half a
+ * second of the world stop; a globe baked on a worker means they did not. Both produce a correct
+ * planet, so only the difference is worth reporting.
+ */
+const describePlanetBakeStatus = (status: PlanetBakeStatus): string => {
+  if (status.state === "baking") return "maps still baking";
+  if (status.state === "failed") return `failed — ${status.reason}`;
+  return `${status.maps} | ${status.width}px`;
 };
 
 const describeCloudStatus = (status: CloudStatus): string => {
@@ -211,6 +267,9 @@ export default function App() {
   const [placeMedium, setPlaceMedium] = createSignal<
     ((x: number, y: number, z: number) => Medium | undefined) | undefined
   >();
+  const [planetBake, setPlanetBake] = createSignal<PlanetBakeStatus>({
+    state: "baking",
+  });
   const [cloudStatus, setCloudStatus] = createSignal<CloudStatus>({
     state: "baking",
   });
@@ -309,7 +368,7 @@ export default function App() {
       scene: viewport.scene,
       material,
       operations: initialOperations,
-      terrain: DEFAULT_TERRAIN,
+      baseField: GAME_BASE_FIELD,
       // A wider and flatter window than the editor's — see `GAME_WINDOW`, which the
       // fog's own test reads so that these two cannot drift apart.
       ...(isGame() ? GAME_WINDOW : {}),
@@ -320,7 +379,7 @@ export default function App() {
       session,
       camera: viewport.camera,
       operations: session.operations,
-      terrain: session.terrain,
+      baseField: session.baseField,
     });
 
     // ---- The editor: orbit and sculpt by pointer ----
@@ -454,19 +513,73 @@ export default function App() {
       sculpt,
       viewport,
       input,
-      seaLevel: SEA_LEVEL,
+      seaRadius: GAME_SEA,
+      frame: GAME_FRAME,
+      // The spawn probe has to start inside the planet. The sea radius is within a few units of
+      // the surface everywhere, so it is a good enough probe and needs no number of its own.
+      spawnRadius: GAME_SEA - 200,
       // **Reaches into the place host, which does not exist yet.** Declared above this line and
       // assigned inside the settled effect, so at this moment it is `undefined` and the physics
       // reads that as "this world has no fields" — the honest answer, and cheaper than a reader
       // that always returns null. See `GameOptions.mediumAt`.
-      mediumAt: (x, y, z) => placeMedium()?.(x, y, z),
+      mediumAt: (p) => placeMedium()?.(p.x, p.y, p.z),
     });
-    const water = createWater(viewport.scene, SEA_LEVEL);
+    const water = createWater(viewport.scene, GAME_SEA);
     // The clouds, built once their field has been baked — on a worker, because the bake
     // is two and a half seconds of arithmetic and the only reason to move it is that it
     // was happening on the thread that draws. The layer is null until the field lands,
     // and the frame loop's optional call is the whole of the handling: the first second
     // or so has a sky, a terrain and a sea, and no weather yet.
+    // **The globe's maps, baked beside the clouds' field and for the same reason.**
+    //
+    // Roughly five seconds of noise for 3072×1536 — extrapolated from the measured 564ms for
+    // 1024×512 in `planet-maps.test.ts` — on a machine that is a phone. The frame loop is already
+    // running, so this cannot happen on the main thread without the player watching the world stop.
+    // The client falls back to the main thread if a worker cannot be had, because a hitch is a much
+    // smaller problem than a planet that never arrives, and it says which of the two happened so the
+    // HUD can report it.
+    const planetMaps = bakePlanetMapsOffThread(
+      DEFAULT_PLANET,
+      GLOBE_MAP_WIDTH,
+      GLOBE_MAP_HEIGHT,
+    );
+    let globe: Globe | null = null;
+    let globeDisposed = false;
+
+    void planetMaps.maps.then(
+      (maps) => {
+        if (globeDisposed) return;
+        try {
+          globe = createGlobe(viewport.scene, maps);
+          // **The sea is moved behind the globe in draw order.** rmsl has no render-order key —
+          // draw order is scene traversal order — and `createWater` ran before the globe existed,
+          // so the globe (added later) would blend over the ocean, which writes no depth of its own
+          // for it to be tested against. Re-adding the water puts it after the globe and the sea
+          // lands on top. The clouds are baked later still and are already after both.
+          viewport.scene.remove(water.mesh);
+          viewport.scene.add(water.mesh);
+          setPlanetBake({
+            state: "ready",
+            maps:
+              planetMaps.source() === "main thread" ? "main thread" : "worker",
+            width: maps.width,
+          });
+        } catch (reason) {
+          console.warn("the globe could not be built:", reason);
+          setPlanetBake({
+            state: "failed",
+            reason: reason instanceof Error ? reason.message : String(reason),
+          });
+        }
+      },
+      (reason: unknown) => {
+        setPlanetBake({
+          state: "failed",
+          reason: reason instanceof Error ? reason.message : String(reason),
+        });
+      },
+    );
+
     const cloudBake = bakeCloudFieldOffThread(DEFAULT_TERRAIN.seed);
     let layer: Clouds | null = null;
     let cloudsDisposed = false;
@@ -477,7 +590,12 @@ export default function App() {
         // down — and a mesh added to a disposed scene is a leak with no owner.
         if (cloudsDisposed) return;
         try {
-          layer = createClouds(viewport.scene, DEFAULT_TERRAIN.seed, field);
+          layer = createClouds(
+            viewport.scene,
+            DEFAULT_TERRAIN.seed,
+            field,
+            GAME_SEA,
+          );
           const source = cloudBake.source();
           setCloudStatus({
             state: "ready",
@@ -659,8 +777,8 @@ export default function App() {
         world: {
           places: sculpt.places,
           terrainHeight: sculpt.terrainHeight,
-          solidAt: (x, y, z) => game.world.getSolidAt(x, y, z),
-          waterAt: (x, y, z) => game.world.getInWaterAt(x, y, z),
+          solidAt: (x, y, z) => game.world.getSolidAt({ x, y, z }),
+          waterAt: (x, y, z) => game.world.getInWaterAt({ x, y, z }),
           // **The same answer the physics gets**, by the same method, so a place asking "what am
           // I standing in" and a player standing in it cannot get different replies. Assigned
           // before `load()` runs, because a script's top-level code is allowed to ask.
@@ -763,6 +881,7 @@ export default function App() {
       createCommands({
         setFlying: (flying) => game.setFlying(flying),
         setNoClip: (noclip) => game.setNoClip(noclip),
+        toSpace: (altitude) => game.placeInSpace(altitude),
         clock,
         // The two cloud knobs, adapted rather than passed as an object, because the
         // layer does not exist yet and only this scope knows that. `state()` says so
@@ -860,6 +979,40 @@ export default function App() {
       material.fog.colour = light.skyColor;
       water.material.sky.lighting = light;
       water.material.fog.colour = light.skyColor;
+      // **The same two assignments the terrain and the water get, every frame.** That is the whole
+      // reason the swap is invisible: the globe is lit by this sun and hazed by this air, from the
+      // same `SkyLight` and the same `Fog`, so at the altitude the two overlap they cannot disagree
+      // about what the light is doing.
+      if (globe !== null) {
+        globe.material.sky.lighting = light;
+        globe.material.fog.colour = light.skyColor;
+        const at = game.player.position;
+        // The player's radius, which is what the fade is a function of. `Math.hypot` rather than a
+        // square root of a sum of squares because on a planet this size it is a large coordinate and
+        // this is subtracted from a radius to produce a crossover — the kind of number where
+        // "about right" is a bug.
+        const radius = Math.hypot(at.x, at.y, at.z);
+        // **The crossfade, both halves.** `globe.update` writes the globe's own opacity; the chunks
+        // get the complement, so at the bottom of the band the terrain is opaque and the globe is
+        // gone and at the top it is the other way round. A hard switch would pop and a seam where
+        // both are half-present, which is why it is a band at all.
+        const shown = globeOpacityAt(radius - GAME_SEA);
+        globe.update(radius);
+        material.opacity = 1 - shown;
+        material.transparent = shown > 0;
+        // **Out of the depth buffer while it fades.** A chunk that still wrote depth would occlude
+        // the globe behind it even as its own colour faded out, so the two would never overlap
+        // cleanly. Opaque again the moment the globe is gone.
+        material.depthWrite = shown === 0;
+        // **The near-field fog goes out with the chunks, and the atmosphere stays.** The window term
+        // exists to hide where the streamed terrain stops, which is meaningless once the globe has
+        // taken over — and leaving it on from orbit was what turned the planet into sky. The globe
+        // and the sea get the same number so the crossfade cannot show a fog seam either.
+        const nearField = 1 - shown;
+        material.fog.nearField = nearField;
+        water.material.fog.nearField = nearField;
+        globe.material.fog.nearField = nearField;
+      }
 
       // A star is sized in CSS pixels, so the dome needs the ratio the canvas is
       // actually drawing at — which the viewport owns and changes on a resize.
@@ -893,6 +1046,11 @@ export default function App() {
       cloudsDisposed = true;
       cloudBake.dispose();
       layer?.dispose();
+      // **The globe before the scene it is in.** `session.dispose` clears the scene, so a globe
+      // disposed after it has no geometry left to remove — and the flag stops a bake that lands
+      // after teardown from adding a mesh nobody owns.
+      globeDisposed = true;
+      globe?.dispose();
       session.dispose();
       viewport.dispose();
     };
@@ -1055,6 +1213,12 @@ export default function App() {
           <Show when={isGame()}>
             <div class={styles.row}>
               clouds: {describeCloudStatus(cloudStatus())}
+            </div>
+            {/* The globe is only visible from a long way up, so its state is reported whether or
+                not anybody is looking at it: a planet that never arrives and a planet that arrives
+                wrong are otherwise the same picture — sky. */}
+            <div class={styles.row}>
+              globe: {describePlanetBakeStatus(planetBake())}
             </div>
           </Show>
 

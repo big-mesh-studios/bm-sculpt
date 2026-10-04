@@ -22,10 +22,20 @@
  */
 
 import type { Vec3 } from "@big-mesh-studios/core";
+import {
+  add,
+  normalize,
+  rotateAboutAxis,
+  scale,
+  sub,
+  vec3,
+} from "@big-mesh-studios/core";
 
 import type { PickCamera } from "../edit/tool";
 import type { InputController, InputSnapshot } from "../player/input";
 import {
+  clearFall,
+  clearVelocity,
   createPlayer,
   DEFAULT_PLAYER_CONFIG,
   placeCamera,
@@ -38,6 +48,7 @@ import type { Viewport } from "../render/viewport";
 import type { Session } from "../session";
 import type { SculptSession } from "../sculpt";
 import { GameWorld } from "../world/game-world";
+import type { Frame } from "../world/up";
 import { pickAlong } from "@big-mesh-studios/picking";
 
 export interface GameOptions {
@@ -51,8 +62,24 @@ export interface GameOptions {
   readonly input: InputController;
   /** Where the player starts, if not the world's own surface at the origin. */
   readonly spawn?: Vec3;
-  /** The world y water settles at, if the world has any. */
-  readonly seaLevel?: number;
+  /**
+   * Where water begins, if the world has any: an altitude for a flat world, a distance from the
+   * centre for a spherical one. See `GameWorldOptions.seaRadius`.
+   */
+  readonly seaRadius?: number;
+  /**
+   * Which way is up. Defaults to flat, which is the world this application has today.
+   */
+  readonly frame?: Frame;
+  /**
+   * For a spherical world, how far out from its centre to probe for the surface.
+   *
+   * **Required by a spherical world and meaningless to a flat one**, where the probe is the
+   * origin. There is no way to guess it: the probe point has to be *inside* the planet for the
+   * surface trace to run outward from it, and a probe above the planet finds no surface at all and
+   * drops the player into the sky.
+   */
+  readonly spawnRadius?: number;
   /** Movement settings for this world; anything omitted takes its default. */
   readonly player?: Partial<PlayerConfig>;
   /**
@@ -64,7 +91,7 @@ export interface GameOptions {
    * when it is asked, and answers "none" while there is no host — which is the state the
    * application spends its whole life in before anyone loads a place.
    */
-  readonly mediumAt?: (x: number, y: number, z: number) => Medium | undefined;
+  readonly mediumAt?: (p: Vec3) => Medium | undefined;
 }
 
 /** What `Game.raycast` reports, and what a place's guest library receives. */
@@ -85,6 +112,15 @@ export interface RayHit {
   readonly distance: number;
 }
 
+/**
+ * How high `/player:space` puts the player when no altitude is given.
+ *
+ * **Twenty thousand, which is well clear of the 4,800-unit atmosphere.** The point of the command is
+ * to see the far field without the climb; a default just above the shell would still be in the sky's
+ * blue, so this clears it with room to see the planet below.
+ */
+export const DEFAULT_SPACE_ALTITUDE = 20000;
+
 export class Game {
   readonly player: Player;
   readonly world: GameWorld;
@@ -94,6 +130,10 @@ export class Game {
   private readonly viewport: Viewport;
   private readonly input: InputController;
   private readonly playerConfig: Partial<PlayerConfig>;
+  /** Where a spherical world is probed for its surface. See `GameOptions.spawnRadius`. */
+  private readonly spawnRadius: number | undefined;
+  /** The sea's radius for this world, so `/player:space` can measure an altitude from it. */
+  private readonly seaRadius: number | undefined;
   /** The aim action currently held, so a stroke is begun and ended once. */
   private aim: "dig" | "place" | undefined;
   /**
@@ -138,6 +178,8 @@ export class Game {
     this.viewport = options.viewport;
     this.input = options.input;
     this.playerConfig = options.player ?? {};
+    this.spawnRadius = options.spawnRadius;
+    this.seaRadius = options.seaRadius;
 
     this.world = new GameWorld({
       field: () => this.sculpt.collisionField,
@@ -145,14 +187,17 @@ export class Game {
       // `getMediumAt` defined on every world and cost the physics an optional call per frame for
       // the privilege of telling it nothing.
       ...(options.mediumAt === undefined ? {} : { mediumAt: options.mediumAt }),
-      ...(this.sculpt.terrainHeight !== undefined
-        ? { heightAt: this.sculpt.terrainHeight }
+      ...(options.frame === undefined ? {} : { frame: options.frame }),
+      ...(options.seaRadius !== undefined
+        ? { seaRadius: options.seaRadius }
         : {}),
-      ...(options.seaLevel !== undefined ? { seaLevel: options.seaLevel } : {}),
     });
 
-    const spawn = options.spawn ?? this.spawnAtOrigin();
-    this.player = createPlayer(spawn.x, spawn.y, spawn.z, this.playerConfig);
+    const spawn = options.spawn ?? this.spawnOnTheSurface();
+    // **The world's frame, not a default.** A player built without it would stand with their up
+    // along world `+Y` on a planet — lying on their side at the equator, upside down at the pole —
+    // and the first thing the physics does is add gravity along `up`.
+    this.player = createPlayer(spawn, this.playerConfig, this.world.frame);
     // After construction, because `createPlayer` is what fills in the defaults — a
     // snapshot taken before it would capture `halfSize: undefined` and every
     // multiplier would scale from nothing.
@@ -230,15 +275,23 @@ export class Game {
    * velocity means the platform is a suggestion. The velocity is discarded rather than
    * cancelled so the next frame starts from rest either way.
    */
-  teleportPlayer(at: { x: number; y: number; z: number }, yaw?: number): void {
+  teleportPlayer(at: Vec3, heading?: number): void {
     const player = this.player;
-    player.position.x = at.x;
-    player.position.y = at.y;
-    player.position.z = at.z;
-    if (yaw !== undefined) player.yaw = yaw;
-    player.vx = 0;
-    player.vy = 0;
-    player.vz = 0;
+    player.position = at;
+    if (heading !== undefined) {
+      // **A heading angle about the player's own up, not about world Y.**
+      //
+      // The parameter is still a number because the guest library's `movePlayer(x, y, z, yaw)`
+      // passes one, and changing that signature is a wire-format break for every published place
+      // which belongs with the rest of the places work rather than inside this one. On a flat world
+      // the two readings are identical. On a sphere this one is the only one that means anything,
+      // and a place that wants a world-space direction should say so in the vocabulary change.
+      const up = this.world.frame.upAt(at);
+      const angle = -heading;
+      player.right = rotateAboutAxis(player.right, up, angle);
+      player.forward = rotateAboutAxis(player.forward, up, angle);
+    }
+    clearVelocity(player);
   }
 
   /**
@@ -345,11 +398,7 @@ export class Game {
 
   /** Whether the player's eye is under the surface, for an underwater tint. */
   get underwater(): boolean {
-    return this.world.getInWaterAt(
-      this.player.position.x,
-      this.player.position.y,
-      this.player.position.z,
-    );
+    return this.world.getInWaterAt(this.player.position);
   }
 
   /**
@@ -365,7 +414,7 @@ export class Game {
     const next = flying ?? !this.player.flying;
     this.player.flying = next;
     if (next) {
-      this.player.vy = 0;
+      clearFall(this.player);
       this.player.onGround = false;
     }
     return next ? "flying" : "walking";
@@ -382,10 +431,38 @@ export class Game {
     const next = noclip ?? !this.player.noclip;
     this.player.noclip = next;
     if (next) {
-      this.player.vy = 0;
+      clearFall(this.player);
       this.player.onGround = false;
     }
     return next ? "no-clip" : "collisions on";
+  }
+
+  /**
+   * Puts the player in space above their current ground, for debugging the far field.
+   *
+   * **A teleport, not a spawn**, so it works mid-session and keeps the player over the ground they
+   * were on. On a spherical world the altitude is measured from the sea radius along the direction
+   * from the centre, which is the same measurement the globe's fade and the atmosphere use; a flat
+   * world has no centre, so the altitude is a world `y`. Flight is switched on, because a player
+   * dropped in space with gravity on is a projectile rather than an observer.
+   */
+  placeInSpace(altitude = DEFAULT_SPACE_ALTITUDE): string {
+    const player = this.player;
+    const centre = this.world.centre;
+    let at: Vec3;
+    if (centre === undefined) {
+      at = vec3(player.position.x, altitude, player.position.z);
+    } else {
+      const away = sub(player.position, centre);
+      const radius = Math.hypot(away.x, away.y, away.z);
+      const dir = radius > 1e-6 ? normalize(away) : vec3(0, 1, 0);
+      // The sea is the zero of altitude; the player's own radius is the fallback for a spherical
+      // world that somehow has no sea.
+      at = add(centre, scale(dir, (this.seaRadius ?? radius) + altitude));
+    }
+    this.teleportPlayer(at);
+    this.setFlying(true);
+    return `in space at ${altitude} units above the sea; flight on`;
   }
 
   /** The camera as the picker and the aim tool need it. */
@@ -393,14 +470,30 @@ export class Game {
     return this.viewport.camera;
   }
 
-  /** A spawn on the terrain's own surface at the origin, one body above it. */
-  private spawnAtOrigin(): Vec3 {
+  /**
+   * A spawn on the terrain's own surface above the world's reference point, one body clear of it.
+   *
+   * **Asks the world the question the physics asks** — a distance along the local up to the
+   * surface — rather than reading a height from somewhere else. That is what lets it work on a
+   * planet unchanged: there is no `heightAt(0, 0)` on a sphere, and no reason to want one.
+   */
+  private spawnOnTheSurface(): Vec3 {
     const halfSize =
       this.playerConfig.halfSize ?? DEFAULT_PLAYER_CONFIG.halfSize;
-    const ground = this.world.getHeightAt(0, 0);
-    // A column with no surface at all — a world with no terrain — starts the
-    // player at the origin and lets gravity do the rest.
-    const y = Number.isFinite(ground) ? ground + halfSize + 1 : halfSize + 1;
-    return { x: 0, y, z: 0 };
+    const frame = this.world.frame;
+    // Flat worlds spawn above the origin; a spherical one above a point on its surface, placed
+    // from the body's own centre so the spawn is on the planet rather than inside it.
+    const centre = this.world.centre;
+    const above: Vec3 =
+      centre === undefined || this.spawnRadius === undefined
+        ? vec3(0, 0, 0)
+        : add(centre, scale(vec3(0, 1, 0), this.spawnRadius));
+    const up = frame.upAt(above);
+    const ground = this.world.getGroundDistanceAt(above, up);
+    // A world with no terrain at all starts the player where they are and lets gravity do the
+    // rest, which is the honest answer: there is nothing to stand on yet.
+    return Number.isFinite(ground)
+      ? add(above, scale(up, ground + halfSize + 1))
+      : above;
   }
 }
