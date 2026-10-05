@@ -2,6 +2,7 @@ import { compileGlsl } from "@random-mesh/rmsl/glsl";
 import { Scene, Side } from "@random-mesh/rmsl/scene";
 import { describe, expect, it } from "vitest";
 
+import type { Vec3 } from "@big-mesh-studios/core";
 import {
   CLOUD_BOTTOM,
   CLOUD_FEATURE,
@@ -14,7 +15,11 @@ import {
   driftAngleAt,
 } from "./clouds";
 import { DEFAULT_PLANET_RADIUS } from "../render/atmosphere";
-import { bakeCloudField } from "./cloud-field";
+import {
+  SHAPE_DETAIL_PERIODS,
+  SHAPE_SIZE,
+  bakeCloudField,
+} from "./cloud-field";
 import { shapeTexture, weatherTexture } from "./cloud-textures";
 
 /**
@@ -483,12 +488,19 @@ describe("the cloud material compiles", () => {
  * own arithmetic** into plain numbers — coverage gates the base shape, detail erodes
  * inside it, and the result is integrated against the extinction the shader uses — and
  * runs it over a grid of rays at the material's defaults. A transcription can drift from
- * the shader, and this one will: what it asserts is about the *defaults and their
- * direction*, which is a property of the two knobs, while the tests above own the
- * shader's shape.
+ * the shader, and this one did for most of its life: six separate ways, listed at
+ * `alphaOfRay`, each of which survived because the field is self-similar and a
+ * self-similar field forgives almost any addressing error. What it asserts is about the
+ * *defaults and their direction*, which is a property of the two knobs, while the tests
+ * above own the shader's shape.
  *
- * Measured at the defaults, and the numbers the assertions are written against:
- * mean alpha 0.50, half the rays carrying cloud, none of it a solid sheet.
+ * Measured at the defaults before the address was fixed, and the numbers the assertions
+ * were written against: mean alpha 0.50, half the rays carrying cloud, none of it a solid
+ * sheet. After: **mean alpha 0.328, 33% cloudy, 33% solid** — a third fewer cloudy rays,
+ * and a much sharper split between them. The reduction is the point: a ray that sweeps the
+ * volume meets the threshold along its length or it does not, so the sky broke up instead
+ * of hazing over. The sharpness is discussed, measured and left alone at the assertion
+ * below.
  */
 describe("the layer's defaults", () => {
   // Thirty and sixty, not the production pair: the statistics below are the same at
@@ -521,11 +533,25 @@ describe("the layer's defaults", () => {
     );
   };
 
-  /** The weather map, addressed in 0..1 on each axis and repeating. */
+  /**
+   * The weather map, addressed equirectangularly and repeating — and **wrapping**, which is
+   * the correction that mattered here.
+   *
+   * `equirectUV` is `atan(x, z) / 2π + 0.5` and `−asin(y) / π + 0.5`, so `v` runs *down*
+   * from north to south and leaves `0..1` at both poles. This used to clamp instead, which
+   * meant it could not read past the first or last row at all and so pinned both edges of the
+   * grid to the same two rows of the map. A mirror was hiding behind that: `latitude` was
+   * built as `(v − 0.5)·π`, which is `asin(y) = π(v − 0.5)` — the opposite sign from the
+   * shader's. The map was sampled upside down for as long as this file existed, and because
+   * the field is roughly symmetric that is very nearly invisible in the statistics; it would
+   * not be invisible the moment anyone compared a frame against this number.
+   */
   const weather = (u: number, v: number, channel: number): number => {
     const n = baked.weather.size;
-    const cell = (t: number): number =>
-      Math.min(n - 1, Math.max(0, (t * n) | 0));
+    const cell = (t: number): number => {
+      const wrapped = ((t % 1) + 1) % 1;
+      return Math.min(n - 1, Math.max(0, (wrapped * n) | 0));
+    };
     return baked.weather.data[(cell(u) + n * cell(v)) * 4 + channel]! / 255;
   };
 
@@ -538,48 +564,74 @@ describe("the layer's defaults", () => {
    * The dimensional profile, the coverage threshold, the erosion and the extinction are
    * all transcribed rather than imported, for the reason above — and because they are
    * constants in a shader, not values anything else can read.
+   *
+   * Three things this transcription deliberately leaves out, because they are about cost
+   * rather than about what the layer looks like: the two tiers of step length, so every
+   * sample is `STEP` here regardless of what it found; the `MIN_PROFILE` and `density`
+   * early-outs; and the drift, which is zero at `t = 0` and which this grid reads as zero.
+   *
+   * Six things it used to get wrong, all of them fixed here and all of them the kind that
+   * survives because the field is self-similar: the address held its direction still for the
+   * whole ray; the streak came from a second, differently-addressed weather read; `v` clamped
+   * rather than wrapped; `v` was mirrored; the coverage threshold lacked its `min(profile, 1)`;
+   * and the erosion was applied to the **raw** shape instead of the **coverage-thresholded**
+   * one, which is the one that mattered — `erosionNode`'s floor is `1 − base` and its final
+   * `min(…, base)` is that same `base`, so substituting a different one silently changes what
+   * the erosion is allowed to remove.
    */
   const alphaOfRay = (
     u: number,
-    w: number,
+    v: number,
     coverage: number,
     density: number,
   ): number => {
-    // The direction the ray leaves the planet on, from the same longitude/latitude the
-    // weather map is addressed by. The shape volume is sampled at that direction scaled to
-    // `seaRadius / CLOUD_FEATURE`, exactly as the shader does — altitude is the profile's,
-    // not the volume's.
-    const latitude = (w - 0.5) * Math.PI;
-    const longitude = u * Math.PI * 2;
+    // The direction the ray leaves the planet on, from the same longitude and latitude the
+    // weather map is addressed by — inverted the way `equirectUV` inverts it, which is why
+    // `latitude` has the sign it has.
+    const latitude = Math.PI * (0.5 - v);
+    const longitude = (u - 0.5) * Math.PI * 2;
     const cosLat = Math.cos(latitude);
     const dx = cosLat * Math.cos(longitude) * SHAPE_SCALE;
     const dy = Math.sin(latitude) * SHAPE_SCALE;
     const dz = cosLat * Math.sin(longitude) * SHAPE_SCALE;
+
+    // One weather fetch for the ray, as the shader takes it: the coverage out of `r` and the
+    // streak out of `a`, from the same address.
+    const streak = weather(u, v, 3);
+    const field = weather(u, v, 0);
+
     let depth = 0;
     for (let i = 0; i < STEPS; i++) {
+      // The altitude fraction: zero at the underside, one at the top, and **the volume's own
+      // vertical address** as well as the profile's.
       const height = (i + 0.5) / STEPS;
-      const streak = weather(u, w * 3, 3);
+      const ay = dy + height;
+
+      // The dimensional profile, from the layer's height gradient.
       const core = streak * 0.3 + 0.47;
       const profile =
-        Math.min(height / 0.09, 1) *
+        Math.min(Math.max(height / 0.09, 0), 1) *
         (1 - Math.min(Math.max((height - (core - 0.34)) / 0.34, 0), 1));
-      const threshold = Math.max(weather(u, w, 0) * coverage * profile, 0.02);
-      const base = shape(dx, dy, dz, 0);
-      const detail =
-        shape(dx, dy, dz, 1) * 0.55 +
-        shape(dx, dy, dz, 2) * 0.3 +
-        shape(dx, dy, dz, 3) * 0.15;
-      const eroded = Math.min(
-        Math.max((detail * 0.6 + 0.4 - (1 - base)) / 0.4, 0),
+
+      // Coverage thresholds the shape, and then the erosion works on *that*.
+      const threshold = field * coverage * profile;
+      const shaped = Math.min(
+        Math.max(
+          (shape(dx, ay, dz, 0) - (1 - Math.min(threshold, 1))) /
+            Math.max(threshold, 0.02),
+          0,
+        ),
         1,
       );
-      const sample = Math.pow(
-        Math.min(
-          eroded,
-          Math.min(Math.max(base - (1 - threshold), 0) / threshold, 1),
-        ) * density,
-        0.42,
+      const detail =
+        shape(dx, ay, dz, 1) * 0.55 +
+        shape(dx, ay, dz, 2) * 0.3 +
+        shape(dx, ay, dz, 3) * 0.15;
+      const eroded = Math.min(
+        Math.min(Math.max((detail * 0.6 + 0.4 - (1 - shaped)) / 0.4, 0), 1),
+        shaped,
       );
+      const sample = Math.pow(eroded * density, 0.42);
       if (sample > 0.002) depth += sample * 1.15 * STEP;
     }
     return 1 - Math.exp(-depth);
@@ -611,6 +663,23 @@ describe("the layer's defaults", () => {
     // written as a property of the finished image, because a floor on the constant is a
     // tautology and this is not: it says the field, the profile and the threshold
     // together produce weather a player can see.
+    //
+    // **The distribution is bimodal and that is not a defect of the transcription.** A ray
+    // crossing the layer now sweeps a whole tile of the volume, so it meets the coverage
+    // threshold along its length or it does not, and the `pow(density, 0.42)` and the
+    // extinction saturate within a few hundred units when it does. Measured at the defaults,
+    // over a 16×16 grid of directions: 172 rays below 0.1 and 84 above 0.9, with nothing at
+    // all in between. Two things were checked before believing that. Re-running the same grid
+    // with the *shader's* two tiers of step — 70 units through cloud and 120 through air,
+    // capped at 128 steps, rather than this transcription's 48 equal ones — moves the split
+    // to 188 and 68 and leaves the gap exactly where it was, so it is not oversampling. And
+    // the flat world's own shader ran the same threshold against the same volume on the same
+    // 700-unit crossing, so the sharpness predates the planet entirely.
+    //
+    // What it means is that the layer's *edges* are in the volume rather than in the
+    // accumulation, which is why the erosion and the detail channels have to carry them, and
+    // why `solid` is asserted only as a ceiling. A renderer that wanted a soft gradient here
+    // would have to soften the threshold, which is a change of look and not a fix of one.
     const { mean, any, solid } = summary(albedos(0.52, 1));
     console.log(
       `default layer: mean alpha ${mean.toFixed(3)}, ` +
@@ -656,12 +725,19 @@ describe("the layer's defaults", () => {
  *
  * The layer stopped being a slab, so the address stopped being a scale and an offset into a
  * world `x`/`z`/`y` volume. The shape volume is now sampled at the **direction from the
- * planet's centre**, scaled so one tile is `CLOUD_FEATURE` of surface, and the altitude is
- * not in the volume at all — it is the vertical profile, `(radius − seaRadius −
- * CLOUD_BOTTOM) / CLOUD_THICKNESS`. That has its own single number to get wrong, and it is
- * the same class of fault as the old one: the profile multiplies the coverage by
- * `saturate(height / 0.09)`, so an altitude that is not divided by the thickness empties the
- * layer at its underside.
+ * planet's centre**, scaled so one tile is `CLOUD_FEATURE` of surface — which is what makes
+ * the field seam-free and pole-free — **plus the sample's altitude in the volume's own `y`**.
+ *
+ * That second half is the one this file exists to hold. A direction is scale-invariant, so a
+ * ray going straight up from the ground moves the address by about eight thousandths of a
+ * tile: half a texel of a sixty-texel volume, across the whole seven-hundred-unit crossing.
+ * Every sample of the ray read the same base shape and the same three detail channels, the
+ * sky was a silhouette extruded through the layer, and every assertion below still passed —
+ * because no assertion looked at the address's *movement*, only at its presence.
+ *
+ * The altitude has its own single number to get wrong, and it is the same class of fault as
+ * the old `volumeOffset`: the profile multiplies the coverage by `saturate(height / 0.09)`, so
+ * an altitude that is not divided by the thickness empties the layer at its underside.
  *
  * Both halves are read out of the emitted shader, because both are arithmetic that a rename
  * or an inverted subtraction would break silently.
@@ -675,6 +751,33 @@ describe("the shell's address", () => {
     expect(fragment).toContain(String(1 / CLOUD_FEATURE));
   });
 
+  it("puts the altitude in the volume's vertical axis, not only in the profile", () => {
+    // `vec3(0.0, <height>, 0.0)`, added to the direction's scaled address. Two of them: one
+    // hoisted for the march, one inline inside the march toward the light — which is the
+    // count that matters, because a light march addressing itself by direction alone draws
+    // shadows that do not follow the density casting them, and does it in a shader that
+    // otherwise compiles, bakes and passes.
+    const { fragment } = compile(make());
+    const inAddress = fragment.match(/vec3\(0\.0, .+?, 0\.0\)/g) ?? [];
+    expect(inAddress).toHaveLength(2);
+    // And the warp, in the two *horizontal* slots. A tenth of a tile of it in `y` would
+    // slide each billow up or down its own layer depending on where in the weather field
+    // the sample fell, which is a shear rather than a wind.
+    for (const address of inAddress) {
+      expect(address).not.toMatch(/vec3\(0\.0, 0\.0,/);
+    }
+    expect(fragment).toMatch(/vec3\([^)]*\.x, 0\.0, [^)]*\.y\)/);
+  });
+
+  it("reads the altitude as the layer's own normalised height", () => {
+    // `(length(world) − seaRadius − CLOUD_BOTTOM) / CLOUD_THICKNESS`, read off the source.
+    // Zero at the underside, one at the top — and the *same* expression the profile is
+    // given, which is why it appears twice rather than being spelled two ways.
+    const { fragment } = compile(make());
+    const reads = fragment.match(/- uSeaRadius\) - 700\.0\) \/ 700\.0/g) ?? [];
+    expect(reads).toHaveLength(2);
+  });
+
   it("wraps the weather map around the planet once", () => {
     // The equirectangular inverse: `atan` of two components and `asin` of the vertical. The
     // read is what makes the weather a sphere rather than a plane.
@@ -682,13 +785,193 @@ describe("the shell's address", () => {
     expect(fragment).toContain("atan(");
     expect(fragment).toContain("asin(");
   });
+});
 
-  it("puts the layer's altitudes into the profile, not the volume", () => {
-    // `(length(world) − seaRadius − CLOUD_BOTTOM) / CLOUD_THICKNESS`, read off the source:
-    // zero at the underside, one at the top, feeding `heightGradient` rather than a volume
-    // axis — which is the change the whole phase is.
-    const { fragment } = compile(make());
-    expect(fragment).toMatch(/- uSeaRadius\) - 700\.0\) \/ 700\.0/);
+/**
+ * How far the address *moves* along a ray, which is the question no other test here was
+ * asking.
+ *
+ * Every other assertion in this file is about the address's **shape**: that it is scaled by
+ * the sea radius, that the weather wraps once, that the altitude is divided by the thickness.
+ * All three held while the layer was addressed by direction alone, and the sky was smooth and
+ * structureless — because the address was *correct* and did not go anywhere. A direction is
+ * scale-invariant, so a ray marching through the layer moves it by a few thousandths of a
+ * tile, and a sixty-texel volume read at that rate is one texel: the same base shape and the
+ * same three detail channels, sixty times over, with only the one-dimensional height profile
+ * varying between them.
+ *
+ * So this is arithmetic rather than a regex, and it is the test that had to exist. It asks how
+ * many texels of the volume a ray actually reads on its way through the layer, from the eye
+ * heights a player stands at and along the elevations they look, and it holds the answer to
+ * something the volume can resolve: its **finest** detail cell is
+ * `SHAPE_SIZE / SHAPE_DETAIL_PERIODS[2]` texels, and a ray that crosses less than one of
+ * those is a ray that never sees an edge.
+ *
+ * **What this catches and what the tests above catch, because they are not the same thing.**
+ * This one is written against the *rule*, in plain arithmetic — it cannot see the shader, and
+ * deleting the altitude from `shapeAt` leaves every assertion in it green. The two regex
+ * assertions in "the shell's address" are what bind the shader to the rule, and they are
+ * verified to fail when the altitude is dropped from either the march or the light march. The
+ * division is deliberate: the regexes pin the shape of the address and would happily pin a
+ * useless one, while this pins the number that address has to produce and knows nothing about
+ * how it is spelled. Together they are the pair the bug needed and only had neither of.
+ *
+ * Measured, at the eye height a player actually stands at (11) and the layer's constants:
+ * a vertical ray across the layer now reads **60.0 texels** of the volume, from 60.1 at
+ * thirty degrees of elevation to 61.8 at two. Addressed by direction alone it read 0.00 and
+ * 0.37 respectively — a fortieth of a texel and a two-hundredth — because the whole of the
+ * seven hundred units of the crossing went into the altitude and none of it into the address.
+ *
+ * The two halves of the address are counted separately because they answer different
+ * questions. The direction half is what keeps the layer seamless and pole-free and is *supposed*
+ * to be nearly still — a small drift with elevation is the price, and it is the correct price.
+ * The altitude half is the one that was missing, and it is the one that has to deliver the
+ * layer's whole vertical structure.
+ */
+describe("the address along a ray", () => {
+  const sea = DEFAULT_PLANET_RADIUS;
+  const shapeScale = sea / CLOUD_FEATURE;
+
+  /** The finest cell in the volume, in tiles: the smallest thing the address can resolve. */
+  const finestCell = 1 / SHAPE_DETAIL_PERIODS[2];
+
+  /** The same cell in texels, which is the unit a reader of this file cares about. */
+  const finestTexels = SHAPE_SIZE / SHAPE_DETAIL_PERIODS[2];
+
+  /**
+   * A point `t` from an eye on the planet's axis, `elevation` radians above the local
+   * horizon. The eye is at `(0, sea + eyeAltitude, 0)`, so the local up is `+y` and the local
+   * tangent is `+z`; the ray is `tangent·cos(elevation) + up·sin(elevation)`, which is a unit
+   * vector because the two are orthogonal unit vectors.
+   */
+  const pointAt = (
+    eyeAltitude: number,
+    elevation: number,
+    t: number,
+  ): Vec3 => ({
+    x: 0,
+    y: sea + eyeAltitude + t * Math.sin(elevation),
+    z: t * Math.cos(elevation),
+  });
+
+  /** The unit ray at `elevation` above the local horizon. */
+  const rayAt = (elevation: number): Vec3 => ({
+    x: 0,
+    y: Math.sin(elevation),
+    z: Math.cos(elevation),
+  });
+
+  /**
+   * The address at a point, in tiles: the direction scaled by `shapeScale` with the altitude
+   * in `y`. The same two terms `shapeAt` adds, written out so the test can walk a ray rather
+   * than read a shader. Only the direction's `y` component is carried, because a ray here
+   * leaves along the `y`/`z` plane and the `x` component is identically zero — and the sweep
+   * is what is being measured, not the address.
+   */
+  const addressAt = (p: Vec3): { direction: number; altitude: number } => {
+    const radius = Math.hypot(p.x, p.y, p.z);
+    return {
+      direction: (p.y / radius) * shapeScale,
+      altitude: (radius - sea - CLOUD_BOTTOM) / CLOUD_THICKNESS,
+    };
+  };
+
+  /**
+   * How much of the volume a ray reads crossing the layer, in tiles, and how much of that
+   * comes from each half of the address.
+   */
+  const sweepOf = (
+    eyeAltitude: number,
+    elevation: number,
+  ): { direction: number; altitude: number; total: number } => {
+    const span = cloudSpan(
+      pointAt(eyeAltitude, elevation, 0),
+      rayAt(elevation),
+      sea,
+    );
+    const from = addressAt(pointAt(eyeAltitude, elevation, span.enter));
+    const to = addressAt(pointAt(eyeAltitude, elevation, span.exit));
+    const direction = Math.abs(to.direction - from.direction);
+    const altitude = Math.abs(to.altitude - from.altitude);
+    return { direction, altitude, total: direction + altitude };
+  };
+
+  // Every elevation a player standing on the ground looks along, from overhead to a couple of
+  // degrees up — which on a planet this size is the whole of the sky that has any cloud in it.
+  const ELEVATIONS = [90, 60, 30, 20, 10, 5, 2].map((d) => (d * Math.PI) / 180);
+  const EYE_ALTITUDES = [2, 6, 11];
+
+  it("reads the volume's finest cell on every ray through the layer", () => {
+    // The assertion the bug needed and did not have. Every ray, every elevation, every eye
+    // height: the crossing has to cover at least one cell of the finest detail, or the
+    // erosion is reading a constant and there is nothing in the sky with an edge to it.
+    for (const eyeAltitude of EYE_ALTITUDES) {
+      for (const elevation of ELEVATIONS) {
+        const sweep = sweepOf(eyeAltitude, elevation);
+        expect(
+          sweep.total * SHAPE_SIZE,
+          `eye ${eyeAltitude}, elevation ${Math.round(
+            (elevation * 180) / Math.PI,
+          )}°: read ${(sweep.total * SHAPE_SIZE).toFixed(1)} texels, needs ${finestTexels}`,
+        ).toBeGreaterThanOrEqual(finestTexels);
+      }
+    }
+  });
+
+  it("gets its vertical structure from the altitude, not from the direction", () => {
+    // The altitude half alone carries the layer's whole thickness: one tile across
+    // `CLOUD_THICKNESS`, so the sixty-texel volume is swept end to end going up through the
+    // layer. It is the same number at every elevation and at every eye height, because it is
+    // an altitude and the layer is a shell.
+    for (const eyeAltitude of EYE_ALTITUDES) {
+      for (const elevation of ELEVATIONS) {
+        expect(sweepOf(eyeAltitude, elevation).altitude).toBeCloseTo(1, 6);
+      }
+    }
+  });
+
+  it("keeps the direction half nearly still, which is what it is for", () => {
+    // The load-bearing half of the reason this is not a position address: the direction term
+    // moves by *less* than a twentieth of a tile over a whole crossing, so the field stays
+    // seam-free and pole-free and the clouds stay planted over the ground. A position address
+    // moves it by two to fourteen tiles — and at the pole, where the player spawns, it moves it
+    // by nothing at all in *every* direction, which is a uniform sky rather than a weather one.
+    for (const elevation of ELEVATIONS) {
+      expect(sweepOf(11, elevation).direction).toBeLessThan(0.05);
+    }
+  });
+
+  it("has the march toward the light read the volume too", () => {
+    // A shadow ray is five steps at 1.9× the last, so it climbs about fifteen hundred units
+    // at a raised sun — more than twice the layer's thickness. If it were addressed by
+    // direction alone it would read a single texel and every cloud would be unshaded, which is
+    // the same defect as the march's reached from the other side.
+    //
+    // The first step is written out rather than imported, for the reason the `FAR_FIELD`
+    // assertion above gives: an import would let the constant and the shader drift apart in
+    // the one direction a test cannot see.
+    const firstStep = 60;
+    const steps = [0, 1, 2, 3, 4].map((i) => firstStep * 1.9 ** i);
+    expect(LIGHT_STEPS).toBe(steps.length);
+    // The whole climb is the figure that matters: it is the span over which the march
+    // integrates an optical depth, so it has to be several of the finest detail's cells or the
+    // shadow is a function of where the dither happened to land. It is a little over two
+    // tiles, which is fourteen cells.
+    const climb = steps.reduce((a, b) => a + b, 0) / CLOUD_THICKNESS;
+    expect(climb).toBeGreaterThan(finestCell * 8);
+    // **The steps are deliberately not uniform, and the short one is short on purpose.** The
+    // dither scales the first by 0.6 to 1.4, so it reads between three tenths and two tenths
+    // of a tile — under the finest *detail* cell, which is the wrong cell to hold it to: the
+    // light march reads the base shape alone (`baseAt`), whose finest octave is three times
+    // coarser again, and it integrates a depth over all five rather than sampling a profile.
+    // Asserting every step resolves a detail cell would be asserting something this design
+    // never claimed, and would be satisfied only by making the near steps shorter — which is
+    // the costliest part of the shader to give back. Recorded here so the numbers are not
+    // mistaken for an oversight later.
+    expect((Math.min(...steps) * 0.6) / CLOUD_THICKNESS).toBeLessThan(
+      finestCell,
+    );
+    expect((Math.min(...steps) * 0.6) / CLOUD_THICKNESS).toBeGreaterThan(0);
   });
 });
 
@@ -743,12 +1026,20 @@ describe("the layer's geometry", () => {
 
   it("repeats the shape many times around the weather's single wrap", () => {
     // The anti-repetition argument, in its spherical form. The shape volume is addressed by
-    // direction, so it repeats `2π · seaRadius / CLOUD_FEATURE` times around the equator —
-    // about ten — while the weather map wraps exactly once. A whole-number ratio would let
-    // the eye lock the two together; ten-point-something will not.
+    // direction, so it repeats `2π · seaRadius / CLOUD_FEATURE` times around the equator
+    // while the weather map wraps exactly once. A whole-number ratio would let the eye lock
+    // the two together; fifty-two-point-something will not.
     const around = (2 * Math.PI * DEFAULT_PLANET_RADIUS) / CLOUD_FEATURE;
     expect(around).toBeGreaterThan(8);
-    expect(Math.abs(around - Math.round(around))).toBeGreaterThan(0.1);
+    // **Fifteen per cent, not ten.** The wrap count is `2π / angularFeatureSize`, so it is
+    // whatever it is for a given `CLOUD_FEATURE`, and a tenth of a turn is close enough to
+    // lock onto that the eye will find it. At `0.12 · R` the count is 52.36 — a sixth of a
+    // turn clear of a whole number — and this bound is what stops a later retune landing on
+    // 52.0 or 52.2 and calling it a pass. Every other value of the constant in the range a
+    // person would reach for clears fifteen per cent comfortably: 0.6 gives 10.47, 0.13 gives
+    // 48.33, 0.2 gives 31.42, and the ones that do not (0.11 gives 57.12, 0.14 gives 44.88)
+    // are exactly the ones this is here to reject.
+    expect(Math.abs(around - Math.round(around))).toBeGreaterThan(0.15);
   });
 
   it("draws its back faces and writes no depth", () => {

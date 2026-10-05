@@ -129,19 +129,40 @@ const CLOUD_EXTENT = 40000;
 /**
  * World units of the planet's surface one repeat of the shape volume covers.
  *
- * The shape volume is addressed by **direction from the planet's centre**, scaled by
- * `seaRadius / CLOUD_FEATURE` — so its features are this many world units across on
- * the surface, and the field repeats a little over ten times around the equator. The
- * weather map, by contrast, is wrapped around the planet **exactly once**. The ratio
- * being neither an integer nor a simple fraction is the same point it always was: two
- * fields whose periods cannot be locked together are weather, and one field at one
- * scale is wallpaper.
+ * The shape volume is addressed by the **direction from the planet's centre**, scaled by
+ * `seaRadius / CLOUD_FEATURE` — so its features are this many world units across on the
+ * surface, and the field repeats that many times around the equator. The weather map, by
+ * contrast, is wrapped around the planet **exactly once**. The ratio being neither an integer
+ * nor a simple fraction is the same point it always was: two fields whose periods cannot be
+ * locked together are weather, and one field at one scale is wallpaper.
  *
- * **Six tenths of the planet's radius**, so the number of repeats around the equator is
- * unchanged as the planet grows — the cloud layer is part of the planet's body, and it scales with
- * it rather than staying at the size that fitted a 4,000-unit one.
+ * **This scales with the radius, and it should not, and the reason is the feature's *angle*.**
+ *
+ * A direction is a direction on a sphere, so a feature this size subtends `CLOUD_FEATURE /
+ * seaRadius` radians **to the player standing under it, at every elevation and every
+ * distance** — the one thing about a cloud's size that a ground player reads first. Which
+ * makes the angular size and the wrap count the same number: `wraps = 2π / angular`. There is
+ * no version of this constant that gives big clouds overhead *and* few repeats, and pretending
+ * otherwise is how a planet ends up with one cloud in it.
+ *
+ * `0.12 · R` is chosen from the ground, upwards. At a twelfth of the radius a feature is
+ * 6.9° of arc, so roughly **thirteen** clouds lie between the horizon and the zenith — a sky
+ * with weather in it you can point at — and the volume repeats **52.4** times around the
+ * equator, which is four times the anti-repetition floor and never near a whole number.
+ *
+ * The predecessor was `0.6 · R`, put there by 0041's rule that the planet's body scales with
+ * its radius. That rule is right for the body and wrong here: the cloud feature is not a
+ * feature of the *body*. It is a distance at which weather is recognisable, and the eye
+ * standing on the ground is the instrument that measures it. At 0.6 it was 34° of arc, which
+ * put **two and a half** clouds in the entire visible hemisphere and one in the whole sky
+ * above thirty degrees — technically weather, and not something a person would call weather.
+ *
+ * The scaling is not `seaRadius²`. Features tile a surface: `N · L² = 4π · seaRadius²`, so
+ * holding N fixed makes L proportional to `seaRadius` and holding the *area* fixed is what
+ * the square would do. On the second planet `R²` would make one feature twenty radians
+ * across — six and a half skies — so that the entire planet was a single cloud.
  */
-export const CLOUD_FEATURE = DEFAULT_PLANET_RADIUS * 0.6;
+export const CLOUD_FEATURE = DEFAULT_PLANET_RADIUS * 0.12;
 
 /** How far the march goes at most, and therefore where the layer fades out. */
 const MAX_DISTANCE = 17000;
@@ -186,12 +207,19 @@ const ABSORPTION = 0.42;
  * How far the weather map's curl displaces the shape volume's lookup, in units of the
  * shape volume's own tile.
  *
- * A tenth of a tile is two hundred and forty world units — enough to carry a billow a
- * quarter of the volume's width off its lattice, and no more. The warp is a *curl*,
- * which matters more than its size: a curl field has no divergence, so it displaces
- * the noise without ever gathering or thinning it. A warp built from two independent
- * noise samples does both, and the places where it gathers read as the noise piling
- * into hard veins.
+ * **A tenth of a tile, and it follows the tile rather than the world**, so it needs no
+ * retuning when `CLOUD_FEATURE` does: a tenth of whatever a cloud is across. The number it
+ * works out to is 1,632 units at the current feature size, and the reason it is stated in
+ * tiles at all is that the same tenth was 240 units on the flat planet and 8,160 on the
+ * first spherical one — three very different displacements from one unchanged constant, and
+ * the reason this comment used to be wrong without anyone noticing. The warp is a *curl*,
+ * which matters more than its size: a curl field has no divergence, so it displaces the
+ * noise without ever gathering or thinning it. A warp built from two independent noise
+ * samples does both, and the places where it gathers read as the noise piling into hard
+ * veins.
+ *
+ * It is applied in the volume's two **horizontal** slots — see `warpOffset`, and the reason
+ * there: `y` is the altitude now, and warping it shears the billows off their own bases.
  */
 const WARP_STRENGTH = 0.1;
 
@@ -333,17 +361,51 @@ const weatherAt = (f: Field, direction: Node<"vec3">): Node<"vec4"> =>
   f.weather.texture(equirectUV(direction));
 
 /**
- * Where a direction falls in the shape volume, before the warp.
+ * Where a sample falls in the shape volume, before the warp: **direction, plus altitude.**
  *
- * **Direction, not position.** The volume is addressed by the unit vector from the
- * planet's centre scaled to `seaRadius / CLOUD_FEATURE`, so its features are a fixed size
- * on the surface however far the sample is from the centre, and the field has no seam and
- * no pole — it is a three-dimensional field sampled on a sphere. The layer's vertical
- * structure is not in the volume at all: it is `heightGradient`, applied from the sample's
- * altitude, which is what keeps the volume's three axes free for the direction.
+ * The direction half is `normalize(world) · seaRadius / CLOUD_FEATURE`, which is what makes
+ * the layer a sphere rather than a plane: its features are a fixed size on the surface however
+ * far the sample is from the centre, and because it is a three-dimensional field sampled on
+ * a direction it has no seam and no pole.
+ *
+ * **The altitude half is not optional, and leaving it out is the whole of one bug.** A
+ * direction is scale-invariant, so two samples 700 units apart *vertically* — the exact
+ * distance from the ground to the underside of the layer — differ in direction by about five
+ * thousandths of a radian. The address moved **half a texel** of a sixty-texel volume, and a
+ * ray marching toward the sun moved four tenths of one. Every sample of a ray therefore read
+ * the *same* base shape and the *same* three detail channels, and what vertical structure was
+ * left came from the one-dimensional `heightGradient` alone. The sky was a silhouette
+ * extruded through seven hundred units, softly capped and softly floored: smooth, and with no
+ * billow in it. Adding `height` to the volume's `y` puts the layer's own normalised altitude
+ * back in the address, which is what the flat world's `(worldY − CLOUD_BOTTOM) /
+ * CLOUD_THICKNESS` was, and the ray sweeps **sixty texels** again — the whole volume, once,
+ * going up through the layer.
+ *
+ * Both halves are read at every sample of the march *and* of the march toward the light. The
+ * light march especially: a shadow ray climbs a thousand units or more, and addressing it by
+ * direction alone would draw shadows that do not follow the density casting them.
  */
-const shapeAt = (f: Field, direction: Node<"vec3">): Node<"vec3"> =>
-  direction.mul(f.shapeScale);
+const shapeAt = (
+  f: Field,
+  direction: Node<"vec3">,
+  height: Node<"float">,
+): Node<"vec3"> =>
+  direction.mul(f.shapeScale).add(vec3(float(0), height, float(0)));
+
+/**
+ * A sample's altitude as the volume's vertical address: zero at the underside, one at the top.
+ *
+ * The same expression as the profile's `height`, and deliberately the *same expression* — one
+ * line of arithmetic, read out of the shader by the test that holds the address, rather than two
+ * spellings of a number that have to agree. It goes negative below the layer and past one above
+ * it, which is fine: the volume wraps on every axis.
+ */
+const heightAt = (f: Field, world: Node<"vec3">): Node<"float"> =>
+  world
+    .length()
+    .sub(f.seaRadius)
+    .sub(float(CLOUD_BOTTOM))
+    .div(float(CLOUD_THICKNESS));
 
 /**
  * The drift angle, recomputed by the caller each frame.
@@ -421,13 +483,25 @@ export const cloudSpan = (
  * Computed once per sample and then reused by the march toward the light, which is
  * what keeps the light's geometry aligned with the density's without paying for a
  * weather lookup at every light step. The error is that the warp does not vary along
- * the light ray; over sixty-odd units of a twenty-four-hundred-unit tile it is
- * invisible.
+ * the light ray; over sixty-odd units of a `CLOUD_FEATURE` tile it is invisible.
  */
 const warpOf = (weather: Node<"vec4">): Node<"vec2"> =>
   // rmsl's swizzles stop at xy, xz, xw, yz, yw and zw — there is no gb, so the
   // two channels are taken separately and paired by hand.
   vec2(weather.g, weather.b).sub(vec2(0.5, 0.5)).mul(float(WARP_STRENGTH));
+
+/**
+ * The warp, placed in the volume's two **horizontal** slots.
+ *
+ * It used to go in `x` and `y`, which was the right pair for a volume whose `y` was a
+ * different axis from altitude. It is not any more: `y` carries the altitude, so a tenth of
+ * a tile of warp in it would slide the cloud up and down by up to seventy units of height
+ * depending on where in the weather field the sample happened to be — the billows shearing
+ * off their own bases. `x` and `z` carry the direction's two horizontal components, so the
+ * warp displaces along the surface and leaves the height alone.
+ */
+const warpOffset = (warp: Node<"vec2">): Node<"vec3"> =>
+  vec3(warp.x, float(0), warp.y);
 
 /** The base shape: the cheap test, and what the march toward the light samples. */
 const baseAt = (f: Field, coords: Node<"vec3">): Node<"float"> =>
@@ -517,17 +591,21 @@ const lightDepthAt = (
 ): void => {
   // One approximation, cheap and invisible at this scale: the warp is a constant offset
   // rather than a fresh weather lookup per step, so it does not vary along the light ray —
-  // over a few hundred units of a twenty-four-hundred-unit feature that is a fraction of a
-  // cell. The direction *is* re-derived at each step, because the fields are addressed on
-  // the sphere and a point six hundred units along the ray is on a different part of it;
-  // the warp is passed in already combined with nothing else so the five steps do not each
-  // rebuild it.
+  // over a few hundred units of a `CLOUD_FEATURE` tile that is a fraction of a cell. The
+  // warp is passed in already placed, so the five steps do not each rebuild it.
+  //
+  // **The direction *and* the altitude are both re-derived at every step, and the altitude is
+  // the half that is easy to leave out.** `along` is a real point on the sphere, so it has its
+  // own direction and its own height above the sea, and both belong in the address for the
+  // shadow to be a shadow *of this density*. A light march addressed by direction alone climbs
+  // a thousand units and stays on the same texel, which is precisely the flat-grey, unshaded
+  // look this whole change exists to remove. It costs one `length` per light step, inside the
+  // near field only, where the march is already the expensive half of the shader.
   Loop(LIGHT_STEPS, () => {
-    const along = origin.add(direction.mul(stepTo));
+    const along = origin.add(direction.mul(stepTo)).toVar();
+    const here = spun(turn, along.normalize()).toVar();
     accumulator.addAssign(
-      baseAt(f, shapeAt(f, spun(turn, along.normalize())).add(offset)).mul(
-        stepTo,
-      ),
+      baseAt(f, shapeAt(f, here, heightAt(f, along)).add(offset)).mul(stepTo),
     );
     stepTo.mulAssign(1.9);
   });
@@ -789,22 +867,21 @@ export class CloudMaterial extends NodeMaterial {
         },
       );
 
-      // The sample's direction from the planet's centre, spun by the drift, is what both
-      // fields are addressed by. Its altitude fraction is what the vertical profile is
-      // addressed by, and the two are kept separate because the shape volume is a function
-      // of direction and nothing else.
+      // The sample's direction from the planet's centre, spun by the drift, is what the
+      // weather map is addressed by, and — scaled — what the shape volume is. Its altitude
+      // fraction is the volume's *vertical* axis as well as the profile's, so the two are
+      // read once, from the same expression, and go to the two places that want them.
+      //
+      // Order matters: `height` is read before `coords`, which is its only consumer that is
+      // a texture fetch, and rmsl builds an expression graph rather than a sequence, so
+      // reading the var before assigning it is the same read as reading it after — but the
+      // assignment being written first is what makes that true by inspection.
       world.assign(eye.add(ray.mul(distance)));
       const here = spun(turn, world.normalize()).toVar();
       weather.assign(weatherAt(f, here));
       warp.assign(warpOf(weather));
-      coords.assign(shapeAt(f, here).add(vec3(warp.x, warp.y, 0)));
-      height.assign(
-        world
-          .length()
-          .sub(f.seaRadius)
-          .sub(float(CLOUD_BOTTOM))
-          .div(float(CLOUD_THICKNESS)),
-      );
+      height.assign(heightAt(f, world));
+      coords.assign(shapeAt(f, here, height).add(warpOffset(warp)));
 
       // The cheap test, off the base shape alone. The coverage threshold and the
       // erosion can both only remove density, so this is an upper bound on what is
@@ -851,7 +928,7 @@ export class CloudMaterial extends NodeMaterial {
               turn,
               world,
               litDirection,
-              vec3(warp.x, warp.y, 0),
+              warpOffset(warp),
               lightDepth,
               lightStep,
             );
