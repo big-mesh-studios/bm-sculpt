@@ -27,11 +27,20 @@
   pointer-events: auto;
 }
 
+/*
+ * **Both axes from the baseline's own token, so a finger gets a circle rather
+ * than an oval.** The baseline raises `min-height` on every button under a
+ * coarse pointer. A fixed `width: 30px` beside a fixed `height: 30px` therefore
+ * survived as a 30-by-44 ellipse on a phone, and the `>_` glyph stretched out of
+ * shape with it. `--ui-size` is 32px on a pointer and 44px on a finger, so
+ * sizing both dimensions from it keeps the target square — and so the circle
+ * round — while giving a finger the size the baseline intends.
+ */
 .anchor,
 .fullscreen {
-  width: 30px;
-  height: 30px;
-  border-radius: 15px;
+  width: var(--ui-size, 30px);
+  height: var(--ui-size, 30px);
+  border-radius: 50%;
   background: rgba(0, 0, 0, 0.5);
   color: #fff;
   display: flex;
@@ -50,8 +59,9 @@
 }
 
 .fullscreen svg {
-  width: 16px;
-  height: 16px;
+  /* Half the button, so the glyph keeps its proportion when the button grows. */
+  width: calc(var(--ui-size, 30px) / 2);
+  height: calc(var(--ui-size, 30px) / 2);
 }
 
 /* The floating terminal. CSS-anchored to the trigger button rather than given
@@ -195,16 +205,31 @@
 }
 
 /* the rest of the command being typed, laid over the input on the same grid as
-   the text in it, so it reads as unwritten characters after the caret */
+   the text in it, so it reads as unwritten characters after the caret.
+   **The overlay has to take the input's own font and vertical alignment, or it
+   stops sitting on the caret.** The baseline raises the input to a 44px minimum
+   under a coarse pointer and the browser centres a single line in it, so a
+   top-aligned, fixed-12px overlay drifted both down and out of step with the
+   characters it is meant to continue. Both are stated again here rather than
+   inherited, because the input carries them at a higher specificity. */
 .completion {
   position: absolute;
   inset: 0;
   padding: 6px 8px 6px 0;
-  font: 12px monospace;
+  display: flex;
+  align-items: center;
+  font-family: ui-monospace, monospace;
+  font-size: 16px;
   color: #6b7c8c;
   white-space: pre;
   overflow: hidden;
   pointer-events: none;
+}
+
+@media (any-pointer: fine) {
+  .completion {
+    font-size: 12px;
+  }
 }
 
 /* holds the completion's place behind the characters that are really there */
