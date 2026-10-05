@@ -17,6 +17,11 @@
  *    event.
  * 4. **The crossover altitude is consistent with the chunks' reach**, or the globe takes over while
  *    the chunks are still the better picture.
+ *
+ * The fifth thing worth asserting is not about a fade at all: that the globe is drawn as several
+ * meshes, none of them over a draw call's vertex limit. That is the `globe's longitude bands`
+ * block below, and it is a different kind of property — invisible from every altitude, and the
+ * difference between a planet and no planet.
  */
 
 import { describe, expect, it } from "vitest";
@@ -27,9 +32,12 @@ import { DEFAULT_PLANET_RADIUS } from "../render/atmosphere";
 import {
   CHUNK_REACH,
   GLOBE_FULL_ALTITUDE,
+  GLOBE_SEGMENTS,
   GLOBE_START_ALTITUDE,
+  globeBands,
   globeOpacityAt,
   horizonAltitudeFor,
+  MAX_DRAW_VERTICES,
 } from "./globe";
 
 describe("the globe's fade", () => {
@@ -128,5 +136,103 @@ describe("the globe's fade", () => {
     // already part-way into it — which is correct, and worth pinning: relief is 576 and the band ends
     // at 900, so a mountain top is at 80% of the fade.
     expect(GLOBE_FULL_ALTITUDE).toBeGreaterThan(500);
+  });
+});
+
+describe("the globe's longitude bands", () => {
+  // The globe is the one geometry in the scene built from a segment count rather than from a chunk,
+  // and it is the one geometry that could exceed a draw call's 65,535 vertices: 512 longitude
+  // segments by 256 latitudes is 513 × 257 = 131,841. Nothing in this project checks for
+  // `OES_element_index_uint`, so over the limit is not a degraded planet but a missing one. These
+  // are the assertions that the tessellation is kept and only the *draw* count is spent.
+
+  /** A band's vertex count, as `SphereGeometry` counts it: both ends inclusive. */
+  const verticesOf = (segments: number, heightSegments: number): number =>
+    (segments + 1) * (heightSegments + 1);
+
+  const shippedHeightSegments = Math.floor(GLOBE_SEGMENTS / 2);
+
+  it("puts every band under the vertex limit", () => {
+    // **The assertion the whole mechanism exists to make.** Not "the total is under it" — a total is
+    // drawn as separate calls and means nothing; each band is one geometry with one index buffer.
+    for (const band of globeBands(GLOBE_SEGMENTS, shippedHeightSegments))
+      expect(
+        verticesOf(band.segments, shippedHeightSegments),
+      ).toBeLessThanOrEqual(MAX_DRAW_VERTICES);
+  });
+
+  it("would have been over the limit as one sphere, which is why it is split", () => {
+    // **The bug as it stood**, pinned so that a change that quietly restores it is visible. If this
+    // ever fails, the limit has moved and the split can be reconsidered — that is the only reason it
+    // is allowed to fail.
+    expect(verticesOf(GLOBE_SEGMENTS, shippedHeightSegments)).toBeGreaterThan(
+      MAX_DRAW_VERTICES,
+    );
+  });
+
+  it("keeps every segment the silhouette was chosen for", () => {
+    // **The reason this is a split and not a thinner sphere.** Losing segments is visible from orbit
+    // as a faceted outline; spending a draw call is not. So the bands must sum back to the segment
+    // count, and no band may be thinner than another.
+    const bands = globeBands(GLOBE_SEGMENTS, shippedHeightSegments);
+    const total = bands.reduce((sum, band) => sum + band.segments, 0);
+    expect(total).toBe(GLOBE_SEGMENTS);
+    for (const band of bands) expect(band.segments).toBe(bands[0]!.segments);
+  });
+
+  it("is not avoidable by thinning the sphere instead, because 256 is still over the limit", () => {
+    // **The half-measure does not exist, and this is why.** Halving to 256 gives 257 × 257 = 66,049,
+    // which is 514 over. The widest single sphere that fits is 254 segments — so "just lower
+    // GLOBE_SEGMENTS" means giving up half the silhouette tessellation to save four draw calls, which
+    // is the wrong trade and the one this split exists to avoid.
+    expect(verticesOf(256, shippedHeightSegments)).toBeGreaterThan(
+      MAX_DRAW_VERTICES,
+    );
+    // And 254 is the boundary: it is exactly the limit, and 253 is under it.
+    expect(verticesOf(254, shippedHeightSegments)).toBe(MAX_DRAW_VERTICES);
+    expect(verticesOf(253, shippedHeightSegments)).toBeLessThan(
+      MAX_DRAW_VERTICES,
+    );
+  });
+
+  it("takes the fewest bands that fit, because each is a draw call", () => {
+    expect(globeBands(GLOBE_SEGMENTS, shippedHeightSegments)).toHaveLength(4);
+  });
+
+  it("tiles the sphere exactly, with no gap and no overlap at the joins", () => {
+    // **Contiguous and complete.** The bands are named by `phiStart`/`phiLength`, so the seam between
+    // two of them is a hole or an overlap if the starts do not abut exactly. A gap is a black
+    // meridian down the planet; an overlap is a band drawn twice, which on a `depthWrite: false`
+    // transparent surface is a visible bright stripe.
+    const bands = globeBands(GLOBE_SEGMENTS, shippedHeightSegments);
+    for (const [i, band] of bands.entries()) {
+      expect(band.phiStart).toBeCloseTo((i * 2 * Math.PI) / bands.length, 12);
+      expect(band.phiLength).toBeCloseTo((2 * Math.PI) / bands.length, 12);
+    }
+    const covered = bands.reduce((sum, band) => sum + band.phiLength, 0);
+    expect(covered).toBeCloseTo(2 * Math.PI, 12);
+  });
+
+  it("leaves a sphere that already fits as one mesh", () => {
+    // **The banding is a response to the size, so it has to disappear when the size does.** A globe
+    // built at a segment count that needs no split must not pay four draw calls for it — and must not
+    // need a special case in the caller either, which is why this is a property of the banding
+    // rather than a separate code path.
+    const bands = globeBands(64, 32);
+    expect(bands).toHaveLength(1);
+    expect(bands[0]!.segments).toBe(64);
+  });
+
+  it("respects a limit the caller sets, so the split is not hard-coded to the hardware", () => {
+    // **The limit is a parameter rather than a constant inside the function**, because the limit is a
+    // property of the context and every WebGL2 context does not have it. A caller that knows its
+    // context has 32-bit indices can pass a number no geometry will reach and get one mesh back.
+    const generous = globeBands(
+      GLOBE_SEGMENTS,
+      shippedHeightSegments,
+      1_000_000,
+    );
+    expect(generous).toHaveLength(1);
+    expect(generous[0]!.segments).toBe(GLOBE_SEGMENTS);
   });
 });
