@@ -54,6 +54,7 @@
 import type { Bounds, Vec3 } from "@big-mesh-studios/core";
 import type { BaseField, SurfaceExtent } from "./field";
 import {
+  landscapeShape,
   MOUNTAIN_FEATURE,
   MOUNTAIN_MASK_FEATURE,
   MOUNTAIN_MASK_OCTAVES,
@@ -66,9 +67,21 @@ import {
   PerlinNoise3D,
 } from "./perlin3";
 
-/** Keeps a value inside `[0, 1]`, as `terrain.ts` does for its mask and ridge. */
-const clamp01 = (value: number): number =>
-  value < 0 ? 0 : value > 1 ? 1 : value;
+/**
+ * How far this planet's surface reaches either side of its sea level, in world units.
+ *
+ * **The same number `planetField` derives, without building the field**, because the things
+ * that have to sit above the landscape's relief are altitudes rather than fields: where the
+ * globe starts fading in, and where the cloud layer's floor is. A caller that had to build a
+ * 256-entry permutation table to learn how tall the mountains are would be doing arithmetic to
+ * get a number the arithmetic already had.
+ *
+ * Exported rather than left inside `planetField` because this is the third thing in the
+ * application to need it and the first two hardcoded it — and hardcoding it is how a mountain
+ * range ends up standing inside the cloud layer.
+ */
+export const reachOf = (params: PlanetParams): number =>
+  (FBM_AMPLITUDE_BOUND_3D + RIDGE_STRENGTH) * Math.abs(params.scale);
 
 /** The parameters a planet is built from, and the four a `ModelMessage` carries. */
 export interface PlanetParams {
@@ -114,6 +127,8 @@ export const DEFAULT_PLANET: PlanetParams = {
 export interface PlanetField extends BaseField, SurfaceExtent {
   /** The factor every reported distance is scaled by. See the file header. */
   readonly lipschitz: number;
+  /** Where this planet's water settles: `radius`, which is its mean sea level. */
+  readonly seaLevel: number;
   /** The surface's radius in a direction, in world units. */
   radiusAt(direction: Vec3): number;
   /** The radius of the surface's highest point anywhere. */
@@ -169,14 +184,6 @@ export const planetField = (params: PlanetParams): PlanetField => {
   const S = radius / TERRAIN_FEATURE;
 
   /**
-   * The landscape's shape in a direction, in roughly `[-1, 3]`.
-   *
-   * **The same three terms as `terrainField`**, on the same three features: a base fBm, a ridged
-   * term confined by a mask, and the mask. Reusing them is why a planet's mountains are this
-   * project's mountains — the alternative, a separate planetary noise tuned to look right on its
-   * own, would have produced a world nothing else in the repository recognised.
-   */
-  /**
    * One fBm octave set over the direction, for a feature `feature` world units across.
    *
    * `S` is the argument scale that makes a feature `TERRAIN_FEATURE` units across at the nominal
@@ -187,23 +194,28 @@ export const planetField = (params: PlanetParams): PlanetField => {
     return noise.fbm(n.x * k, n.y * k, n.z * k, count);
   };
 
-  const shapeAt = (n: Vec3): number => {
-    const base = fbmAt(n, TERRAIN_FEATURE);
-    const ridge = Math.max(0, 1 - Math.abs(fbmAt(n, MOUNTAIN_FEATURE)));
-    const mask = clamp01(
-      0.5 + 0.5 * fbmAt(n, MOUNTAIN_MASK_FEATURE, MOUNTAIN_MASK_OCTAVES),
+  /**
+   * The landscape's shape in a direction, in roughly `[-7, 7]`.
+   *
+   * **`landscapeShape`, called with a planet's own addressing** — the same three features and the
+   * same three terms a height field uses, on 3D noise rather than 2D. Reusing them is why a
+   * planet's mountains are this project's mountains; the alternative, a separate planetary noise
+   * tuned to look right on its own, would have produced a world nothing else in the repository
+   * recognised.
+   */
+  const shapeAt = (n: Vec3): number =>
+    landscapeShape((feature, featureOctaves = octaves) =>
+      fbmAt(n, feature, featureOctaves),
     );
-    return base + RIDGE_STRENGTH * ridge * mask;
-  };
 
   const radiusAt = (direction: Vec3): number =>
     radius + scale * shapeAt(direction);
 
-  // The base can fall to `-1`; a ridge can only rise, up to `RIDGE_STRENGTH` on top of the base's
-  // `+1`. The reach is the larger magnitude, used symmetrically because the gate only needs a band
-  // that contains the surface. `terrain.ts` derives the same shape with `FBM_AMPLITUDE_BOUND` of 2;
-  // the 3D gradient set reaches 1 along an axis, so the base's bound is 1.
-  const reach = (FBM_AMPLITUDE_BOUND_3D + RIDGE_STRENGTH) * Math.abs(scale);
+  // The base is in `[-1, +1]` and the signed range term in `[-RIDGE_STRENGTH, +RIDGE_STRENGTH]` —
+  // see `landscapeShape`. The reach is the larger magnitude, used symmetrically because the gate
+  // only needs a band that contains the surface. `terrain.ts` derives the same shape with
+  // `FBM_AMPLITUDE_BOUND` of 2; the 3D gradient set reaches 1 along an axis, so the base's is 1.
+  const reach = reachOf(params);
   const lowestRadius = radius - reach;
   const highestRadius = radius + reach;
 
@@ -232,6 +244,12 @@ export const planetField = (params: PlanetParams): PlanetField => {
 
   return Object.assign(distance, {
     lipschitz,
+    /**
+     * `radius`, because `radiusAt` is `radius + scale · shape` and a shape of zero happens at the
+     * radius — so the radius is where the noise's own zero is, which is what a sea at a given
+     * altitude covers. See `BuiltBaseField.seaLevel`, and this file's `PlanetParams.radius`.
+     */
+    seaLevel: radius,
     radiusAt,
     lowestRadius,
     highestRadius,

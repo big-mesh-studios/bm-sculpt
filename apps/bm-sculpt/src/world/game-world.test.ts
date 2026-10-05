@@ -173,6 +173,57 @@ describe("water", () => {
     // Inside the ground under the water, so not swimming in it.
     expect(world.getInWaterAt(vec3(0, -1, 0))).toBe(false);
   });
+
+  /**
+   * A supplied predicate, which is what a world whose water is meshed must give.
+   *
+   * The two rules disagree exactly where it matters: `seaRadius` alone asks the *edited* model
+   * whether a point is solid, so a shaft dug down through a hill comes back as flooded — below
+   * the sea level, and air as far as the model is concerned. The meshed sea is gated on the
+   * *landscape*, which is unmoved by the dig, so there is no water there and the shaft is dry.
+   */
+  const dugShaft = new GameWorld({
+    // The surface dropped to `-1000`, which is what a shaft dug through solid ground looks like
+    // to the model: air where there was rock.
+    field: () => heightField(() => -1000),
+    seaRadius: 5,
+    // The landscape still says rock there, so the sea is not there either.
+    waterAt: () => false,
+  });
+
+  it("takes a supplied predicate as the whole answer", () => {
+    // **Both points are below the sea level and both are air as far as the model is concerned** —
+    // which is exactly the case the sea level alone would call flooded, and exactly the case a
+    // shaft dug through a hill is.
+    expect(dugShaft.getSolidAt(vec3(0, -2, 0))).toBe(false);
+    expect(dugShaft.getInWaterAt(vec3(0, 2, 0))).toBe(false);
+    expect(dugShaft.getInWaterAt(vec3(0, -2, 0))).toBe(false);
+  });
+
+  it("does not consult the sea level when a predicate is supplied", () => {
+    // **The two are not merged.** A world with a sea material has a predicate and a sea level,
+    // and the predicate is the one that describes the water it is drawing — the level is what
+    // the globe, the clouds and the atmosphere measure altitudes against.
+    const asked: number[] = [];
+    const world = new GameWorld({
+      field: () => heightField(() => 0),
+      seaRadius: 5,
+      waterAt: (p) => {
+        asked.push(p.y);
+        return p.y > 3;
+      },
+    });
+    expect(world.getInWaterAt(vec3(0, 4, 0))).toBe(true);
+    expect(world.getInWaterAt(vec3(0, 1, 0))).toBe(false);
+    expect(asked).toEqual([4, 1]);
+  });
+
+  it("falls back to the sea level with neither", () => {
+    // **A world with no water at all**, which is an operations-only editor. Both are absent and
+    // the answer is "not swimming", which is what there is to say.
+    const world = new GameWorld({ field: () => heightField(() => 0) });
+    expect(world.getInWaterAt(vec3(0, 2, 0))).toBe(false);
+  });
 });
 
 /**

@@ -68,6 +68,13 @@ export interface GameOptions {
    */
   readonly seaRadius?: number;
   /**
+   * Where water actually is, when that is not simply "below the sea level": a world's water
+   * is meshed against its *landscape*, so a shaft dug through solid ground is dry even
+   * though it is below the level. Supplied by a world that has a sea; see
+   * `GameWorldOptions.waterAt`.
+   */
+  readonly waterAt?: (p: Vec3) => boolean;
+  /**
    * Which way is up. Defaults to flat, which is the world this application has today.
    */
   readonly frame?: Frame;
@@ -191,6 +198,10 @@ export class Game {
       ...(options.seaRadius !== undefined
         ? { seaRadius: options.seaRadius }
         : {}),
+      // **Forwarded as its own optional, for the reason `mediumAt` has one above**: a
+      // reader that always answered a thing would make every world's `waterAt` defined and
+      // pay a branch per frame to say nothing.
+      ...(options.waterAt !== undefined ? { waterAt: options.waterAt } : {}),
     });
 
     const spawn = options.spawn ?? this.spawnOnTheSurface();

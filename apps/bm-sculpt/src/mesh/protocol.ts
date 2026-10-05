@@ -103,14 +103,41 @@ export interface CancelMessage {
 /** What the main thread may send. */
 export type ToWorker = ChunkRequestMessage | ModelMessage | CancelMessage;
 
+/**
+ * What a chunk turned out to hold: a ground surface, a sea surface, both or neither.
+ *
+ * **Two independent fields rather than one mesh and an optional sea**, because "this chunk
+ * is open ocean, so there is no ground in it" and "this chunk is a mountain, so there is no
+ * sea in it" are the two common answers and one of them each would have to encode as the
+ * absence of the thing that is present. Each is absent when that chunk holds no such
+ * surface, which is most chunks for both.
+ *
+ * The sea is not the model: it comes from the landscape alone and does not move when an
+ * edit does, which is why the two are separate answers rather than one mesh with a flag.
+ * See `mesh/water-mesher.ts`.
+ */
+export interface MeshedChunk {
+  readonly ground?: ChunkMesh;
+  readonly sea?: ChunkMesh;
+}
+
 /** A finished mesh, or the fact that the chunk has none. */
 export interface ChunkMeshMessage {
   readonly kind: "meshReady";
   readonly cell: CellCoord;
   readonly lod: Lod;
   readonly generation: number;
-  /** Absent when `empty`; its buffers are transferred, not cloned. */
-  readonly mesh?: ChunkMesh;
+  /** Absent when this chunk holds no ground; its buffers are transferred, not cloned. */
+  readonly ground?: ChunkMesh;
+  /** Absent when this chunk holds no sea, on the same terms. */
+  readonly sea?: ChunkMesh;
+  /**
+   * Whether the chunk held neither surface.
+   *
+   * **The one answer that can be sent without buffers**, and it is the common one: a
+   * planet's window is mostly deep rock and open sky, and four empty typed arrays for each
+   * would be most of the traffic in the session as well as most of the work.
+   */
   readonly empty: boolean;
 }
 
@@ -191,25 +218,30 @@ export const isFromWorker = (value: unknown): value is FromWorker => {
  * Kept beside the message so sender and receiver cannot disagree about the list. Getting
  * it wrong does not throw: the arrays are cloned instead of transferred, and the mesh
  * costs a copy per chunk for the rest of the session.
+ *
+ * **Every mesh in the message, ground first.** A partial list leaves whichever mesh is
+ * missing to be cloned, so a list that named only the ground would quietly clone the sea
+ * on every ocean chunk — a cost per chunk that no test of the renderer would ever notice,
+ * because a cloned array draws exactly as well as a transferred one.
  */
 export const meshTransferables = (message: FromWorker): Transferable[] => {
-  if (
-    message.kind !== "meshReady" ||
-    message.empty ||
-    message.mesh === undefined
-  )
-    return [];
-  const { positions, normalOct, colours, indices } = message.mesh;
-  return [
-    positions.buffer,
-    normalOct.buffer,
-    colours.buffer,
-    indices.buffer,
-  ] as Transferable[];
+  if (message.kind !== "meshReady") return [];
+  const transferables: Transferable[] = [];
+  for (const mesh of [message.ground, message.sea]) {
+    if (mesh === undefined) continue;
+    const { positions, normalOct, colours, indices } = mesh;
+    transferables.push(
+      positions.buffer,
+      normalOct.buffer,
+      colours.buffer,
+      indices.buffer,
+    );
+  }
+  return transferables as Transferable[];
 };
 
 /**
- * Whether a worker is promising a mesh for this message.
+ * Whether a worker is promising geometry for this message.
  *
  * **False for a decline, and that is the whole point of the distinction.** The pool
  * applies a promise and frees a slot on a decline, and must never do the first for the
@@ -218,3 +250,18 @@ export const meshTransferables = (message: FromWorker): Transferable[] => {
  */
 export const isMeshAnswer = (message: FromWorker): boolean =>
   message.kind === "meshReady";
+
+/**
+ * The meshes a reply carries, as the pair a store applies.
+ *
+ * **Read through one function rather than by the caller picking the fields off**, because
+ * `empty` and the two meshes have to agree: a reply that says `empty` and carries a mesh
+ * is a lie either way, and which one wins should be a decision stated once.
+ */
+export const meshedOf = (message: ChunkMeshMessage): MeshedChunk => {
+  if (message.empty) return {};
+  return {
+    ...(message.ground !== undefined ? { ground: message.ground } : {}),
+    ...(message.sea !== undefined ? { sea: message.sea } : {}),
+  };
+};

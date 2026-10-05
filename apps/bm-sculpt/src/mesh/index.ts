@@ -30,6 +30,7 @@ export {
 
 export type {
   ChunkMesher,
+  ChunkMeshers,
   ChunkRegion,
   MeshField,
   MeshRequest,
@@ -49,11 +50,17 @@ export type {
   ChunkMeshMessage,
   ChunkRequestMessage,
   FromWorker,
+  MeshedChunk,
   ModelMessage,
   PaintTileMessage,
   ToWorker,
 } from "./protocol";
-export { isFromWorker, isToWorker, meshTransferables } from "./protocol";
+export {
+  isFromWorker,
+  isToWorker,
+  meshedOf,
+  meshTransferables,
+} from "./protocol";
 
 export type { Handled, MesherFactory, Wanted, WorkerState } from "./worker";
 export {
@@ -72,10 +79,17 @@ export type {
 export { WorldWorkerPool } from "./worker-pool";
 
 export {
-  mesherFor,
+  meshersFor,
   paintTilesOf,
   TilePaint,
   type WorkerPaint,
 } from "./model-field";
+
+export {
+  couldHoldWater,
+  outOfTheGround,
+  seaDistanceOf,
+  WaterChunkMesher,
+} from "./water-mesher";
 
 export { runWorker } from "./mesh-worker";

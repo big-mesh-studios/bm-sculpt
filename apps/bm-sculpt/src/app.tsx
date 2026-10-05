@@ -40,7 +40,12 @@ import {
   starterOperations,
   type SessionStats,
 } from "./session";
-import { DEFAULT_PLANET, DEFAULT_TERRAIN } from "@big-mesh-studios/csg";
+import {
+  baseFieldFor,
+  DEFAULT_PLANET,
+  DEFAULT_TERRAIN,
+  seaLevelOf,
+} from "@big-mesh-studios/csg";
 import type { BaseFieldSpec } from "@big-mesh-studios/csg";
 import { LOD_OFF, lodIsOff, type LodBands } from "./world";
 import { SculptSession } from "./sculpt";
@@ -50,7 +55,7 @@ import { createInput } from "./player/input";
 import type { Medium } from "./player/player";
 import { TouchControls } from "./player/touch-controls";
 import { Game } from "./engine/game";
-import { createWater, DEFAULT_SEA_RADIUS } from "./world/water";
+import { createWaterMaterial, sphericalWater } from "./world/water";
 import { sphericalFrame } from "./world/up";
 import { createClouds, type Clouds } from "./world/clouds";
 import { createZoneLines, type ZoneLines } from "./places/zones";
@@ -116,7 +121,61 @@ const GAME_BASE_FIELD: BaseFieldSpec = {
   params: DEFAULT_PLANET,
 };
 const GAME_FRAME = sphericalFrame({ x: 0, y: 0, z: 0 });
-const GAME_SEA = DEFAULT_SEA_RADIUS;
+
+/**
+ * The landscape, built once here for the questions only the main thread asks.
+ *
+ * **A second copy of the field the workers build, and the reason that is acceptable is
+ * ADR 0009's**: both sides build it from the same numbers, so they cannot disagree. This
+ * one exists because the player's collision and the water predicate both ask per frame, and
+ * a field they cannot reach without building it would mean a message per query.
+ */
+const GAME_LANDSCAPE = baseFieldFor(GAME_BASE_FIELD)!;
+
+/**
+ * The game's water.
+ *
+ * **A material and a shape, and no geometry at all.** The sea used to be a 256-segment
+ * sphere at this radius, which meant the sphere — not the ground — decided where water
+ * was: dig a shaft down through a hill, cross the radius inside the rock, and the shaft
+ * filled with water. `mesh/water-mesher.ts` now meshes the sea per chunk from this same
+ * radius and the landscape's own field, so what this number is for is the physics, the
+ * globe and the atmosphere — everything that asks how deep something is rather than
+ * anything that draws it.
+ *
+ * `sphericalWater` because the base field is a planet, and a height field's sea would face
+ * `+Y` instead. That is a property of the landscape, which is why it is passed rather than
+ * read out of the radius.
+ */
+const GAME_WATER = { material: createWaterMaterial(sphericalWater) };
+
+/**
+ * The altitude or radius water settles at, read from the landscape rather than repeated.
+ *
+ * **`seaLevelOf` and not `DEFAULT_PLANET.radius`, because this is the one place a caller
+ * used to restate a number the world already carried** — and a number restated is a number
+ * that can disagree. Every worker builds the same sea from the same spec (ADR 0009), so
+ * reading it here is reading the same value they do.
+ */
+const GAME_SEA = seaLevelOf(GAME_BASE_FIELD);
+
+/**
+ * Whether a point is in water, as the sea is actually meshed.
+ *
+ * **Two terms and both of them are the ones the mesher uses.** Below the sea, and outside
+ * the ground — the ground being the *landscape*, not the model, which is what keeps a shaft
+ * dug through a hill dry: the landscape says solid there, so there is no water to be in
+ * even though the shaft is below sea level and full of air.
+ *
+ * The physics asked the same question before with `radiusAt < seaRadius && !getSolidAt`,
+ * and the difference is `getSolidAt`, which asks the *edited* model. That mismatch is what
+ * would otherwise let a player swim down a dry shaft.
+ */
+const inSea = (p: { x: number; y: number; z: number }): boolean => {
+  if (GAME_FRAME.spherical && GAME_FRAME.radiusAt(p) >= GAME_SEA) return false;
+  if (!GAME_FRAME.spherical && p.y >= GAME_SEA) return false;
+  return GAME_LANDSCAPE(p.x, p.y, p.z) > 0;
+};
 
 /** Whether this device points with something coarse, so the touch UI shows. */
 const isCoarsePointer = (): boolean =>
@@ -369,6 +428,10 @@ export default function App() {
       material,
       operations: initialOperations,
       baseField: GAME_BASE_FIELD,
+      // **Only the game draws a sea.** The editor shares this session and orbits a model
+      // with no water in it, and meshing water for it would be a second sampling pass over
+      // every chunk to produce geometry nothing draws.
+      ...(isGame() ? { seaMaterial: GAME_WATER.material } : {}),
       // A wider and flatter window than the editor's — see `GAME_WINDOW`, which the
       // fog's own test reads so that these two cannot drift apart.
       ...(isGame() ? GAME_WINDOW : {}),
@@ -514,6 +577,8 @@ export default function App() {
       viewport,
       input,
       seaRadius: GAME_SEA,
+      // Where the sea is, as it is meshed rather than as the sea level alone would say.
+      waterAt: inSea,
       frame: GAME_FRAME,
       // The spawn probe has to start inside the planet. The sea radius is within a few units of
       // the surface everywhere, so it is a good enough probe and needs no number of its own.
@@ -524,7 +589,6 @@ export default function App() {
       // that always returns null. See `GameOptions.mediumAt`.
       mediumAt: (p) => placeMedium()?.(p.x, p.y, p.z),
     });
-    const water = createWater(viewport.scene, GAME_SEA);
     // The clouds, built once their field has been baked — on a worker, because the bake
     // is two and a half seconds of arithmetic and the only reason to move it is that it
     // was happening on the thread that draws. The layer is null until the field lands,
@@ -551,13 +615,6 @@ export default function App() {
         if (globeDisposed) return;
         try {
           globe = createGlobe(viewport.scene, maps);
-          // **The sea is moved behind the globe in draw order.** rmsl has no render-order key —
-          // draw order is scene traversal order — and `createWater` ran before the globe existed,
-          // so the globe (added later) would blend over the ocean, which writes no depth of its own
-          // for it to be tested against. Re-adding the water puts it after the globe and the sea
-          // lands on top. The clouds are baked later still and are already after both.
-          viewport.scene.remove(water.mesh);
-          viewport.scene.add(water.mesh);
           setPlanetBake({
             state: "ready",
             maps:
@@ -778,7 +835,7 @@ export default function App() {
           places: sculpt.places,
           terrainHeight: sculpt.terrainHeight,
           solidAt: (x, y, z) => game.world.getSolidAt({ x, y, z }),
-          waterAt: (x, y, z) => game.world.getInWaterAt({ x, y, z }),
+          waterAt: (x, y, z) => inSea({ x, y, z }),
           // **The same answer the physics gets**, by the same method, so a place asking "what am
           // I standing in" and a player standing in it cannot get different replies. Assigned
           // before `load()` runs, because a script's top-level code is allowed to ask.
@@ -966,7 +1023,10 @@ export default function App() {
       const lights =
         host?.visibleLights(game.player.position, MAX_DRAWN_LIGHTS) ?? [];
       material.lights.lights = lights;
-      water.material.lights.lights = lights;
+      // **Only the game's material, and only when there is one.** `GAME_WATER` is built at
+      // module scope because a material is a GL object and building it per frame would be a leak;
+      // it is handed to the session as the sea's material only in the game.
+      GAME_WATER.material.lights.lights = lights;
 
       // A place that changes its zones mid-step has just redrawn the terrain by way of
       // `geometryChanged`, so the overlay is rebuilt after the step rather than before it —
@@ -977,12 +1037,15 @@ export default function App() {
       skyColour.set(light.skyColor[0], light.skyColor[1], light.skyColor[2]);
       material.sky.lighting = light;
       material.fog.colour = light.skyColor;
-      water.material.sky.lighting = light;
-      water.material.fog.colour = light.skyColor;
+      // **The sea's material gets the same two assignments, every frame** — one material for
+      // every water mesh, so this one pair is all of it.
+      GAME_WATER.material.sky.lighting = light;
+      GAME_WATER.material.fog.colour = light.skyColor;
       // **The same two assignments the terrain and the water get, every frame.** That is the whole
       // reason the swap is invisible: the globe is lit by this sun and hazed by this air, from the
       // same `SkyLight` and the same `Fog`, so at the altitude the two overlap they cannot disagree
-      // about what the light is doing.
+      // about what the light is doing. The globe's own ocean reads the same uniforms the sea's
+      // material does, through `render/water-look.ts`.
       if (globe !== null) {
         globe.material.sky.lighting = light;
         globe.material.fog.colour = light.skyColor;
@@ -1010,7 +1073,7 @@ export default function App() {
         // and the sea get the same number so the crossfade cannot show a fog seam either.
         const nearField = 1 - shown;
         material.fog.nearField = nearField;
-        water.material.fog.nearField = nearField;
+        GAME_WATER.material.fog.nearField = nearField;
         globe.material.fog.nearField = nearField;
       }
 
@@ -1018,7 +1081,6 @@ export default function App() {
       // actually drawing at — which the viewport owns and changes on a resize.
       if (sky !== null) sky.material.pixelScale = viewport.pixelRatio;
       sky?.update(game.player.position, light);
-      water.update(game.player.position);
       layer?.update(game.player.position, light);
       if (game.underwater !== underwater()) setUnderwater(game.underwater);
       viewport.render();
@@ -1037,7 +1099,6 @@ export default function App() {
       stopSuspension();
       detachInput();
       sky?.dispose();
-      water.dispose();
       // **The place before the session.** A `dropPlace` touches `sculpt.places` and re-meshes
       // through `refreshPlaces`, and `session.dispose()` is about to take away the very field
       // that reads them — so the order is the one that lets both finish.
@@ -1242,6 +1303,15 @@ export default function App() {
                   {value().busy} busy, {value().pending} pending,{" "}
                   {value().queued} queued
                 </div>
+                {/* **The sea's own count, and only where there is a sea.** The total above adds
+                    the two surfaces together, which cannot tell a coast from a mountain range —
+                    and the sea is the one new enough to be worth watching while it streams. */}
+                <Show when={isGame()}>
+                  <div class={styles.row}>
+                    water: {value().waterFilled} chunks,{" "}
+                    {value().waterTriangles.toLocaleString()} triangles
+                  </div>
+                </Show>
                 <Show when={history().undo > 0 || history().redo > 0}>
                   <div class={styles.row}>
                     history: {history().undo} undoable, {history().redo}{" "}

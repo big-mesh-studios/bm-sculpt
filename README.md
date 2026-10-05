@@ -266,6 +266,65 @@ no test can — "too big to compile" is a failure mode particular to one GPU, an
 throws on it from inside the render loop, which looks exactly like a sky that drew
 nothing.
 
+## The sea
+
+The sea is meshed per chunk, out of the landscape's own field, by the same Surface Nets that
+meshes the ground. It was a sphere, and the sphere decided where water was: it is everywhere
+below the sea radius, so the only thing that kept it out of a hole in the ground was the rock
+around the hole being in front of it, and a shaft dug down through a hill crossed the radius
+inside the hill and filled with water.
+
+|                   | Where                   |                                                                                              |
+| ----------------- | ----------------------- | -------------------------------------------------------------------------------------------- |
+| `water-mesher.ts` | `apps/bm-sculpt/mesh`   | The sea's field, and the gate that stops it where the ground rises through it.               |
+| `water-look.ts`   | `apps/bm-sculpt/render` | The colour, the Fresnel and the alpha, as one function both the near sea and the globe call. |
+| `water.ts`        | `apps/bm-sculpt/world`  | The material, and which way up this world's sea faces.                                       |
+| `globe.ts`        | `apps/bm-sculpt/render` | Its own ocean, past the streaming window, from the baked height map.                         |
+
+Four things about it are worth knowing before changing any of it, and all four are in
+[ADR 0043](docs/adr/0043-water-is-a-field-and-the-landscape-gates-it.md).
+
+- **The gate takes the ground from the landscape, not from the model.** Water is a static
+  sheet at sea level cut to the world as it was generated, so a shaft dug through a hill is
+  dry and a pit dug in the seabed does not flood. It is also cheaper than the ground pass it
+  clips — the base field is a closed form and never walks the operation BVH — and it does not
+  move when a sculpt does.
+- **The sea overlaps the land by two voxels**, which is what closes the gap where the water
+  would otherwise stop short of the shore. The overlap is _buried_: a vertex is still placed
+  on the sea's own surface, which on the land side is inside the hill, so the extra water is
+  never drawn. `water-mesher.test.ts` holds that a water vertex is never above the ground,
+  which is the whole reason the margin is safe at any size.
+- **The CSG difference does not work**, and the reason is structural rather than a matter of
+  tuning: a difference's boundary is both operands' boundaries, so `max(sea, −ground)` draws
+  the seabed as well as the sea, coincident with the ground's own triangles.
+- **Two groups, in that order.** rmsl has no render-order key, so the store puts ground meshes
+  in one `Group` and sea meshes in another and the ground group first — which replaced a
+  promise the application used to keep by hand, in a comment, by re-adding the sea's mesh after
+  the globe's bake resolved.
+
+## How much water there is
+
+**About half the planet, and that is a decision rather than an accident.** A sea at the
+landscape's own zero cuts the world in half only if the landscape's shape has no mean — and it
+used to have one. The range term was `ridge · mask` with `mask` in `[0, 1]`: non-negative
+everywhere, so the whole surface sat above the sea and only the deepest troughs dipped under
+it. **One direction in four thousand was underwater**, which is a world that is technically not
+entirely dry and in which you cannot find the water.
+
+`landscapeShape` in `packages/csg/src/terrain.ts` is the composition both worlds are built
+from, and two things changed in it. The mask is **re-centred to `[-1, 1]`**, so a range rises
+where the mask says one stands and the ground falls away where it does not — which is what
+leaves flats between the ranges as well as lows under them. And `RIDGE_STRENGTH` went from two
+to six, so a range stands three times as far above the plain as it did. Measured: 50.3% to
+50.7% of the surface underwater, across three seeds.
+
+The relief tripled with it, from `radius ± 288` to `radius ± 672`, and two altitudes in this
+application were numbers that only meant something against the old one. `GLOBE_START_ALTITUDE`
+was 420 and the cloud layer's floor 700 — below the highest summit and two thousand units above
+it respectively. Both are now derived from `reachOf(params)`. **A hardcoded altitude is a
+number that means something only until the landscape changes**, and there were three of them
+waiting for exactly this.
+
 ## Places
 
 A **place** is a piece of code someone else wrote that builds a world, and the question of

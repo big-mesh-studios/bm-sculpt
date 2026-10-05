@@ -132,16 +132,31 @@ const holdsSurface = (cell: CellCoord, coarse = 2): boolean => {
  * radius is and a hand-picked cell silently tests the wrong thing — which is what happened
  * the first time.
  */
-/** Every cell within `reach` cells of the surface band, on a ray out from the centre. */
-const shellCells = (direction: Point, reach = 6): CellCoord[] => {
+/**
+ * Every cell in the surface's own radial band, on a ray out from the centre.
+ *
+ * **The band comes from the field's `lowestRadius` and `highestRadius`, and the step is a quarter
+ * of a chunk.** It used to be six fixed steps of `BLOCK_WORLD / 4` from `lowestRadius`, which
+ * searched a 400-unit band — and the range term being signed and tripled took the planet's reach
+ * to 672, so a direction whose surface sat high fell off the end of the search and the helper
+ * threw instead of finding a cell. The same mistake as the globe's hardcoded crossfade altitude,
+ * and for the same reason: a band written down means something only until the landscape changes.
+ */
+const shellCells = (direction: Point): CellCoord[] => {
   const d = norm(direction);
   const out: CellCoord[] = [];
-  for (let step = 0; step < reach; step++) {
-    const scale = planet.lowestRadius + step * BLOCK_WORLD * 0.25;
+  const step = BLOCK_WORLD * 0.25;
+  // A margin at each end, because the search rounds a radius to the cell containing it and a
+  // surface at either extreme still lands inside a cell the scan has to visit.
+  for (
+    let radius = planet.lowestRadius - step;
+    radius <= planet.highestRadius + step;
+    radius += step
+  ) {
     out.push({
-      x: Math.round((d.x * scale) / BLOCK_WORLD),
-      y: Math.round((d.y * scale) / BLOCK_WORLD),
-      z: Math.round((d.z * scale) / BLOCK_WORLD),
+      x: Math.round((d.x * radius) / BLOCK_WORLD),
+      y: Math.round((d.y * radius) / BLOCK_WORLD),
+      z: Math.round((d.z * radius) / BLOCK_WORLD),
     });
   }
   return out;

@@ -27,9 +27,8 @@
 import type { CellCoord, Lod, OverlapMask } from "../world";
 import { sameCell } from "../world";
 
-import type { ChunkMesh } from "@big-mesh-studios/meshing";
-import type { FromWorker, ToWorker } from "./protocol";
-import { isFromWorker } from "./protocol";
+import type { FromWorker, MeshedChunk, ToWorker } from "./protocol";
+import { isFromWorker, meshedOf } from "./protocol";
 import type { Wanted } from "./worker";
 
 /**
@@ -59,9 +58,15 @@ export type WorkerFactory = () => PoolWorker;
 
 /** What the pool does with an answer. */
 export interface PoolHandlers {
-  /** A mesh arrived and is current. The buffers are the worker's; copy if kept. */
-  onMesh(mesh: ChunkMesh, wanted: Wanted): void;
-  /** A chunk was meshed and had no surface. */
+  /**
+   * A chunk arrived and is current. The buffers are the worker's; copy if kept.
+   *
+   * **The pair, rather than a mesh, because a chunk can hold one surface and not the
+   * other** — open ocean has a sea and no ground, a mountain has the reverse — and the
+   * store owns both geometries for one slot, so it has to hear about both or neither.
+   */
+  onMesh(meshed: MeshedChunk, wanted: Wanted): void;
+  /** A chunk was meshed and held neither surface. */
   onEmpty(wanted: Wanted): void;
   /** A chunk could not be meshed. */
   onFailed(wanted: Wanted, reason: string): void;
@@ -315,8 +320,12 @@ export class WorldWorkerPool {
       this.handlers.onFailed(data, data.reason);
     } else if (data.empty) {
       this.handlers.onEmpty(data);
-    } else if (data.mesh !== undefined) {
-      this.handlers.onMesh(data.mesh, data);
+    } else {
+      // **`empty` has already been ruled out, so at least one mesh is here.** The gate is
+      // above rather than folded into this branch because "a reply that carries neither a
+      // mesh nor the empty flag" is the one shape that must never reach a store as
+      // geometry, and one place deciding that is worth more than the branch saved.
+      this.handlers.onMesh(meshedOf(data), data);
     }
 
     this.pump();

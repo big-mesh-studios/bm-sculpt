@@ -27,8 +27,9 @@ import type { PaintSource } from "@big-mesh-studios/csg";
 import type { BaseFieldSpec, BuiltBaseField } from "@big-mesh-studios/csg";
 import { cellCentre, chunkCellOf, sampleIndexIn, tileIndex } from "../world";
 
-import type { ChunkMesher } from "./chunk-mesher";
+import type { ChunkMeshers } from "./chunk-mesher";
 import { SurfaceNetsChunkMesher } from "./chunk-mesher";
+import { WaterChunkMesher } from "./water-mesher";
 import type { ModelMessage, PaintTileMessage } from "./protocol";
 
 /**
@@ -85,14 +86,21 @@ export class TilePaint implements PaintSource {
 }
 
 /**
- * Builds a mesher for a model message.
+ * Builds the meshers for a model message.
  *
- * Returns a *new* mesher rather than reusing one, because the field it wraps is built
+ * Returns *new* meshers rather than reusing one, because the fields they wrap are built
  * from the message and a message may carry a different model. A cached field would answer
  * from an operations list the main thread has already replaced, and nothing about the
  * resulting mesh would look wrong.
+ *
+ * **The sea's mesher is built from the base field alone, with no `Field` around it**, and
+ * that is deliberate rather than an omission. Water is a static sheet at sea level cut to
+ * the shape of the landscape as generated, so it neither depends on the operations nor
+ * moves when they change — which is why a shaft dug through a hill stays dry, and why
+ * the water pass costs a closed-form noise rather than a walk of the operation BVH. See
+ * `mesh/water-mesher.ts`.
  */
-export const mesherFor = (model: ModelMessage): ChunkMesher => {
+export const meshersFor = (model: ModelMessage): ChunkMeshers => {
   const operations = deserialiseOperations(model.operations);
   const base = baseFieldOf(model.base);
   const field = new Field(new OperationBVH(operations), {
@@ -112,7 +120,13 @@ export const mesherFor = (model: ModelMessage): ChunkMesher => {
     fallbackNormal: base?.fallbackNormal,
     paint: new TilePaint(paintTilesOf(model.paint)),
   });
-  return new SurfaceNetsChunkMesher(field);
+  return {
+    ground: new SurfaceNetsChunkMesher(field),
+    // A world of operations over no landscape has no sea, because a sea is a property of a
+    // landscape. `undefined` is that statement, and the worker's gate reads it as "no
+    // second surface" rather than as a mesher with nothing to mesh.
+    ...(base !== undefined ? { sea: new WaterChunkMesher(base) } : {}),
+  };
 };
 
 /**

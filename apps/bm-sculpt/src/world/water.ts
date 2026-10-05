@@ -1,76 +1,75 @@
 /**
- * Water: one sea, drawn translucent.
+ * Water: the sea's surface, meshed per chunk and drawn translucent.
  *
- * ## A plane or a sphere, named by the caller
+ * ## What this file is, now that it is not a sphere
  *
- * **The shape is a property of the world, not of this file**, so `createWater` takes a
- * discriminated union mirroring `BaseFieldSpec`: a flat world gets a plane at an altitude, a
- * spherical one gets a sphere of the sea's radius. There is no mode flag and no "if the radius is
- * positive" — a world that is a sphere has a sea that is a sphere, and the two cannot be confused.
+ * **A material and nothing else.** The sea was a 256-segment `SphereGeometry` at the
+ * planet's radius, and the shape of that sphere — not the shape of the ground — decided
+ * where water was: it is everywhere below the radius, and the only reason a hole in the
+ * ground did not show it was that the rock around the hole happened to be in front of it.
+ * Dig a shaft down through a hill, cross the radius inside the rock, and the shaft filled
+ * with water to the bottom. That sphere is gone. `mesh/water-mesher.ts` now meshes the
+ * sea per chunk from the landscape's own field, and this file is what draws the result.
  *
- * ## Why a sphere is coarse and still smooth
+ * ## Why the normal is still computed rather than read
  *
- * **The shading normal is computed in the fragment shader, from the sphere's centre, rather than
- * read from the vertex.** A sea sphere tessellated finely enough to avoid faceting outright would
- * need thousands of segments at this planet's radius — hundreds of thousands of triangles for a
- * surface with no texture, no waves and no geometry. Computed analytically, the *shading* is smooth
- * at any tessellation, so only the silhouette is faceted, and the silhouette is only ever seen
- * against the sky from far enough away that a facet subtends a fraction of a degree.
+ * **From the sphere's centre, per fragment, and not from the vertex.** The sea's surface
+ * is a sphere of `seaLevel` by construction, so its true normal at a point is the
+ * direction from the planet's centre — and computing it that way makes the *shading* exact
+ * at any tessellation, which is what lets the mesh be as coarse as its chunk's samples are.
+ * The chunk mesh carries normals because the vertex layout is shared with the ground's and
+ * `ChunkMeshBuilder` will not take a vertex without one; nothing reads them.
  *
- * This is the same argument the sky dome makes for carrying only a direction, and the same reason
- * the clouds march rather than mesh.
+ * The same argument the sphere made for carrying only a direction, and it survives the
+ * sphere's deletion because what it argued was never about the sphere.
  *
- * ## What the plane still is
+ * ## One material for every water mesh
  *
- * **The flat world's sea keeps the old plane, snapping and all.** It is two triangles, it costs
- * nothing, and the snap is what stops it shimmering as the eye moves a fraction of a unit. A sphere
- * needs none of that: it is already centred on the planet and it does not shimmer, because there
- * is nothing about it that moves.
+ * **Not one per chunk.** The day's light, the fog and a place's lights are written into a
+ * material once a frame; a second instance would be a second thing to remember to write to,
+ * and there is nothing per-chunk here that would justify one. The store's sea group holds
+ * every water mesh and draws them in one pass through this.
  */
 
-import type { Node } from "@random-mesh/rmsl";
-import { float, normalize, vec3, vec4 } from "@random-mesh/rmsl";
+import type { Node, UniformNode } from "@random-mesh/rmsl";
+import { normalize, vec3, vec4 } from "@random-mesh/rmsl";
 import type { Builder } from "@random-mesh/rmsl/scene";
-import {
-  Mesh,
-  NodeMaterial,
-  Scene,
-  Side,
-  SphereGeometry,
-} from "@random-mesh/rmsl/scene";
+import { NodeMaterial, Side } from "@random-mesh/rmsl/scene";
 
-import type { Vec3 } from "@big-mesh-studios/core";
-import { DEFAULT_PLANET, DEFAULT_TERRAIN } from "@big-mesh-studios/csg";
 import { Fog } from "../render/fog";
 import { PointLights, type PointLightBindings } from "../render/point-lights";
 import { SkyLight } from "../render/sky-light";
-
-/** The world y water settles at on a flat one: the terrain's own zero, so half the land is dry. */
-export const SEA_LEVEL = DEFAULT_TERRAIN.origin;
+import { waterFresnel, waterLook } from "../render/water-look";
 
 /**
- * The radius water settles at on a spherical one: **the planet's own radius.**
+ * Which way up a world's water surface faces.
  *
- * **And the equality is the point, not a coincidence.** `origin` on a height field is "the world y
- * a height of zero sits at", so a sea at `origin` covers exactly where the base noise is negative.
- * On a sphere there is no height of zero — `radiusAt` is `radius + scale · shape`, and `shape` is
- * zero at the radius, so the sea goes at `radius`. Adding `origin` to it, which is the obvious
- * translation, puts the sea *below* the lowest land on a default planet and yields a world that is
- * entirely dry: measured, the surface spans 3979 to 4181 and `4000 − 70 = 3930` is beneath all of
- * it.
+ * **A field rather than a branch on `positionWorld`.** A planet's sea is a sphere about the
+ * origin and its normal is the radial direction; a height field's is `+Y` everywhere, and
+ * radial-from-origin would point sideways at one end of the world and backwards at the
+ * other. One of the two worlds cannot be shaded by the other's rule, and which one this is
+ * is a property of the landscape rather than of anything drawing it.
  */
-export const DEFAULT_SEA_RADIUS = DEFAULT_PLANET.radius;
+export interface WaterShape {
+  /** The surface's outward normal at a world point, per fragment. */
+  readonly normalAt: (b: Builder) => Node<"vec3">;
+}
 
 /**
- * Segments around and up a sea sphere.
+ * A sea on a planet: its normal points away from the centre, which is the origin.
  *
- * **Chosen by what the silhouette has to look like, not by the shading.** The shading normal is
- * computed per pixel, so the tessellation only affects the horizon line, and the horizon is seen
- * from thousands of units away. At this count a facet is about three thousand units on the
- * 136,000-unit sphere, which is a fraction of a degree at the distance the limb is seen from —
- * around the size of a pixel at the field of view this project uses.
+ * **The centre rather than a uniform, because the planet's centre is the origin** — it is
+ * also the chunk lattice's, and ADR 0036 is why. A uniform for a constant would be a value
+ * that could be set wrong by nothing.
  */
-const SPHERE_SEGMENTS = 256;
+export const sphericalWater: WaterShape = {
+  normalAt: (b) => normalize(vec3(b.positionWorld)),
+};
+
+/** A sea on a height field: its normal is world up, at every point. */
+export const flatWater: WaterShape = {
+  normalAt: () => vec3(0, 1, 0),
+};
 
 /**
  * A translucent water surface: a Fresnel mix from deep water toward the sky at
@@ -87,7 +86,7 @@ const SPHERE_SEGMENTS = 256;
  * are in ADR 0023 — the short version being that a cloud is marched through rather than lit
  * at a surface, and the sky has no surface at all.
  */
-class WaterMaterial extends NodeMaterial {
+export class WaterMaterial extends NodeMaterial {
   /** The day this reflects, and what it fades into at distance. */
   readonly sky = new SkyLight();
 
@@ -98,8 +97,26 @@ class WaterMaterial extends NodeMaterial {
   readonly lights = new PointLights();
 
   private lightBindings?: PointLightBindings;
+  private opacityUniform?: UniformNode<"float">;
 
-  constructor() {
+  /**
+   * How much of the sea to show, 0 to 1.
+   *
+   * **A field multiplied into the alpha rather than `material.opacity`, because rmsl's alpha
+   * hook is a node.** Same arrangement and same reason as `GlobeMaterial.opacity`: changing
+   * this cannot trigger a recompile, and the blend is part of the material's own alpha rather
+   * than a second drawing pass.
+   *
+   * One at all times today. It exists because the sea has to be able to come and go — the
+   * ocean is what the globe's own ocean fades in over, and this is the half of that a chunk
+   * could fade if the two ever needed to cross rather than hand over.
+   */
+  override opacity = 1;
+
+  /**
+   * @param shape which way this world's sea faces. See `WaterShape`.
+   */
+  constructor(private readonly shape: WaterShape = sphericalWater) {
     super();
     this.transparent = true;
     // Both sides, because the player swims under it: from below, the surface
@@ -110,92 +127,48 @@ class WaterMaterial extends NodeMaterial {
     this.depthWrite = false;
   }
 
-  protected override setup(b: Builder, _scene: Scene): void {
+  protected override setup(b: Builder): void {
     this.sky.declare(b);
     this.fog.declare(b);
     this.lightBindings = this.lights.declare(b);
+    this.opacityUniform = b.materialUniform(
+      "uWaterOpacity",
+      "float",
+      () => this.opacity,
+    );
   }
 
   protected override buildFragmentBody(b: Builder): Node<"vec4"> {
-    // **Analytically for a sphere, from the geometry for a plane.** See the file header: this is
-    // the whole reason the sea sphere can be coarse.
-    //
-    // The centre is the origin rather than a uniform, because the planet's centre is the origin —
-    // it is also the chunk lattice's, and ADR 0036 is why. A uniform for a constant would be a
-    // value that could be set wrong by nothing.
-    const normal = normalize(vec3(b.positionWorld));
+    const normal = this.shape.normalAt(b);
     const view = b.viewDirection.normalize();
-    // Grazing angles are water; the view straight down is depth.
-    const facing = normal.dot(view).abs();
-    const fresnel = float(0.05).add(
-      float(0.95).mul(float(1).sub(facing).pow(float(3))),
+    const { colour, alpha } = waterLook(
+      this.sky.skyColour,
+      waterFresnel(normal, view),
     );
-    const deep = vec3(0.05, 0.22, 0.4);
-    const rgb = deep
-      .mix(this.sky.skyColour, fresnel)
-      // **The water's own colour, lifted by the light falling on it.** Before the fog and after
-      // the Fresnel mix, so a lantern at the waterline brightens the water rather than the
-      // reflection of the sky — and the normal passed is the surface's own, so a wave facing away
-      // from the lantern does not pick it up.
+
+    const rgb = colour
+      // **The water's own colour, lifted by the light falling on it.** Before the fog and
+      // after the Fresnel mix, so a lantern at the waterline brightens the water rather
+      // than the reflection of the sky — and the normal passed is the surface's own, so a
+      // wave facing away from the lantern does not pick it up.
       .add(this.lightBindings!.contribution(b.positionWorld, normal));
 
-    // Fogged, and the fog colour is the same sky it reflects — so the sea's far edge and the sky
-    // behind it are the same colour and the sea has no edge.
+    // Fogged, and the fog colour is the same sky it reflects — so the sea's far edge and the
+    // sky behind it are the same colour and the sea has no edge.
     const faded = this.fog.apply(b, rgb);
-    const alpha = fresnel.add(float(0.55)).clamp(float(0), float(1));
-    return vec4(faded, alpha);
+    return vec4(faded, alpha.mul(this.opacityUniform!));
   }
 }
 
-export interface Water {
-  /**
-   * Keeps a flat sea centred on the eye, so its edge is always out of sight.
-   *
-   * **A no-op for a sphere**, and that is not laziness: a sphere is already centred on the planet
-   * and it does not shimmer, because there is nothing about it that moves with the eye. Snapping
-   * one would be the one thing that could make it swim.
-   */
-  update(camera: Vec3): void;
-  /** The material, so a caller can push the day's lighting at it. */
-  readonly material: WaterMaterial;
-  /**
-   * The mesh, so its draw order can be fixed against the globe's.
-   *
-   * rmsl has no render-order key — draw order is scene traversal order — and the globe is added
-   * after the sea and writes no depth, so without moving the sea behind the globe the globe would
-   * paint over the ocean. There is no way to reorder without the object.
-   */
-  readonly mesh: Mesh;
-  dispose(): void;
-}
-
 /**
- * Builds the sea: the inside of a sphere at `radius` from the planet's centre.
+ * The sea's material for a world.
  *
- * **One shape, because there is one world.** This used to take a `SeaSpec` and build either a plane
- * at a world altitude or a sphere at a radius, chosen by a `?flat` flag in the application. The flat
- * world is gone, so the plane is gone with it — along with its snapping, which existed because a
- * small plane has to follow the camera and a large one is too expensive, and which a centred sphere
- * has no use for. The `curved` flag on the material went with it for the same reason: every sea this
- * project can now build is curved, so the material shades from the sphere's centre unconditionally.
+ * **A factory rather than a shared singleton**, because the shape is the world's and two
+ * worlds with two shapes cannot share one material. Nothing else about the material varies,
+ * so a caller makes one and hands it to everything that draws water: the chunk store for
+ * the near sea, and — when there is a globe — nothing else, because the globe draws its own
+ * ocean through `render/water-look.ts`.
  */
-export const createWater = (scene: Scene, radius: number): Water => {
-  const geometry = new SphereGeometry(
-    radius,
-    SPHERE_SEGMENTS,
-    Math.floor(SPHERE_SEGMENTS / 2),
-  );
-  const material = new WaterMaterial();
-  const mesh = new Mesh(geometry, material);
-  scene.add(mesh);
-  return {
-    material,
-    mesh,
-    /** Nothing to do: the sphere is already centred on the planet. */
-    update() {},
-    dispose() {
-      scene.remove(mesh);
-      geometry.dispose();
-    },
-  };
-};
+export const createWaterMaterial = (
+  shape: WaterShape = sphericalWater,
+): WaterMaterial => new WaterMaterial(shape);

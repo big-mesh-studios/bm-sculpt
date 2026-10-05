@@ -410,6 +410,184 @@ describe("the seam between chunks", () => {
 });
 
 /**
+ * A cell gate, and the case it exists for.
+ *
+ * The field below is the sea alone: a half-space above a waterline, and nothing else. It
+ * is everywhere a water surface would be, including inside the rock, because that is what
+ * a radius is. The ground is given separately as a `marker`, and the gate refuses every
+ * cell with a corner inside it — which is what turns the sea into water.
+ *
+ * The ground is a slab with a wall standing out of it rather than noise, so the test can
+ * say which cells are being refused and check that the survivors are where it says.
+ */
+describe("a cell gate", () => {
+  /**
+   * Open air above `y = 60`, solid below it, with a wall of rock standing up out of the
+   * sea between `x = 60` and `x = 100` — so the field has a shoreline for the gate to
+   * cut along and cells on both sides of one.
+   *
+   * `min`, because the floor and the wall are two solids and a point inside either one is
+   * inside the ground: the union of two fields is their minimum.
+   */
+  const groundAt = (x: number, y: number, z: number): number => {
+    const wall = sdBox(
+      { x: 20, y: 40, z: 40 },
+      { x: x - 80, y: y - 70, z: z - 80 },
+    );
+    return Math.min(y - 60, wall);
+  };
+
+  /**
+   * The waterline, at `y = 85` — deliberately off the sample grid, which sits on multiples
+   * of ten. A surface landing exactly on a sample is a coincidence a gate has to survive
+   * but that a test should not depend on, because the sea's own surface lands on nothing.
+   */
+  const WATERLINE = 85;
+  const sea = (_x: number, y: number, _z: number): number => WATERLINE - y;
+
+  /** The question the gate can answer: is any corner of this cell inside the ground? */
+  const outOfTheGround = (
+    _corners: Float32Array,
+    marks: Float32Array,
+  ): boolean => {
+    for (let corner = 0; corner < 8; corner++)
+      if (marks[corner]! < 0) return false;
+    return true;
+  };
+
+  const gated = (
+    origin: readonly [number, number, number],
+    samples: number,
+    scratch = scratchFor(samples),
+    out = new ChunkMeshBuilder(),
+  ): ChunkMeshBuilder => {
+    surfaceNets({
+      origin,
+      samples,
+      sampleSize: STEP,
+      sampler: { distance: sea },
+      marker: { distance: groundAt },
+      cellGate: outOfTheGround,
+      out,
+      scratch,
+    });
+    return out;
+  };
+
+  it("emits nothing at all when every crossing cell is refused", () => {
+    // The pathological case, and the one that has to be right: a gate that refuses
+    // everything must produce an empty mesh rather than a mesh of degenerate triangles,
+    // because `quadAcross` refuses a quad naming a vertex that was never emitted.
+    const out = new ChunkMeshBuilder();
+    surfaceNets({
+      origin: [0, 0, 0],
+      samples: N,
+      sampleSize: STEP,
+      sampler: { distance: (x, y, z) => sphere(x, y, z, 45) },
+      cellGate: () => false,
+      out,
+      scratch: scratchFor(N),
+    });
+    expect(out.vertexCount).toBe(0);
+    expect(out.triangleCount).toBe(0);
+  });
+
+  it("drops the sea where it runs into the ground", () => {
+    const ungated = mesh([0, 0, 0], N * 2, sea);
+    const out = gated([0, 0, 0], N * 2);
+
+    expect(ungated.triangleCount).toBeGreaterThan(0);
+    expect(out.triangleCount).toBeGreaterThan(0);
+    // The wall stands up through the waterline, so the open sea loses the rectangle of
+    // waterline the wall occupies — 40 by 80 units out of 320 by 320.
+    expect(out.triangleCount).toBeLessThan(ungated.triangleCount);
+  });
+
+  it("puts every surviving vertex on the waterline and outside the ground", () => {
+    const out = gated([0, 0, 0], N * 2);
+    const indices = out.indices.exact();
+    expect(indices.length).toBeGreaterThan(0);
+    for (let at = 0; at < indices.length; at += 3) {
+      for (let corner = 0; corner < 3; corner++) {
+        const v = indices[at + corner]!;
+        const x = out.positions.at(v * 3)!;
+        const y = out.positions.at(v * 3 + 1)!;
+        const z = out.positions.at(v * 3 + 2)!;
+        // The water surface is flat at 85, so a surviving vertex can be nowhere else —
+        // and the ungated mesh also puts vertices down on the floor at 60 and all over
+        // the wall, which is what the second half rules out.
+        expect(y).toBeCloseTo(WATERLINE, 1);
+        expect(groundAt(x, y, z)).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+
+  it("leaves the water alone where the ground is nowhere near it", () => {
+    // The gate's failure mode that would be hardest to see: over-refusing and losing the
+    // open sea along with the shore. A chunk clear of the wall must come back whole,
+    // vertex for vertex, which is the whole of what "the gate removes the wall and
+    // nothing else" comes to.
+    const out = gated([200, 0, 0], N);
+    const ungated = mesh([200, 0, 0], N, sea);
+    expect(canonicalTriangles(out)).toEqual(canonicalTriangles(ungated));
+  });
+
+  it("agrees with its neighbour about every cell they share", () => {
+    // The whole point. Two chunks meshing the same field under the same gate must produce
+    // the mesh one chunk covering both produces, or the gate has opened a seam — which is
+    // what the ungated seam test above rules out and what this rules out again once a gate
+    // and a marker are in play.
+    const span = N * STEP;
+    const whole = gated([0, 0, 0], N * 2);
+    const parts: ChunkMeshBuilder[] = [];
+    const scratch = scratchFor(N);
+    for (const origin of tileOrigins(span)) {
+      parts.push(gated(origin, N, scratch));
+    }
+    const expected = canonicalTriangles(whole).sort();
+    const actual = parts.flatMap(canonicalTriangles).sort();
+    expect(actual.length).toBe(expected.length);
+    expect(actual).toEqual(expected);
+  });
+
+  it("reads a zeroed marker as open ground when none was given", () => {
+    // Which is what lets a gate written for the sea run on a mesh that was handed no
+    // landscape at all: nothing is inside anything, so nothing is refused.
+    const withNothing = new ChunkMeshBuilder();
+    surfaceNets({
+      origin: [0, 0, 0],
+      samples: N,
+      sampleSize: STEP,
+      sampler: { distance: sea },
+      cellGate: outOfTheGround,
+      out: withNothing,
+      scratch: scratchFor(N),
+    });
+    const withoutGate = mesh([0, 0, 0], N, sea);
+    expect(canonicalTriangles(withNothing)).toEqual(
+      canonicalTriangles(withoutGate),
+    );
+  });
+
+  it("changes no existing caller, which passes no gate and no marker", () => {
+    // A second sampling pass that only runs when a marker is given is the reason nothing
+    // else had to change, and this is what says so.
+    const withGate = new ChunkMeshBuilder();
+    surfaceNets({
+      origin: [0, 0, 0],
+      samples: N,
+      sampleSize: STEP,
+      sampler: { distance: (x, y, z) => sphere(x, y, z, 45) },
+      cellGate: () => true,
+      out: withGate,
+      scratch: scratchFor(N),
+    });
+    const without = mesh([0, 0, 0], N, (x, y, z) => sphere(x, y, z, 45));
+    expect(canonicalTriangles(withGate)).toEqual(canonicalTriangles(without));
+  });
+});
+
+/**
  * Manifoldness, scoped to what the mesher actually promises.
  *
  * Naive surface nets is *not* manifold in general: a quad is emitted per sign-changing

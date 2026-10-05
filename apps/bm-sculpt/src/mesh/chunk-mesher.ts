@@ -173,6 +173,20 @@ export const chunkRegion = (
   };
 };
 
+/**
+ * The meshers a world is meshed by: its ground, and its water where it has any.
+ *
+ * **A pair rather than a list because there are exactly two surfaces**, and because the
+ * sea is not the same kind of thing as the ground — it comes from the landscape alone, so
+ * it does not move when an edit does and a world of operations over no landscape has no
+ * second mesher at all. `undefined` for the sea means exactly that, and the worker's gate
+ * is the sum of the two.
+ */
+export interface ChunkMeshers {
+  readonly ground: ChunkMesher;
+  readonly sea?: ChunkMesher;
+}
+
 /** The part of the field a mesher needs. The smallest thing that can hold it. */
 export interface MeshField {
   distance(x: number, y: number, z: number): number;

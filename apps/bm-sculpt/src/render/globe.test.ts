@@ -114,7 +114,10 @@ describe("the globe's shader", () => {
     // read, and a read here is the bug.
     const { vertex } = compiled();
     const out = /out vec3 (\w+);/.exec(vertex);
-    expect(out, "the vertex stage writes a world position varying").not.toBeNull();
+    expect(
+      out,
+      "the vertex stage writes a world position varying",
+    ).not.toBeNull();
     expect(occurrences(vertex, out![1]!)).toBe(2);
   });
 
@@ -149,6 +152,53 @@ describe("the globe's shader", () => {
     ]) {
       expect(fragment, uniform).toContain(uniform);
     }
+  });
+});
+
+describe("the globe's ocean", () => {
+  // The globe used to be a bare displaced sphere with the sea drawn over it as a 256-segment
+  // sphere, so from orbit there was no ocean at all except that sphere. There is now a sea
+  // sphere's worth of water either side of the streamed window — and ADR 0043 is the record of why
+  // it moved here. These are the assertions that the ocean is *in* the globe's shader and not
+  // merely implied by it.
+  it("shades below the sea level as water, from the height map's own zero", () => {
+    // **The map's zero is the field's lowest radius, not the sea**, which the vertex stage has to
+    // subtract a half relief to get. A fragment stage that compared the raw texel against
+    // `uSeaRadius` would put the waterline in the wrong place by half the relief — every ocean on
+    // the planet hundreds of units shallow, or drowned entirely.
+    const { fragment } = compiled();
+    // The radius is rebuilt as `seaRadius - relief/2 + height * relief`, and the depth is that
+    // difference over the relief. Both appear as emitted arithmetic.
+    expect(fragment).toContain("uSeaRadius");
+    expect(fragment).toContain("uRelief");
+    // And a mix toward the water colour, which is the only thing that puts blue on the planet.
+    expect(fragment).toContain("uSkyColour");
+  });
+
+  it("uses the same water look as the near sea", () => {
+    // **One copy of the numbers, in `render/water-look.ts`.** The two are visible together at
+    // exactly the altitude the swap happens, so a second set of constants is a visible seam at the
+    // one moment somebody is watching for one.
+    const { fragment } = compiled();
+    // The deep-water colour and the Fresnel's own literals, inlined as the near sea's are.
+    expect(fragment).toContain("vec3(0.05, 0.22, 0.4)");
+    expect(fragment).toMatch(/0\.05 \+ 0\.95 \* pow/);
+  });
+
+  it("reaches full water colour at the deepest point of the sea", () => {
+    // **Twice the normalised depth, because the sea sits in the middle of the relief.** The reach is
+    // half the relief and `uSeaRadius` is the middle, so `depth` runs to a half and not to one. A
+    // factor below two leaves the deepest ocean a few percent of seabed showing through, which from
+    // orbit reads as pale patches in the middle of the sea.
+    //
+    // **And rooted, so a coastline is a gradient rather than a line** — a linear mix puts deep blue
+    // within a texel of the shore, which from orbit is a drawn outline round every continent.
+    // The root spreads the shallow band over the first few hundred units of depth.
+    //
+    // Asserted on the emitted arithmetic: `clamp((depth) * 2.0, 0.0, 1.0)` then `pow(…, 0.5)` — the
+    // clamp before the root so it cannot exceed one however deep the map claims.
+    const { fragment } = compiled();
+    expect(fragment).toMatch(/clamp\(\([^;]*\* 2\.0, 0\.0, 1\.0\), 0\.5\)/);
   });
 });
 

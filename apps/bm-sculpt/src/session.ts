@@ -39,12 +39,12 @@ import {
   sameCell,
 } from "./world";
 import {
+  type MeshedChunk,
   type ModelMessage,
   type PoolWorker,
   type Wanted,
   WorldWorkerPool,
 } from "./mesh";
-import type { ChunkMesh } from "@big-mesh-studios/meshing";
 import { ChunkMeshStore, hooksFor } from "./render";
 import type { Bounds } from "./edit/document";
 
@@ -98,6 +98,16 @@ export interface SessionOptions {
   /** How many meshing workers to run. Defaults to one per hardware thread, capped. */
   readonly workers?: number;
   /**
+   * The material the sea is drawn with, or `undefined` for a world with no sea.
+   *
+   * **Absent rather than an empty material because a world with no sea has no sea
+   * chunks**, and meshing water for an editor that has none would be a whole second pass
+   * over every chunk's samples to produce geometry nothing draws. The store's two groups
+   * come from this too, so it is also the answer to "does this world draw translucent
+   * surfaces at all".
+   */
+  readonly seaMaterial?: Material;
+  /**
    * How to make a meshing worker.
    *
    * Injectable because this class is where the phases meet, and a seam between two
@@ -135,6 +145,17 @@ export interface SessionStats {
   readonly queued: number;
   readonly staleRefusals: number;
   readonly failures: number;
+  /**
+   * Triangles of sea surface on the GPU, kept apart from `triangles`.
+   *
+   * **Its own number because "the world is nearly all water" and "the world is nearly all
+   * ground" are the same total.** A readout that added them together could not tell a
+   * coast from a mountain range, and the sea is the one whose mesh is new enough to be
+   * worth watching while it streams.
+   */
+  readonly waterTriangles: number;
+  /** Slots holding a drawable sea surface. */
+  readonly waterFilled: number;
 }
 
 export class Session {
@@ -186,6 +207,10 @@ export class Session {
       // resized by the window's `onSlotCountChanged`, so the number here is only a
       // starting point.
       1,
+      // **Straight through, `undefined` and all.** The store's parameter is optional for the
+      // same reason this one is, so forwarding the value as it stands is the whole of it — and a
+      // conditional spread here would be a second spelling of "no sea" that could disagree.
+      options.seaMaterial,
     );
 
     const hooks = hooksFor(this.store);
@@ -217,7 +242,7 @@ export class Session {
       workers: options.workers ?? defaultWorkerCount(),
       create: options.createWorker ?? createMeshingWorker,
       handlers: {
-        onMesh: (mesh, wanted) => this.onMesh(mesh, wanted),
+        onMesh: (meshed, wanted) => this.onMesh(meshed, wanted),
         onEmpty: (wanted) => this.onEmpty(wanted),
         onFailed: (wanted, reason) => this.onFailed(wanted, reason),
       },
@@ -388,6 +413,8 @@ export class Session {
       queued: this.pool.outstanding,
       staleRefusals: this.store.staleRefusals,
       failures: this.failures,
+      waterTriangles: this.store.seaTriangles,
+      waterFilled: this.store.seaDrawnCount,
     };
   }
 
@@ -479,9 +506,18 @@ export class Session {
 
   // ---- the pool's answers
 
-  private onMesh(mesh: ChunkMesh, wanted: Wanted): void {
+  /**
+   * Applies a chunk's surfaces — a ground, a sea, both or neither.
+   *
+   * **One request, one slot, one filled mark, whatever came back.** The two surfaces are
+   * meshed together in one worker pass and arrive in one message, so there is no second
+   * answer to wait for and no state in which a slot is filled with ground and still owed
+   * water. That is what keeps the window's single `filled` flag honest, and it is why the
+   * sea rides the existing slot rather than needing a window of its own.
+   */
+  private onMesh(meshed: MeshedChunk, wanted: Wanted): void {
     this.settle(wanted, (request) => {
-      const outcome = this.store.apply(request.slot, mesh, request.revision);
+      const outcome = this.store.apply(request.slot, meshed, request.revision);
       if (!outcome.accepted) return;
       this.window.markFilled(request.slot);
     });
@@ -491,7 +527,7 @@ export class Session {
     // An air chunk is an answer, not a failure, and the slot must be marked filled so the
     // window stops asking and the picker stops being refused.
     this.settle(wanted, (request) => {
-      this.store.apply(request.slot, emptyMesh(), request.revision);
+      this.store.apply(request.slot, {}, request.revision);
       this.window.markFilled(request.slot);
     });
   }
@@ -537,15 +573,6 @@ export class Session {
     return `${cell.x},${cell.y},${cell.z}`;
   }
 }
-
-const emptyMesh = () => ({
-  positions: new Float32Array(0),
-  normalOct: new Int16Array(0),
-  colours: new Uint8Array(0),
-  indices: new Uint32Array(0),
-  vertexCount: 0,
-  triangleCount: 0,
-});
 
 /**
  * A meshing worker, as a module worker.

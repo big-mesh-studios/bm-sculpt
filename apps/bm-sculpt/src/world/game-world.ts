@@ -57,9 +57,28 @@ export interface GameWorldOptions {
   readonly frame?: Frame;
   /**
    * Where water begins: an altitude for a flat frame, a distance from the centre for a
-   * spherical one. Below it and outside solid, the player is swimming.
+   * spherical one.
+   *
+   * **Used only when no `waterAt` is supplied**, and it is the older, looser rule: below the
+   * level and outside whatever the *edited* model says is solid. See `waterAt` for why that
+   * is not good enough for a world whose water is a meshed surface.
    */
   readonly seaRadius?: number;
+  /**
+   * Where water actually is, as a function of position.
+   *
+   * **Supplied by a caller whose water is meshed, and preferred over `seaRadius` because the
+   * two rules disagree exactly where it matters.** `seaRadius` alone answers "below the level
+   * and not inside the model", so a shaft dug down through a hill is reported as flooded:
+   * the shaft is below sea level, the model says it is air, and the player swims down it in
+   * slow motion with nothing around them but rock. The meshed sea is gated on the
+   * *landscape* rather than the model — see `mesh/water-mesher.ts` — so the predicate has to
+   * be the landscape's too, or the physics and the picture disagree.
+   *
+   * `undefined` means "use `seaRadius`", which is what an operations-only world with no water
+   * wants: there is no sea there at all, and neither rule should claim otherwise.
+   */
+  readonly waterAt?: (p: Vec3) => boolean;
   /**
    * Half the extent, in world units. Large by default: the field is a
    * function of position and is defined everywhere, so the world does not run out.
@@ -100,12 +119,16 @@ export class GameWorld implements PlayerWorld {
   readonly halfExtent: number;
   private readonly field: () => GameField;
   private readonly seaRadius: number | undefined;
+  private readonly waterAt: ((p: Vec3) => boolean) | undefined;
 
   constructor(options: GameWorldOptions) {
     this.field = options.field;
     this.frame = options.frame ?? flatFrame;
     this.centre = this.frame.centre;
     this.seaRadius = options.seaRadius;
+    // `waterAt` is read once here rather than per query, so the predicate a caller supplied
+    // is the predicate every frame runs — the same reason the samplers are arrow properties.
+    this.waterAt = options.waterAt;
     this.halfExtent = options.halfExtent ?? 1e9;
     // **`undefined` stays `undefined`.** Assigning a reader that always answered "none" would make
     // every world's `getMediumAt` defined, and the physics would pay an optional call and a null
@@ -182,13 +205,18 @@ export class GameWorld implements PlayerWorld {
   };
 
   /**
-   * Whether the point is underwater.
+   * Whether the point is underwater — as the water is actually drawn.
    *
-   * v1 is a sea-level test: below the level and not inside solid. That means a dry
-   * shaft dug below sea level reports as flooded, which is the simplification the
-   * plane-water milestone records and a later water volume is what removes.
+   * **A supplied predicate is the whole answer when there is one**, and it has to be: a
+   * player who is swimming in a shaft the sea is not in is a bug in one of the two, and it
+   * is cheaper to give the physics the meshed rule than to try and reconcile them.
+   *
+   * Without one, this is the sea-level rule the plane water used: below the level and not
+   * inside the model. That is right for a world with no meshed sea and wrong for one with,
+   * which is why a caller with a sea supplies `waterAt` rather than leaving this to guess.
    */
   readonly getInWaterAt = (p: Vec3): boolean => {
+    if (this.waterAt !== undefined) return this.waterAt(p);
     if (this.seaRadius === undefined) return false;
     const below = this.frame.spherical
       ? this.frame.radiusAt(p) < this.seaRadius

@@ -101,6 +101,7 @@ import {
 } from "@random-mesh/rmsl/scene";
 
 import type { Vec3 } from "@big-mesh-studios/core";
+import { DEFAULT_PLANET, reachOf } from "@big-mesh-studios/csg";
 import { DEFAULT_PLANET_RADIUS } from "../render/atmosphere";
 import { equirectUV } from "../render/globe";
 import { SkyLight } from "../render/sky-light";
@@ -108,11 +109,22 @@ import { bakeCloudField, type CloudField } from "./cloud-field";
 import { shapeTexture, weatherTexture } from "./cloud-textures";
 import type { DayNightState } from "./day-night";
 
-/** The bottom of the cloud layer, as an altitude above the sea. */
-export const CLOUD_BOTTOM = 700;
+/**
+ * How far above the tallest terrain the cloud layer's floor sits.
+ *
+ * **Derived, not written down**, for the same reason the globe's crossfade is: a hardcoded
+ * altitude is a number that means something only until the mountains change. These were 700 and
+ * 1400 against a reach of 288, which put the floor two thousand units above the peaks — and
+ * tripling the ranges put the peaks *through* the cloud base, so every summit came out of a
+ * cloud deck. `reachOf` is the landscape's own reach and it moves when the landscape does.
+ */
+const CLOUD_CLEARANCE = 120;
 
-/** The top of the cloud layer, as an altitude above the sea. */
-export const CLOUD_TOP = 1400;
+/** The bottom of the cloud layer, as an altitude above the sea. */
+export const CLOUD_BOTTOM = reachOf(DEFAULT_PLANET) + CLOUD_CLEARANCE;
+
+/** The top of the cloud layer, as an altitude above the sea. Seven hundred above its floor. */
+export const CLOUD_TOP = CLOUD_BOTTOM + 700;
 
 /** The layer's thickness, which the volume's vertical axis is stretched across. */
 export const CLOUD_THICKNESS = CLOUD_TOP - CLOUD_BOTTOM;

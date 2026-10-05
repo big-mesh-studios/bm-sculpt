@@ -26,7 +26,11 @@
 
 import { GlobeMaterial, globeTextures } from "../render/globe";
 import type { GlobeMaps } from "../render/globe";
-import type { PlanetMaps } from "@big-mesh-studios/csg";
+import {
+  DEFAULT_PLANET,
+  reachOf,
+  type PlanetMaps,
+} from "@big-mesh-studios/csg";
 import { Mesh, SphereGeometry } from "@random-mesh/rmsl/scene";
 
 /**
@@ -43,20 +47,25 @@ export const GLOBE_MAP_WIDTH = 3072;
 export const GLOBE_MAP_HEIGHT = 1536;
 
 /**
- * How far up the horizon is before the streamed chunks have nothing left to say.
+ * How far above the tallest terrain the crossfade starts.
  *
- * **Four hundred and twenty, which is above the tallest terrain.** The globe is faded by altitude
- * above the *sea*, and the player can stand at up to the terrain's reach (288) above it, so the band
- * has to start above the relief or it would blend the globe over the ground underfoot on every
- * mountain top. Below this the chunks are the whole surface and the near-field fog hides the
- * window's edge; above it the globe fades in. The ground horizon on this planet is about 1,280 — the
- * chunks' own reach — so the chunks cover the ground exactly and the globe is genuinely the far
- * field from the first climb up.
+ * **The relief, plus a margin — and derived, not written down.** The globe is faded by altitude
+ * above the *sea* and a player can stand on the highest peak this planet has, so the band has to
+ * begin above the relief or it would blend the globe over the ground underfoot on every summit.
+ * That was `420` against a reach of `288`, and the margin was doing the work: raise the mountains
+ * and the hardcoded number is suddenly *below* the peaks, which is a bug nobody finds by reading
+ * it. `reachOf` is the landscape's own answer, and it moves when the landscape does.
+ *
+ * The margin is 140 units, about one and a half seconds of a climb, so a player who goes up
+ * deliberately sees the swap rather than arriving at it.
  */
-export const GLOBE_START_ALTITUDE = 420;
+const GLOBE_CLEARANCE = 140;
+
+/** How far up the horizon is before the streamed chunks have nothing left to say. */
+export const GLOBE_START_ALTITUDE = reachOf(DEFAULT_PLANET) + GLOBE_CLEARANCE;
 
 /** How far up the globe has fully taken over. The band is 480 units — eight seconds of flight. */
-export const GLOBE_FULL_ALTITUDE = 900;
+export const GLOBE_FULL_ALTITUDE = GLOBE_START_ALTITUDE + 480;
 
 /**
  * How much tessellation the globe's *silhouette* needs.

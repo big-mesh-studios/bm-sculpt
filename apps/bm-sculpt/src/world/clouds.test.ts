@@ -14,6 +14,7 @@ import {
   cloudSpan,
   driftAngleAt,
 } from "./clouds";
+import { DEFAULT_PLANET, planetField, reachOf } from "@big-mesh-studios/csg";
 import { DEFAULT_PLANET_RADIUS } from "../render/atmosphere";
 import {
   SHAPE_DETAIL_PERIODS,
@@ -773,9 +774,30 @@ describe("the shell's address", () => {
     // `(length(world) − seaRadius − CLOUD_BOTTOM) / CLOUD_THICKNESS`, read off the source.
     // Zero at the underside, one at the top — and the *same* expression the profile is
     // given, which is why it appears twice rather than being spelled two ways.
+    //
+    // **The two numbers are the constants**, rather than `700` written down. The layer's floor is
+    // now the planet's reach plus a clearance — it has to clear the highest mountain, or a summit
+    // stands inside the cloud deck — so the literal is whatever that arithmetic produced and a
+    // hardcoded `700` in the pattern would be a second place to be wrong. Reading it off the
+    // constants is also the assertion that the two agree.
     const { fragment } = compile(make());
-    const reads = fragment.match(/- uSeaRadius\) - 700\.0\) \/ 700\.0/g) ?? [];
-    expect(reads).toHaveLength(2);
+    // **A character class for the closing paren, not a backslash.** `\)` inside a template
+    // literal is one escape away from being a bare `)`, which is a pattern that compiles and
+    // matches nothing — so the test would have gone quiet rather than red.
+    const expression = new RegExp(
+      `- uSeaRadius[)] - ${CLOUD_BOTTOM.toFixed(1)}[)] / ${CLOUD_THICKNESS.toFixed(1)}`,
+      "g",
+    );
+    expect(fragment.match(expression)).toHaveLength(2);
+  });
+
+  it("keeps the layer's floor above the tallest terrain", () => {
+    // **The reason the floor is derived rather than written down.** A cloud deck whose base sits
+    // below the highest peak is not a cloud deck, it is weather the mountains stand inside of.
+    expect(CLOUD_BOTTOM).toBeGreaterThan(reachOf(DEFAULT_PLANET));
+    expect(
+      planetField(DEFAULT_PLANET).highestRadius - DEFAULT_PLANET.radius,
+    ).toBeLessThan(CLOUD_BOTTOM);
   });
 
   it("wraps the weather map around the planet once", () => {

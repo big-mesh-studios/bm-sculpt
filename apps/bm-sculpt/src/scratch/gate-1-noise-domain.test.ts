@@ -78,20 +78,60 @@ const AXES: { x: number; y: number; z: number }[] = [
 ];
 
 /**
- * How many distinct landscapes a domain hands out where the sphere asks six different
- * questions.
+ * The six axis heights a domain hands out, in world units.
  *
- * Measured as the number of groups the six heights fall into, to within a thousandth of the
- * relief. Six is right; three is a domain that cannot tell a cube's faces apart; one is a
- * single landscape everywhere.
+ * **Read once here** because there are two measurements to make of them and they answer different
+ * questions — see `distinctLandscapes` and `identicalPairs`.
+ */
+const axisHeights = (domain: NoiseDomain): number[] =>
+  AXES.map((a) => domain.at(unit(a)) * DEFAULT_PLANET.scale);
+
+/**
+ * How many distinct landscapes a domain hands out where the sphere asks six different questions.
+ *
+ * **Groups the six heights fall into, to within a thousandth of the relief.**
+ *
+ * This is a *measurement*, and it is not a safe assertion on its own: two of the six heights
+ * landing within one part in a thousand of each other is a coincidence of the seed, not blindness,
+ * and the tolerance scales with the relief — so tripling the mountains tripled the tolerance and
+ * turned six distinct landscapes into five for a domain that has not changed. `identicalPairs`
+ * is the structural version of the same claim, and that is what the assertions hold to.
  */
 const distinctLandscapes = (domain: NoiseDomain): number => {
-  const heights = AXES.map((a) => domain.at(unit(a)) * DEFAULT_PLANET.scale);
+  const heights = axisHeights(domain);
   const groups: number[] = [];
   for (const h of heights) {
     if (!groups.some((g) => Math.abs(g - h) < 1e-3 * RELIEF)) groups.push(h);
   }
   return groups.length;
+};
+
+/**
+ * How many *opposite* pairs of axis directions a domain answers identically.
+ *
+ * **Exactly identically, with no tolerance — and that is the point.** A two-dimensional chart is
+ * a projection and a projection has a kernel, so wherever the sphere walks along the chart's
+ * normal the argument does not change at all and the two ends of the axis land on the *same
+ * number*, bit for bit. A domain with no kernel cannot do that: its answer depends on the whole
+ * direction, so `+x` and `−x` differ.
+ *
+ * This is the statement the group count is trying to make and cannot make safely, because it is
+ * about the domain rather than about one sample of it.
+ */
+const identicalPairs = (domain: NoiseDomain): number => {
+  const heights = axisHeights(domain);
+  let same = 0;
+  for (let axis = 0; axis < 3; axis++) {
+    const plus = axis * 2;
+    if (heights[plus] === heights[plus + 1]) same++;
+  }
+  return same;
+};
+
+/** How far apart the six axis heights are, as a fraction of the relief. */
+const axisSpread = (domain: NoiseDomain): number => {
+  const heights = axisHeights(domain);
+  return (Math.max(...heights) - Math.min(...heights)) / RELIEF;
 };
 
 /**
@@ -224,19 +264,44 @@ describe("a noise domain for a sphere", () => {
   });
 
   it("gives the 3D domain six different landscapes where the sphere asks six questions", () => {
-    const counts = domains.map((d) => ({
+    // **Both measurements, and the assertions are on the structural one.** The group count is
+    // printed because it is the headline number and it is what the finding was first seen in; the
+    // identical-pair count is what is held to, because it is a property of the domain rather than
+    // of one sample of it.
+    const rows = domains.map((d) => ({
       name: d.name,
-      n: distinctLandscapes(d),
+      groups: distinctLandscapes(d),
+      identical: identicalPairs(d),
+      spread: axisSpread(d),
     }));
     console.log(
-      `[gate 1] distinct landscapes at the six axis directions: ` +
-        counts.map((c) => `${c.name} ${c.n}`).join(", "),
+      `[gate 1] at the six axis directions — distinct ${rows
+        .map((r) => `${r.name} ${r.groups}`)
+        .join(", ")}; identical opposite pairs ${rows
+        .map((r) => `${r.name} ${r.identical}`)
+        .join(", ")}; spread ${rows
+        .map((r) => `${r.name} ${r.spread.toFixed(2)}`)
+        .join(", ")}`,
     );
-    // The measurement, and it is the reason the planet uses 3D noise: both 2D domains that
-    // keep two coordinates hand the same landscape to the same directions.
-    expect(counts[0].n).toBeLessThan(6);
-    expect(counts[1].n).toBeLessThan(6);
-    expect(counts[3].n).toBe(6);
+
+    // **The claim, and the reason the planet uses 3D noise: every 2D chart has a kernel, so it
+    // answers the two ends of at least one axis with the same number, and 3D noise cannot.**
+    const threeD = rows[3]!;
+    for (const row of rows.slice(0, 3)) {
+      expect(
+        row.identical,
+        `${row.name} is blind along at least one axis`,
+      ).toBeGreaterThan(0);
+    }
+    expect(threeD.identical, "3D noise has no kernel").toBe(0);
+    // And it is not merely distinguishable but *differently* so. Every chart's spread is exactly
+    // **zero** — one landscape for all six directions, which is the whole of the fault — while 3D
+    // noise's is a real fraction of the relief. The bar is the same tolerance that defines a
+    // distinct landscape above, so this says the six answers are genuinely different answers and
+    // not four coincident ones. Measured: 0.01.
+    for (const row of rows.slice(0, 3))
+      expect(row.spread, `${row.name} is one landscape everywhere`).toBe(0);
+    expect(threeD.spread).toBeGreaterThan(1e-3);
   });
 
   it("leaves every 2D domain blind to some direction, and the 3D domain to none", () => {

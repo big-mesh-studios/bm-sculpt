@@ -45,6 +45,18 @@ export interface BuiltBaseField extends BaseField, SurfaceExtent {
   readonly kind: BaseFieldKind;
   readonly lipschitz: number;
   /**
+   * Where this world's water settles: an altitude for a height field, a distance from the
+   * centre for a planet.
+   *
+   * **One number on the field rather than a constant repeated by each caller**, because the two
+   * worlds state it in ways that cannot be translated into each other and every caller that
+   * guessed would be a place the water is not. It is a landscape's own number — `origin` on a
+   * height field, which is the altitude its height of zero sits at, and `radius` on a planet,
+   * which is its mean sea level — so it travels with the parameters into workers as part of
+   * the same spec, and no thread can read a different sea from the same world.
+   */
+  readonly seaLevel: number;
+  /**
    * Which way "up" is where this field's gradient is zero, or where it is too small to matter.
    *
    * **On the field rather than at the call site, because the two threads disagreed.** The mesher
@@ -70,6 +82,18 @@ const outward = (x: number, y: number, z: number): Vec3 => {
 };
 
 /**
+ * The sea level a spec's world has, without building its field.
+ *
+ * **Because a caller that only needs the water does not need the noise.** The main thread asks this
+ * for a world's altitude before the landscape is streamed and a worker asks it on every model to
+ * know where to put the water, and neither of those wants a permutation table's worth of setup for
+ * one number. Both threads read the same parameters, so both get the same sea — which is the whole
+ * of ADR 0009 applied to the water.
+ */
+export const seaLevelOf = (spec: BaseFieldSpec): number =>
+  spec.kind === "terrain" ? spec.params.origin : spec.params.radius;
+
+/**
  * Adds a fallback direction to a field **in place**, because the obvious way to do it is wrong.
  *
  * `{ ...field, fallbackNormal }` compiles and produces something that is no longer a field. A
@@ -83,7 +107,11 @@ const outward = (x: number, y: number, z: number): Vec3 => {
  * each return a fresh object.
  */
 const withFallbackNormal = (
-  field: BaseField & SurfaceExtent & { readonly lipschitz: number },
+  field: BaseField &
+    SurfaceExtent & {
+      readonly lipschitz: number;
+      readonly seaLevel: number;
+    },
   kind: BaseFieldKind,
   fallbackNormal: (x: number, y: number, z: number) => Vec3,
 ): BuiltBaseField => Object.assign(field, { kind, fallbackNormal });

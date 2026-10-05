@@ -273,305 +273,333 @@ const scene = (): Scene => new Scene();
  * counts here are of evaluated fragments rather than of covered ones, which for a dome
  * that fills the frame is the same thing.
  */
-describe("the starfield, on the CPU", () => {
-  const DEG = Math.PI / 180;
 
-  /** The dome's own radius, which `createSky` fixes. Only the *direction* is read. */
-  const SKY_EXTENT = 40000;
+/**
+ * How long a test in the block below is given.
+ *
+ * **These are the only tests in this application that rasterise on the CPU**, and each one
+ * evaluates a 900 × 160 frame several times over through rmsl's software target. That is a
+ * few million fragments per test, which is milliseconds on a desktop and seconds on a phone —
+ * so the time is a property of the machine rather than of the assertion, and vitest's 5 s
+ * default is a coin toss for a block of seven of them running beside the rest of the suite.
+ *
+ * Stated rather than left, so that a genuine failure inside the block still fails: the numbers
+ * these tests compare are deterministic (nothing here is random — the starfield's lattice is a
+ * hash of its own cell), so a timeout means the machine was slow, and a slow machine is not a
+ * wrong starfield.
+ */
+const CPU_RASTER_MS = 30_000;
 
-  /** How far up the dome is looked at, in degrees. Anywhere above the horizon. */
-  const ELEVATION_DEG = 30;
+describe(
+  "the starfield, on the CPU",
+  () => {
+    const DEG = Math.PI / 180;
 
-  /**
-   * A perspective matrix, column-major as rmsl wants it.
-   *
-   * Written out rather than taken from a renderer, because there is no renderer here and
-   * the starfield's whole argument is about where the projection puts things. A wrong
-   * matrix would make the stars wrong in a way that reads as a bug in the shader, which
-   * is precisely the failure mode this block exists to catch rather than to cause.
-   */
-  const perspective = (
-    fovY: number,
-    aspect: number,
-    near: number,
-    far: number,
-  ) => {
-    const f = 1 / Math.tan((fovY / 2) * DEG);
-    return [
-      f / aspect,
-      0,
-      0,
-      0, //
-      0,
-      f,
-      0,
-      0, //
-      0,
-      0,
-      (far + near) / (near - far),
-      (2 * far * near) / (near - far), //
-      0,
-      0,
-      -1,
-      0,
-    ];
-  };
+    /** The dome's own radius, which `createSky` fixes. Only the *direction* is read. */
+    const SKY_EXTENT = 40000;
 
-  /**
-   * The dome at one hour of the cycle, as one material.
-   *
-   * The six from `SkyLight` and the rest of the day's state fill themselves in from the
-   * material's own thunks — which is what the thunks are for — so a caller sets the hour
-   * and nothing else. `starBrightness` is the one knob, and it is here because the
-   * measurement below needs a frame with the stars off to subtract.
-   */
-  const domeAt = (seconds: number, pixelRatio: number, starBrightness = 1) => {
-    const material = new SkyMaterial();
-    material.sky.lighting = dayNightState(seconds);
-    material.pixelScale = pixelRatio;
-    material.starBrightness = starBrightness;
-    return material;
-  };
+    /** How far up the dome is looked at, in degrees. Anywhere above the horizon. */
+    const ELEVATION_DEG = 30;
 
-  /** One frame of the dome, with every binding a renderer would have supplied. */
-  const frame = (
-    material: SkyMaterial,
-    width: number,
-    height: number,
-    eye: [number, number, number] = [0, 0, 0],
-    elevationDeg: number = ELEVATION_DEG,
-  ) =>
-    render(
-      fromProgram(material.build(new Scene()), {
-        // Device pixels, which is what a star's size is measured in.
-        resolution: [width, height],
-        uniforms: {
-          cameraPosition: eye,
-          viewMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-          projectionMatrix: perspective(FOV_Y, width / height, 0.1, 100000),
+    /**
+     * A perspective matrix, column-major as rmsl wants it.
+     *
+     * Written out rather than taken from a renderer, because there is no renderer here and
+     * the starfield's whole argument is about where the projection puts things. A wrong
+     * matrix would make the stars wrong in a way that reads as a bug in the shader, which
+     * is precisely the failure mode this block exists to catch rather than to cause.
+     */
+    const perspective = (
+      fovY: number,
+      aspect: number,
+      near: number,
+      far: number,
+    ) => {
+      const f = 1 / Math.tan((fovY / 2) * DEG);
+      return [
+        f / aspect,
+        0,
+        0,
+        0, //
+        0,
+        f,
+        0,
+        0, //
+        0,
+        0,
+        (far + near) / (near - far),
+        (2 * far * near) / (near - far), //
+        0,
+        0,
+        -1,
+        0,
+      ];
+    };
+
+    /**
+     * The dome at one hour of the cycle, as one material.
+     *
+     * The six from `SkyLight` and the rest of the day's state fill themselves in from the
+     * material's own thunks — which is what the thunks are for — so a caller sets the hour
+     * and nothing else. `starBrightness` is the one knob, and it is here because the
+     * measurement below needs a frame with the stars off to subtract.
+     */
+    const domeAt = (
+      seconds: number,
+      pixelRatio: number,
+      starBrightness = 1,
+    ) => {
+      const material = new SkyMaterial();
+      material.sky.lighting = dayNightState(seconds);
+      material.pixelScale = pixelRatio;
+      material.starBrightness = starBrightness;
+      return material;
+    };
+
+    /** One frame of the dome, with every binding a renderer would have supplied. */
+    const frame = (
+      material: SkyMaterial,
+      width: number,
+      height: number,
+      eye: [number, number, number] = [0, 0, 0],
+      elevationDeg: number = ELEVATION_DEG,
+    ) =>
+      render(
+        fromProgram(material.build(new Scene()), {
+          // Device pixels, which is what a star's size is measured in.
+          resolution: [width, height],
+          uniforms: {
+            cameraPosition: eye,
+            viewMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+            projectionMatrix: perspective(FOV_Y, width / height, 0.1, 100000),
+          },
+        }),
+        {
+          width,
+          height,
+          // One ray per fragment, from an eye at the origin looking `-Z` and tilted up.
+          // `render` counts rows up from the bottom, as `fragCoord` does.
+          //
+          // **The dome is carried at the eye, as `createSky` carries it**, so the ray the shader
+          // recovers is the direction exactly. Placing the geometry at the origin and putting the eye
+          // in `cameraPosition` only approximates a direction while the eye is much nearer the origin
+          // than `SKY_EXTENT` is — and on a 136,000-unit planet the eye is not.
+          inputs: ({ x, y }) => {
+            const tan = Math.tan((FOV_Y / 2) * DEG);
+            const d = [
+              (((x + 0.5) / width) * 2 - 1) * tan * (width / height),
+              (((y + 0.5) / height) * 2 - 1) * tan +
+                Math.sin(elevationDeg * DEG),
+              -1,
+            ];
+            const length = Math.hypot(...d);
+            return {
+              varyings: {
+                positionWorld: d.map(
+                  (c, i) => (c / length) * SKY_EXTENT + eye[i]!,
+                ),
+              },
+            };
+          },
         },
-      }),
-      {
-        width,
-        height,
-        // One ray per fragment, from an eye at the origin looking `-Z` and tilted up.
-        // `render` counts rows up from the bottom, as `fragCoord` does.
-        //
-        // **The dome is carried at the eye, as `createSky` carries it**, so the ray the shader
-        // recovers is the direction exactly. Placing the geometry at the origin and putting the eye
-        // in `cameraPosition` only approximates a direction while the eye is much nearer the origin
-        // than `SKY_EXTENT` is — and on a 136,000-unit planet the eye is not.
-        inputs: ({ x, y }) => {
-          const tan = Math.tan((FOV_Y / 2) * DEG);
-          const d = [
-            (((x + 0.5) / width) * 2 - 1) * tan * (width / height),
-            (((y + 0.5) / height) * 2 - 1) * tan + Math.sin(elevationDeg * DEG),
-            -1,
-          ];
-          const length = Math.hypot(...d);
-          return {
-            varyings: {
-              positionWorld: d.map(
-                (c, i) => (c / length) * SKY_EXTENT + eye[i]!,
-              ),
-            },
-          };
-        },
-      },
-    );
+      );
 
-  /**
-   * What the starfield itself drew, and where on the frame it drew it.
-   *
-   * Measured by **rendering the hour twice and subtracting** — once with the stars and
-   * once with `starBrightness` at zero — rather than by thresholding brightness. A
-   * threshold has to know how bright the sky is, which is a palette question that changes
-   * across the cycle: the cut that reads a star at midnight reads the entire dawn sky.
-   * The difference isolates the starfield's own contribution, so one number works at
-   * every hour and none of these assertions can be satisfied by a bright sky.
-   */
-  const stars = (
-    seconds: number,
-    width = 160,
-    height = 90,
-    pixelRatio = 1.5,
-    eye: [number, number, number] = [0, 0, 0],
-  ): { lit: number; meanLit: number; peak: number; busiest: number } => {
-    const lit = frame(domeAt(seconds, pixelRatio), width, height, eye);
-    const plain = frame(domeAt(seconds, pixelRatio, 0), width, height, eye);
+    /**
+     * What the starfield itself drew, and where on the frame it drew it.
+     *
+     * Measured by **rendering the hour twice and subtracting** — once with the stars and
+     * once with `starBrightness` at zero — rather than by thresholding brightness. A
+     * threshold has to know how bright the sky is, which is a palette question that changes
+     * across the cycle: the cut that reads a star at midnight reads the entire dawn sky.
+     * The difference isolates the starfield's own contribution, so one number works at
+     * every hour and none of these assertions can be satisfied by a bright sky.
+     */
+    const stars = (
+      seconds: number,
+      width = 160,
+      height = 90,
+      pixelRatio = 1.5,
+      eye: [number, number, number] = [0, 0, 0],
+    ): { lit: number; meanLit: number; peak: number; busiest: number } => {
+      const lit = frame(domeAt(seconds, pixelRatio), width, height, eye);
+      const plain = frame(domeAt(seconds, pixelRatio, 0), width, height, eye);
 
-    let count = 0;
-    let sum = 0;
-    let peak = 0;
-    // How many lit pixels fell in the leftmost, middle and rightmost third.
-    const columns = [0, 0, 0];
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const added = lit.at(x, y)[0]! - plain.at(x, y)[0]!;
-        if (added > 1e-4) {
-          count++;
-          sum += added;
-          if (added > peak) peak = added;
-          columns[Math.min(2, Math.floor((x / width) * 3))]!++;
+      let count = 0;
+      let sum = 0;
+      let peak = 0;
+      // How many lit pixels fell in the leftmost, middle and rightmost third.
+      const columns = [0, 0, 0];
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const added = lit.at(x, y)[0]! - plain.at(x, y)[0]!;
+          if (added > 1e-4) {
+            count++;
+            sum += added;
+            if (added > peak) peak = added;
+            columns[Math.min(2, Math.floor((x / width) * 3))]!++;
+          }
         }
       }
-    }
 
-    return {
-      lit: count,
-      meanLit: count === 0 ? 0 : sum / count,
-      peak,
-      // The share of the lit pixels in the busiest third of the width. One would mean
-      // every star is on one side of the frame, which is this bug exactly.
-      busiest: count === 0 ? 0 : Math.max(...columns) / count,
+      return {
+        lit: count,
+        meanLit: count === 0 ? 0 : sum / count,
+        peak,
+        // The share of the lit pixels in the busiest third of the width. One would mean
+        // every star is on one side of the frame, which is this bug exactly.
+        busiest: count === 0 ? 0 : Math.max(...columns) / count,
+      };
     };
-  };
 
-  it("lights pixels at every hour of the cycle where stars are due", () => {
-    // The assertion the transcription could not make, and the one this block is for. A
-    // starfield that works at sunrise and nowhere else is a starfield, and the sky is
-    // read at midnight rather than at sunrise.
-    //
-    // Twelve hours of the cycle, each rendered twice and differenced, which is a few
-    // seconds of CPU and the only slow thing in this file.
-    const report: string[] = [];
-    for (let t = 0; t < CYCLE_SECONDS; t += 100) {
-      const twilight = dayNightState(t).twilight;
-      const { lit, busiest } = stars(t);
-      report.push(
-        `t=${String(t).padStart(4)}s ${phaseAt(t).padEnd(8)} ` +
-          `twilight ${twilight.toFixed(2)}  ${String(lit).padStart(4)} lit` +
-          `  busiest third ${(busiest * 100).toFixed(0)}%`,
-      );
-      // The two ends of the parameter: `twilight` is 1 under the band and 0 over it, and
-      // stars are the sky's at one end of that and absent at the other.
-      if (twilight >= 1) {
-        expect(lit, `no stars at t=${t}s, which is full night`).toBeGreaterThan(
-          0,
+    it("lights pixels at every hour of the cycle where stars are due", () => {
+      // The assertion the transcription could not make, and the one this block is for. A
+      // starfield that works at sunrise and nowhere else is a starfield, and the sky is
+      // read at midnight rather than at sunrise.
+      //
+      // Twelve hours of the cycle, each rendered twice and differenced, which is a few
+      // seconds of CPU and the only slow thing in this file.
+      const report: string[] = [];
+      for (let t = 0; t < CYCLE_SECONDS; t += 100) {
+        const twilight = dayNightState(t).twilight;
+        const { lit, busiest } = stars(t);
+        report.push(
+          `t=${String(t).padStart(4)}s ${phaseAt(t).padEnd(8)} ` +
+            `twilight ${twilight.toFixed(2)}  ${String(lit).padStart(4)} lit` +
+            `  busiest third ${(busiest * 100).toFixed(0)}%`,
         );
+        // The two ends of the parameter: `twilight` is 1 under the band and 0 over it, and
+        // stars are the sky's at one end of that and absent at the other.
+        if (twilight >= 1) {
+          expect(
+            lit,
+            `no stars at t=${t}s, which is full night`,
+          ).toBeGreaterThan(0);
+        }
+        if (twilight <= 0) {
+          expect(lit, `stars at t=${t}s, which is full day`).toBe(0);
+        }
       }
-      if (twilight <= 0) {
-        expect(lit, `stars at t=${t}s, which is full day`).toBe(0);
-      }
-    }
-    console.log(report.join("\n"));
-  }, 60_000);
+      console.log(report.join("\n"));
+    }, 60_000);
 
-  it("goes black with altitude, because the daylight sky is the atmosphere", () => {
-    // The core of the change: the gradient and the glows are scaled by the air still
-    // overhead, so a noon sky read from above the shell is the black of space. Measured on
-    // the centre pixel, whose ray misses the shell entirely and so isolates the gradient
-    // from the new limb term.
-    const centre = (eye: [number, number, number]): number => {
-      const out = frame(domeAt(300, 1), 1, 1, eye);
+    it("goes black with altitude, because the daylight sky is the atmosphere", () => {
+      // The core of the change: the gradient and the glows are scaled by the air still
+      // overhead, so a noon sky read from above the shell is the black of space. Measured on
+      // the centre pixel, whose ray misses the shell entirely and so isolates the gradient
+      // from the new limb term.
+      const centre = (eye: [number, number, number]): number => {
+        const out = frame(domeAt(300, 1), 1, 1, eye);
+        const c = out.at(0, 0);
+        return (c[0]! + c[1]! + c[2]!) / 3;
+      };
+      const ground = centre([0, 0, 0]);
+      // A whole radius up, which is well clear of the 4,800-unit shell — an altitude barely above
+      // the shell top would still have a 30° ray grazing it on a planet this size.
+      const orbit = centre([0, DEFAULT_PLANET_RADIUS * 2, 0]);
+      console.log(
+        `noon sky: ground ${ground.toFixed(3)}, orbit ${orbit.toFixed(4)}`,
+      );
+      expect(ground).toBeGreaterThan(0.2);
+      expect(orbit).toBeLessThan(ground * 0.05);
+    });
+
+    it("draws no atmosphere looking straight up from space, though the line behind the eye meets the planet", () => {
+      // **The look-up bug, as a number.** The eye is outside the shell, so this ray never enters the
+      // atmosphere — but the *line* through it and the sky passes through the planet's centre behind
+      // the camera, and the limb sized its chord from that line. A straight-up look therefore carried
+      // a full atmosphere column that was behind the eye: a fog band across the black of space. Blue
+      // sky is about 0.75, so a value near zero is the difference between black and that band.
+      const out = frame(
+        domeAt(300, 1),
+        1,
+        1,
+        [0, DEFAULT_PLANET_RADIUS + 20000, 0],
+        89,
+      );
       const c = out.at(0, 0);
-      return (c[0]! + c[1]! + c[2]!) / 3;
-    };
-    const ground = centre([0, 0, 0]);
-    // A whole radius up, which is well clear of the 4,800-unit shell — an altitude barely above
-    // the shell top would still have a 30° ray grazing it on a planet this size.
-    const orbit = centre([0, DEFAULT_PLANET_RADIUS * 2, 0]);
-    console.log(
-      `noon sky: ground ${ground.toFixed(3)}, orbit ${orbit.toFixed(4)}`,
-    );
-    expect(ground).toBeGreaterThan(0.2);
-    expect(orbit).toBeLessThan(ground * 0.05);
-  });
+      const space = (c[0]! + c[1]! + c[2]!) / 3;
+      console.log(`straight-up sky from space: ${space.toFixed(4)}`);
+      expect(space).toBeLessThan(0.02);
+    });
 
-  it("draws no atmosphere looking straight up from space, though the line behind the eye meets the planet", () => {
-    // **The look-up bug, as a number.** The eye is outside the shell, so this ray never enters the
-    // atmosphere — but the *line* through it and the sky passes through the planet's centre behind
-    // the camera, and the limb sized its chord from that line. A straight-up look therefore carried
-    // a full atmosphere column that was behind the eye: a fog band across the black of space. Blue
-    // sky is about 0.75, so a value near zero is the difference between black and that band.
-    const out = frame(
-      domeAt(300, 1),
-      1,
-      1,
-      [0, DEFAULT_PLANET_RADIUS + 20000, 0],
-      89,
-    );
-    const c = out.at(0, 0);
-    const space = (c[0]! + c[1]! + c[2]!) / 3;
-    console.log(`straight-up sky from space: ${space.toFixed(4)}`);
-    expect(space).toBeLessThan(0.02);
-  });
-
-  it("lights stars in daylight once the eye is out of the atmosphere", () => {
-    // Noon, and the ground sky has no stars at all because `twilight` is zero. The same
-    // hour from above the shell must: the only thing that hid them was the atmosphere.
-    expect(stars(300, 160, 90, 1.5, [0, 0, 0]).lit).toBe(0);
-    // **And "out" means past the shell's top, not just "the air has thinned".** Half a shell up
-    // is still inside the atmosphere, and the old gate (`1 - atmosphere`) let stars in there —
-    // the same mistake that drew the from-outside limb on top of the gradient during the climb.
-    expect(
-      stars(300, 160, 90, 1.5, [
-        0,
-        DEFAULT_PLANET_RADIUS + ATMOSPHERE_HEIGHT / 2,
-        0,
-      ]).lit,
-    ).toBe(0);
-    const above = stars(300, 160, 90, 1.5, [
-      0,
-      DEFAULT_PLANET_RADIUS * 2,
-      0,
-    ]).lit;
-    console.log(`stars at noon from orbit: ${above} lit`);
-    expect(above).toBeGreaterThan(0);
-  });
-
-  it("spreads them across the frame rather than crowding one side", () => {
-    // The reported symptom, as a number. The stars live in a lattice, so a frame's
-    // worth of them can bunch; but each third of the width is a third of the sky, and
-    // one of them being empty while another holds them all is not a lattice doing its
-    // job — it is a ray projected from the wrong place.
-    for (const t of [650, 700, 900, 1100]) {
-      const { lit, busiest } = stars(t);
-      expect(lit, `nothing lit at t=${t}s`).toBeGreaterThan(0);
+    it("lights stars in daylight once the eye is out of the atmosphere", () => {
+      // Noon, and the ground sky has no stars at all because `twilight` is zero. The same
+      // hour from above the shell must: the only thing that hid them was the atmosphere.
+      expect(stars(300, 160, 90, 1.5, [0, 0, 0]).lit).toBe(0);
+      // **And "out" means past the shell's top, not just "the air has thinned".** Half a shell up
+      // is still inside the atmosphere, and the old gate (`1 - atmosphere`) let stars in there —
+      // the same mistake that drew the from-outside limb on top of the gradient during the climb.
       expect(
-        busiest,
-        `every star in one third of the frame at t=${t}s`,
-      ).toBeLessThan(0.75);
-    }
-  }, 30_000);
+        stars(300, 160, 90, 1.5, [
+          0,
+          DEFAULT_PLANET_RADIUS + ATMOSPHERE_HEIGHT / 2,
+          0,
+        ]).lit,
+      ).toBe(0);
+      const above = stars(300, 160, 90, 1.5, [
+        0,
+        DEFAULT_PLANET_RADIUS * 2,
+        0,
+      ]).lit;
+      console.log(`stars at noon from orbit: ${above} lit`);
+      expect(above).toBeGreaterThan(0);
+    });
 
-  it("lights them brightly enough to see", () => {
-    // A lit pixel averaging 0.13 is a grey smudge against a night sky of 0.02: the
-    // starfield is technically there and the eye reports nothing. This is what the gain
-    // is for, and this is the number that says whether it did its job.
-    //
-    // Measured on this shader at midnight, two device pixels per CSS pixel: **0.25** with
-    // the gain, **0.06** without it, and **0.01** while the in-front guard was still a
-    // cosine rather than a test. A fifth sits above the two failures and below the
-    // working value, which is what makes this a test of the gain rather than a
-    // restatement of it.
-    const night = stars(900, 160, 90, 2);
-    console.log(
-      `160x90 at 2x: ${night.lit} lit, mean ${night.meanLit.toFixed(2)}, ` +
-        `peak ${night.peak.toFixed(2)}`,
-    );
-    expect(night.meanLit).toBeGreaterThan(0.2);
-    // And the brightest stars clip, which is what makes a star read as a light source
-    // rather than as a pale dot. Short of one, and it has to be: the dome saturates what
-    // it returns, so the largest contribution a pixel can show is the distance from a
-    // night sky of 0.02 up to white. A star at the head of the distribution is pinned
-    // against that ceiling and reads 0.98 here rather than 1.
-    expect(night.peak).toBeGreaterThan(0.9);
-  });
+    it("spreads them across the frame rather than crowding one side", () => {
+      // The reported symptom, as a number. The stars live in a lattice, so a frame's
+      // worth of them can bunch; but each third of the width is a third of the sky, and
+      // one of them being empty while another holds them all is not a lattice doing its
+      // job — it is a ray projected from the wrong place.
+      for (const t of [650, 700, 900, 1100]) {
+        const { lit, busiest } = stars(t);
+        expect(lit, `nothing lit at t=${t}s`).toBeGreaterThan(0);
+        expect(
+          busiest,
+          `every star in one third of the frame at t=${t}s`,
+        ).toBeLessThan(0.75);
+      }
+    }, 30_000);
 
-  it("keeps the same apparent size at any device pixel ratio", () => {
-    // The reason the size is carried through a uniform rather than baked in. A star in
-    // device pixels is half the size on a phone as on a desktop, and the viewport clamps
-    // that ratio at two — so a starfield tuned at one thins out on the other. The count
-    // per CSS pixel is the comparison, and the ratio is what has to cancel.
-    const perCssPixel = (ratio: number): number =>
-      stars(900, 160, 90, ratio).lit / (ratio * ratio);
-    const phone = perCssPixel(2);
-    const desktop = perCssPixel(1);
-    expect(phone).toBeGreaterThan(0.5 * desktop);
-    expect(phone).toBeLessThan(2 * desktop);
-  });
-});
+    it("lights them brightly enough to see", () => {
+      // A lit pixel averaging 0.13 is a grey smudge against a night sky of 0.02: the
+      // starfield is technically there and the eye reports nothing. This is what the gain
+      // is for, and this is the number that says whether it did its job.
+      //
+      // Measured on this shader at midnight, two device pixels per CSS pixel: **0.25** with
+      // the gain, **0.06** without it, and **0.01** while the in-front guard was still a
+      // cosine rather than a test. A fifth sits above the two failures and below the
+      // working value, which is what makes this a test of the gain rather than a
+      // restatement of it.
+      const night = stars(900, 160, 90, 2);
+      console.log(
+        `160x90 at 2x: ${night.lit} lit, mean ${night.meanLit.toFixed(2)}, ` +
+          `peak ${night.peak.toFixed(2)}`,
+      );
+      expect(night.meanLit).toBeGreaterThan(0.2);
+      // And the brightest stars clip, which is what makes a star read as a light source
+      // rather than as a pale dot. Short of one, and it has to be: the dome saturates what
+      // it returns, so the largest contribution a pixel can show is the distance from a
+      // night sky of 0.02 up to white. A star at the head of the distribution is pinned
+      // against that ceiling and reads 0.98 here rather than 1.
+      expect(night.peak).toBeGreaterThan(0.9);
+    });
+
+    it("keeps the same apparent size at any device pixel ratio", () => {
+      // The reason the size is carried through a uniform rather than baked in. A star in
+      // device pixels is half the size on a phone as on a desktop, and the viewport clamps
+      // that ratio at two — so a starfield tuned at one thins out on the other. The count
+      // per CSS pixel is the comparison, and the ratio is what has to cancel.
+      const perCssPixel = (ratio: number): number =>
+        stars(900, 160, 90, ratio).lit / (ratio * ratio);
+      const phone = perCssPixel(2);
+      const desktop = perCssPixel(1);
+      expect(phone).toBeGreaterThan(0.5 * desktop);
+      expect(phone).toBeLessThan(2 * desktop);
+    });
+  },
+  CPU_RASTER_MS,
+);
+
 describe("the sun and the moon", () => {
   it("draws discs big enough to read as discs", () => {
     // At its true angular size the moon is half a degree across, which is about eight

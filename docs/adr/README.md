@@ -60,6 +60,7 @@ recorded cost is a decision nobody thought about.
 | [0040](0040-the-atmosphere-is-a-shell-and-the-clouds-wrap-the-planet.md) | The atmosphere is a spherical shell, and the clouds wrap the planet                    | superseded in part by `0042` |
 | [0041](0041-the-planet-is-thirty-four-times-larger.md)                   | The planet is 34× larger, and its body scales with it                                  | superseded in part by `0042` |
 | [0042](0042-the-cloud-volume-is-addressed-by-direction-and-altitude.md)  | The cloud volume is addressed by direction **and** altitude                            | accepted                     |
+| [0043](0043-water-is-a-field-and-the-landscape-gates-it.md)              | Water is a field, and the **landscape** gates it                                       | accepted                     |
 
 ## What is decided so far
 

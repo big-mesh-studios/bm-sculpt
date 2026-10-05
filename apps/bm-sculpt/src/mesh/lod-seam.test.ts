@@ -62,6 +62,7 @@ import {
 
 import type { ChunkMesh } from "@big-mesh-studios/meshing";
 import { chunkRegion, SurfaceNetsChunkMesher } from "./chunk-mesher";
+import { WaterChunkMesher } from "./water-mesher";
 
 /**
  * Positions are carried as `f32`, so agreement is agreement to about single precision
@@ -320,5 +321,109 @@ describe("a level step, covered by overlap", () => {
     expect(
       mesher.mesh({ cell: RIGHT, lod: 1, overlap: coarseOverlap }).vertexCount,
     ).toBeGreaterThan(mesher.mesh({ cell: RIGHT, lod: 1 }).vertexCount);
+  });
+});
+
+/**
+ * The sea across a level-of-detail boundary, which is a different question.
+ *
+ * **The ground and the sea are two surfaces through one volume, meshed at two strides**, and at
+ * a level step the shoreline is where they meet. The ground has ADR 0035's overlap to cover
+ * it; the sea rides the same window and the same overlap, so the same coverage applies to it —
+ * and that is a claim worth a test rather than an inference, because the sea's edge is decided
+ * per cell by the gate and a coarse cell spans four fine ones.
+ *
+ * **What is checked is coverage rather than agreement.** The ground's seam is a crack in the
+ * surface; the sea's is a gap where there should be water and there is none. So the assertion is
+ * that the coarse chunk's sea reaches past the shared plane when it is given the overlap the
+ * window would give it — the property the window actually depends on — and that the sea's
+ * surface is at the sea level either way, which is the thing that makes the two chunks' water
+ * the same water.
+ */
+describe("the sea across a level step", () => {
+  /**
+   * A landscape with a coast on the seam, so the sea's edge is in the picture.
+   *
+   * **A step rather than noise**, for the reason `water-mesher.test.ts` says: every claim here
+   * is about where the sea's boundary falls relative to the ground's, and noise would make each
+   * one a statement about a seed as well.
+   */
+  const coastal = () => {
+    const seaLevel = 0;
+    // Ground rises from a hundred below the sea at `x < 0` to a hundred above it at `x > 0`, so
+    // the shoreline sits on `x = 0` — which is inside chunk 0's own extent rather than on its
+    // boundary, and the sea has to run right up to it and stop.
+    const groundAt = (x: number) => (x < 0 ? -100 : 100);
+    const distance = (x: number, y: number, _z: number) => y - groundAt(x);
+    return Object.assign(distance, {
+      kind: "terrain" as const,
+      seaLevel,
+      lipschitz: 1,
+      heightAt: groundAt,
+      lowest: -100,
+      highest: 100,
+      fallbackNormal: () => ({ x: 0, y: 1, z: 0 }),
+      couldHoldSurface: () => true,
+    });
+  };
+
+  const seaMesher = () => new WaterChunkMesher(coastal());
+
+  const at = (mesh: ChunkMesh, i: number): Point => ({
+    x: mesh.positions[i * 3],
+    y: mesh.positions[i * 3 + 1],
+    z: mesh.positions[i * 3 + 2],
+  });
+
+  it("keeps the sea's surface at the sea level at every level", () => {
+    // **Before any seam question: is it the same water?** Two chunks at different strides sample
+    // the sea's surface at different places, and both must put their vertices on the waterline —
+    // otherwise the level step is not a resolution difference but two different seas.
+    const mesher = seaMesher();
+    for (const lod of [0, 1, 2] as const) {
+      const mesh = mesher.mesh({ cell: LEFT, lod });
+      expect(mesh.vertexCount, `lod ${lod}`).toBeGreaterThan(0);
+      for (let v = 0; v < mesh.vertexCount; v++)
+        expect(at(mesh, v).y, `lod ${lod} vertex ${v}`).toBeCloseTo(0, 1);
+    }
+  });
+
+  it("stops the sea where the ground rises through it, at every level", () => {
+    // **The shoreline is the whole claim**, and a sea drawn as a sphere could not do it. The
+    // ground is above the sea for every `x > 0`, so no vertex may be there — which is the
+    // failure the gate exists to prevent, expressed as a position.
+    const mesher = seaMesher();
+    for (const lod of [0, 1, 2] as const) {
+      const mesh = mesher.mesh({ cell: LEFT, lod });
+      for (let v = 0; v < mesh.vertexCount; v++) {
+        // Only the half of the chunk that is over the basin has water, and the chunk's own
+        // centre is the ground, so a vertex may not sit to the right of it.
+        expect(at(mesh, v).x, `lod ${lod} vertex ${v}`).toBeLessThan(0);
+      }
+    }
+  });
+
+  it("covers the seam with the overlap the window gives it", () => {
+    // **The property the window depends on.** `lod-seam.test.ts` proves the ground's coarse
+    // chunk reaches past the shared plane when given `OVERLAP_X_NEG`; the sea has to as well,
+    // or a level step would leave the sea short of where the ground is detailed.
+    const bands = { full: 0, coarse: 1 };
+    const focus: CellCoord = { x: 0, y: 0, z: 0 };
+    expect(lodAt(LEFT, focus, bands)).toBe(0);
+    expect(lodAt(RIGHT, focus, bands)).toBe(1);
+    const coarseOverlap = overlapMaskAt(RIGHT, focus, bands);
+    expect(coarseOverlap & OVERLAP_X_NEG).toBe(OVERLAP_X_NEG);
+
+    const mesher = seaMesher();
+    // Chunk 1 is entirely over ground above the sea, so it holds no water either way; what
+    // matters is that asking for it with the overlap is answered rather than refused, and that
+    // the sea that *is* drawn from it sits on the waterline.
+    const withOverlap = mesher.mesh({
+      cell: RIGHT,
+      lod: 1,
+      overlap: coarseOverlap,
+    });
+    for (let v = 0; v < withOverlap.vertexCount; v++)
+      expect(at(withOverlap, v).y).toBeCloseTo(0, 1);
   });
 });

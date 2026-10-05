@@ -33,7 +33,7 @@ import { Scene, type Material } from "@random-mesh/rmsl/scene";
 
 import type { Operation } from "@big-mesh-studios/csg";
 import type {
-  ChunkMesher,
+  ChunkMeshers,
   FromWorker,
   MeshRequest,
   PoolWorker,
@@ -45,16 +45,24 @@ import { Session, starterOperations } from "../session";
 const key = (cell: { x: number; y: number; z: number }): string =>
   `${cell.x},${cell.y},${cell.z}`;
 
-/** Meshing costs nothing. Nothing here is about time. */
-const noCostMesher: ChunkMesher = {
-  mesh: (_r: MeshRequest) => ({
-    positions: new Float32Array(9),
-    normalOct: new Int16Array(6),
-    colours: new Uint8Array(12),
-    indices: new Uint32Array(9),
-    vertexCount: 3,
-    triangleCount: 3,
-  }),
+/**
+ * Meshing costs nothing. Nothing here is about time.
+ *
+ * **Ground only, and the sea left out on purpose.** A session built here has no sea
+ * material, so a second mesher would be built for a model with no landscape and produce
+ * nothing — and the harness counts requests, which is the whole of what it measures.
+ */
+const noCostMeshers: ChunkMeshers = {
+  ground: {
+    mesh: (_r: MeshRequest) => ({
+      positions: new Float32Array(9),
+      normalOct: new Int16Array(6),
+      colours: new Uint8Array(12),
+      indices: new Uint32Array(9),
+      vertexCount: 3,
+      triangleCount: 3,
+    }),
+  },
 };
 
 interface Harness {
@@ -99,7 +107,7 @@ const makeWorker = (declineWhen: (generation: number) => boolean) => {
         listener?.({ data: reply });
         return true;
       }
-      const handled = handleMeshMessage(state, message, () => noCostMesher);
+      const handled = handleMeshMessage(state, message, () => noCostMeshers);
       state = handled.state;
       if (handled.reply !== undefined) listener?.({ data: handled.reply });
       return true;

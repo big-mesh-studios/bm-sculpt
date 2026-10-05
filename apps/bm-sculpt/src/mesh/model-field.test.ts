@@ -9,7 +9,7 @@ import type {
 import { BLOCK_WORLD, CHUNK_VOXELS } from "../constants";
 import { type CellCoord, cellCentre, tileIndex, TILE_COLOURS } from "../world";
 
-import { mesherFor, paintTilesOf, TilePaint } from "./model-field";
+import { meshersFor, paintTilesOf, TilePaint } from "./model-field";
 import { emptyWorkerState, handleMeshMessage } from "./worker";
 import { meshTransferables, type ModelMessage } from "./protocol";
 import { runWorker } from "./mesh-worker";
@@ -71,14 +71,16 @@ const aTile = (
   return { cell: cellHere, colours };
 };
 
-describe("building a mesher from a model message", () => {
+describe("building the meshers from a model message", () => {
   it("reads operations back out of the serialised form", () => {
     // The whole point of the description: what the main thread sends has to become a
     // field the worker can sample. A round trip that loses an operation would mesh a
     // model nobody asked for.
     const operations = [aSphere(45)];
-    const mesher = mesherFor(model(operations));
-    const mesh = mesher.mesh({ cell: cell(0), lod: 0 });
+    const mesh = meshersFor(model(operations)).ground.mesh({
+      cell: cell(0),
+      lod: 0,
+    });
     expect(mesh.vertexCount).toBeGreaterThan(0);
   });
 
@@ -86,7 +88,7 @@ describe("building a mesher from a model message", () => {
     // The worker and the main thread must agree about the model, or two chunks meshed on
     // different sides of the thread boundary would not fit together.
     const operations = [aSphere(45)];
-    const fromMessage = mesherFor(model(operations)).mesh({
+    const fromMessage = meshersFor(model(operations)).ground.mesh({
       cell: cell(0),
       lod: 0,
     });
@@ -117,7 +119,7 @@ describe("building a mesher from a model message", () => {
     // The runtime check is for a *third* kind added on one side of the thread boundary, which is
     // exactly the case the type cannot see.
     expect(() =>
-      mesherFor({ ...model([]), base: { kind: "moon", params: {} } } as never),
+      meshersFor({ ...model([]), base: { kind: "moon", params: {} } } as never),
     ).toThrow(/unknown base field/);
   });
 
@@ -130,8 +132,14 @@ describe("building a mesher from a model message", () => {
       ...model([aSphere(45)]),
       base: terrainBase({ origin: -70, scale: 96, octaves: 4, seed: 7 }),
     };
-    const first = mesherFor(withTerrain).mesh({ cell: cell(0), lod: 0 });
-    const second = mesherFor(withTerrain).mesh({ cell: cell(0), lod: 0 });
+    const first = meshersFor(withTerrain).ground.mesh({
+      cell: cell(0),
+      lod: 0,
+    });
+    const second = meshersFor(withTerrain).ground.mesh({
+      cell: cell(0),
+      lod: 0,
+    });
 
     expect(first.vertexCount).toBeGreaterThan(0);
     expect([...second.indices]).toEqual([...first.indices]);
@@ -141,14 +149,14 @@ describe("building a mesher from a model message", () => {
     // Otherwise the seed is decoration. Asserted on the mesh rather than on the noise,
     // because the mesh is what anyone can see.
     const terrain = { origin: -70, scale: 96, octaves: 4 };
-    const one = mesherFor({
+    const one = meshersFor({
       ...model([]),
       base: terrainBase({ ...terrain, seed: 1 }),
-    }).mesh({ cell: cell(0), lod: 0 });
-    const two = mesherFor({
+    }).ground.mesh({ cell: cell(0), lod: 0 });
+    const two = meshersFor({
       ...model([]),
       base: terrainBase({ ...terrain, seed: 2 }),
-    }).mesh({ cell: cell(0), lod: 0 });
+    }).ground.mesh({ cell: cell(0), lod: 0 });
 
     expect(one.vertexCount).toBeGreaterThan(0);
     expect(two.vertexCount).toBeGreaterThan(0);
@@ -157,24 +165,24 @@ describe("building a mesher from a model message", () => {
 
   it("produces nothing for a model with no operations", () => {
     expect(
-      mesherFor(model([])).mesh({ cell: cell(0), lod: 0 }).vertexCount,
+      meshersFor(model([])).ground.mesh({ cell: cell(0), lod: 0 }).vertexCount,
     ).toBe(0);
   });
 
   it("gives a different model a different field, not a cached one", () => {
     // A cached field would answer from an operations list the main thread has replaced,
     // and the resulting mesh would not look wrong.
-    const withSphere = mesherFor(model([aSphere(45)]));
+    const withSphere = meshersFor(model([aSphere(45)]));
     expect(
-      withSphere.mesh({ cell: cell(0), lod: 0 }).vertexCount,
+      withSphere.ground.mesh({ cell: cell(0), lod: 0 }).vertexCount,
     ).toBeGreaterThan(0);
 
-    const emptied = mesherFor({
+    const emptied = meshersFor({
       ...model([aSphere(45)]),
       revision: 2,
       operations: serialiseOperations([]),
     });
-    expect(emptied.mesh({ cell: cell(0), lod: 0 }).vertexCount).toBe(0);
+    expect(emptied.ground.mesh({ cell: cell(0), lod: 0 }).vertexCount).toBe(0);
   });
 });
 
@@ -355,7 +363,7 @@ describe("a worker end to end, against a fake scope", () => {
   it("refuses a second chunk while one is in flight", () => {
     // The pool sends one at a time, so this is the belt to the pool's braces. It cannot
     // be produced by a synchronous fake, so it is asserted at the state level.
-    const factory = () => mesherFor(model([aSphere(45)]));
+    const factory = () => meshersFor(model([aSphere(45)]));
     let state = handleMeshMessage(
       emptyWorkerState(),
       model([aSphere(45)]),
@@ -377,7 +385,7 @@ describe("the transfer list", () => {
     // The pool sends the buffers and the worker lists them. If the two disagreed the
     // mesh would be cloned instead — silently, and once per chunk, for the rest of the
     // session.
-    const mesh = mesherFor(model([aSphere(45)])).mesh({
+    const mesh = meshersFor(model([aSphere(45)])).ground.mesh({
       cell: cell(0),
       lod: 0,
     });
@@ -386,7 +394,7 @@ describe("the transfer list", () => {
       cell: cell(0),
       lod: 0,
       generation: 1,
-      mesh,
+      ground: mesh,
       empty: mesh.vertexCount === 0,
     });
     expect(list).toHaveLength(4);

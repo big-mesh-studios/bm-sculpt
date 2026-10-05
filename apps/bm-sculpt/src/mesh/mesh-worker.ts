@@ -13,7 +13,7 @@
  * logic.
  */
 
-import { mesherFor } from "./model-field";
+import { meshersFor } from "./model-field";
 import { emptyWorkerState, handleMeshMessage } from "./worker";
 import { meshTransferables } from "./protocol";
 
@@ -44,7 +44,7 @@ export const runWorker = (scope: Scope): (() => void) => {
   let state = emptyWorkerState();
 
   const listener = (event: { data: unknown }): void => {
-    const handled = handleMeshMessage(state, event.data, mesherFor);
+    const handled = handleMeshMessage(state, event.data, meshersFor);
     state = handled.state;
     if (handled.reply !== undefined) {
       scope.postMessage(handled.reply, meshTransferables(handled.reply));

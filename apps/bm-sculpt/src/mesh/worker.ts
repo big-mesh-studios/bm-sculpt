@@ -16,7 +16,8 @@
 import type { CellCoord, Lod, OverlapMask } from "../world";
 import { sameCell } from "../world";
 
-import type { ChunkMesher } from "./chunk-mesher";
+import type { ChunkMesher, ChunkMeshers } from "./chunk-mesher";
+import type { ChunkMesh } from "@big-mesh-studios/meshing";
 import type {
   ChunkCancelledMessage,
   ChunkFailedMessage,
@@ -26,12 +27,12 @@ import type {
 import { isToWorker } from "./protocol";
 
 /**
- * Builds the mesher for a model, on the worker's side of the boundary.
+ * Builds the meshers for a model, on the worker's side of the boundary.
  *
  * Injected rather than imported so that the message-handling logic — which is where the
  * ordering rules live — can be tested against a counting fake instead of a real field.
  */
-export type MesherFactory = (model: ModelMessage) => ChunkMesher;
+export type MesherFactory = (model: ModelMessage) => ChunkMeshers;
 
 /** How a worker remembers what it is working on. */
 export interface WorkerState {
@@ -172,7 +173,12 @@ const meshChunk = (
   const pending: WorkerState = { ...state, pending: request };
 
   try {
-    const mesher = build(model);
+    const meshers = build(model);
+    const asked = {
+      cell: request.cell,
+      lod: request.lod,
+      ...(request.overlap !== undefined ? { overlap: request.overlap } : {}),
+    };
 
     // The gate, before any sampling. In a terrain world most chunks are entirely air or
     // entirely solid and this is the difference between a few thousand field evaluations
@@ -182,10 +188,17 @@ const meshChunk = (
     //
     // Optional on the interface, and absent means "mesh it" — see `ChunkMesher`. Only a
     // mesher that answers `false` is trusted, and only it is allowed to have an opinion.
-    if (
-      mesher.couldHaveMesh?.(request.cell, request.lod, request.overlap) ===
-      false
-    ) {
+    //
+    // **Asked of both, and refused by neither on the other's account.** A chunk of open
+    // ocean has no ground in it and a chunk of mountain has no sea, and either is a reason
+    // to mesh the other — which is why these are two answers rather than one.
+    const groundWanted = wanted(meshers.ground, request);
+    const seaWanted = wanted(meshers.sea, request);
+
+    // A chunk holding neither is meshed zero times rather than once, which is the whole
+    // cost of a planet's window: most of a large volume near the surface is deep rock or
+    // open sky, and neither is worth 34,304 samples.
+    if (!groundWanted && !seaWanted) {
       return {
         state: { ...pending, pending: undefined, meshed: pending.meshed + 1 },
         reply: {
@@ -198,12 +211,15 @@ const meshChunk = (
       };
     }
 
-    const mesh = mesher.mesh({
-      cell: request.cell,
-      lod: request.lod,
-      ...(request.overlap !== undefined ? { overlap: request.overlap } : {}),
-    });
-    const empty = mesh.vertexCount === 0;
+    const ground = groundWanted ? meshers.ground.mesh(asked) : undefined;
+    const sea = seaWanted ? meshers.sea!.mesh(asked) : undefined;
+    // **A mesh with no vertices is reported as absent rather than sent.** Four empty typed
+    // arrays per air chunk would be most of the traffic in a terrain world, and building
+    // them in the first place would defeat asking whether the chunk needs meshing. A chunk
+    // with a ground and no sea is not empty: it carries one mesh, and `empty` says whether
+    // it carries any.
+    const hasGround = hasVertices(ground);
+    const hasSea = hasVertices(sea);
     return {
       state: { ...pending, pending: undefined, meshed: pending.meshed + 1 },
       reply: {
@@ -211,11 +227,9 @@ const meshChunk = (
         cell: request.cell,
         lod: request.lod,
         generation: request.generation,
-        // An empty mesh is reported as such rather than sent. Four empty typed arrays
-        // per air chunk would be most of the traffic in a terrain world, and building
-        // them in the first place would defeat asking whether the chunk needs meshing.
-        ...(empty ? {} : { mesh }),
-        empty,
+        ...(hasGround ? { ground } : {}),
+        ...(hasSea ? { sea } : {}),
+        empty: !hasGround && !hasSea,
       },
     };
   } catch (reason) {
@@ -232,6 +246,32 @@ const meshChunk = (
     };
   }
 };
+
+/**
+ * Whether a mesher wants this chunk at all.
+ *
+ * **Local, because the gate is asked twice and a mesher is not required to be cheap.**
+ * `couldHaveMesh` is a box test against the field's own extremes, but it is an interface a
+ * third-party mesher implements and nothing forces it to be constant time, so it is asked
+ * once per mesher per chunk and the answer held.
+ */
+const wanted = (
+  mesher: ChunkMesher | undefined,
+  request: { cell: CellCoord; lod: Lod; overlap?: OverlapMask },
+): boolean =>
+  mesher !== undefined &&
+  mesher.couldHaveMesh?.(request.cell, request.lod, request.overlap) !== false;
+
+/**
+ * Whether a mesh is worth sending.
+ *
+ * **A mesh is built whether or not it has anything in it** — the gate answers "could this
+ * hold a surface", not "does it", and only sampling settles that — so this is the second
+ * half of the cheap half, and the only reason an air chunk costs four empty arrays' worth
+ * of allocation rather than four empty arrays' worth of message.
+ */
+const hasVertices = (mesh: ChunkMesh | undefined): boolean =>
+  mesh !== undefined && mesh.vertexCount > 0;
 
 /**
  * A reply saying this worker will not mesh this request, and is now free.

@@ -83,6 +83,7 @@ export {
   MOUNTAIN_FEATURE,
   MOUNTAIN_MASK_FEATURE,
   MOUNTAIN_MASK_OCTAVES,
+  landscapeShape,
   NOISE_GRADIENT_BOUND,
   PerlinNoise2D,
   RIDGE_STRENGTH,
@@ -91,7 +92,7 @@ export {
 } from "./terrain";
 
 export type { PlanetField, PlanetParams } from "./planet";
-export { DEFAULT_PLANET, planetField, radiusRangeOf } from "./planet";
+export { DEFAULT_PLANET, planetField, radiusRangeOf, reachOf } from "./planet";
 
 export type { PlanetMapSource, PlanetMaps } from "./planet-maps";
 export {
@@ -140,7 +141,7 @@ export type {
   BaseFieldSpec,
   BuiltBaseField,
 } from "./base-field";
-export { baseFieldFor, isPlanetField } from "./base-field";
+export { baseFieldFor, isPlanetField, seaLevelOf } from "./base-field";
 
 export {
   FormatError,

@@ -58,6 +58,18 @@
  * says so by lowering `origin` rather than by asking for a negative index. That is the
  * whole reason the parameter is a count per axis and not a range: a chunk reaching into
  * its neighbour on one face should own one extra cell, not a shell of them.
+ *
+ * ## A cell may be refused, and a second field sampled to say why
+ *
+ * `cellGate` exists for the case where a surface should stop against another surface
+ * that something else already draws: the sea's surface, which is everywhere as a sphere
+ * but is water only where it stands in open air, and is buried in the landscape
+ * everywhere else. The gate is asked, per cell, whether any of that cell's corners is
+ * inside the ground, and a cell it refuses gets no vertex — and therefore no quads,
+ * because a quad naming a missing vertex is already refused. `marker` is the ground,
+ * sampled in the same pass as the water, so the cell loop never has to touch a field.
+ * `SurfaceNetsParams.cellGate` says why a CSG difference is not the same thing done
+ * more cheaply.
  */
 
 /** What the mesher needs from whatever it is meshing. */
@@ -160,10 +172,21 @@ export const SURFACE_NETS_CELLS = (samplesPerAxis: number, extra = 0): number =>
 /** Reusable per-thread buffers, sized for one chunk shape and then reused. */
 export class SurfaceNetsScratch {
   readonly samples: Float32Array;
+  /**
+   * The `marker` field's values, at the same samples. See `SurfaceNetsParams.marker`.
+   *
+   * **Allocated and left zeroed for every caller, including the ones that give no
+   * marker**, so `cellGate` can read it without asking whether there was one: a cell with
+   * no marker reads as uniformly out of the ground, which is the answer that lets a gate
+   * written for the sea run on a mesh that was not given a landscape.
+   */
+  readonly marks: Float32Array;
   /** Cell index to emitted vertex index, or -1. Fixed size: a lookup, not a log. */
   readonly cellVertex: Int32Array;
   /** The eight corner samples of the cell being considered. */
   readonly corners = new Float32Array(8);
+  /** The eight corner marker values of that same cell. */
+  readonly cornerMarks = new Float32Array(8);
 
   /**
    * @param samplesPerAxis samples on each axis, or the three counts when they differ.
@@ -186,6 +209,7 @@ export class SurfaceNetsScratch {
     const cy = SURFACE_NETS_CELLS(ny, ey);
     const cz = SURFACE_NETS_CELLS(nz, ez);
     this.samples = new Float32Array(gx * gy * gz);
+    this.marks = new Float32Array(gx * gy * gz);
     this.cellVertex = new Int32Array(cx * cy * cz);
   }
 }
@@ -283,6 +307,66 @@ export interface SurfaceNetsParams {
    * colour without walking the positions array again.
    */
   onVertex?: (index: number, x: number, y: number, z: number) => void;
+  /**
+   * Asked, for every cell whose corners disagree, whether that cell may carry a vertex
+   * at all. Receives the cell's eight corner samples and, when a `marker` was given, the
+   * eight marker values at the same corners.
+   *
+   * ## What it is for
+   *
+   * **A surface that ends against another one, where the other one is already drawn.**
+   * The sea is a sphere of radius `seaLevel` and it is everywhere; only the part of it
+   * standing in open air is water, and the rest is buried in the landscape, which draws
+   * its own surface there. Meshing the whole sphere gives the visible sea *and* a second
+   * copy of the seabed, coincident with the ground's own triangles — so it z-fights them
+   * and doubles their count.
+   *
+   * The obvious fix is to clip with a CSG difference, `max(sea, −ground)`, and it is
+   * worse: the zero set of that composite is the sea's surface *and* the ground's surface
+   * below the waterline, because a difference's boundary is both operands' boundaries.
+   * The unwanted half is the same seabed, arrived at from the other direction.
+   *
+   * ## Why it takes a second value rather than reading the composite
+   *
+   * **`max(sea, −ground) < 0` says a corner is in open water and nothing more.** It cannot
+   * say whether a *positive* corner is above the waterline or inside the ground, and a
+   * cell straddling the seabed differs from a cell straddling the sea only in which of
+   * those its positive corners are. So the ground is sampled as its own `marker`, and the
+   * gate is asked the question it can answer: is any corner of this cell inside the
+   * ground?
+   *
+   * Refusing the cell leaves its vertex at `-1`, and `quadAcross` already refuses any quad
+   * naming a vertex it does not have, so removing vertices cannot leave a half-emitted
+   * quad behind.
+   *
+   * ## Why it cannot open a seam
+   *
+   * **The gate is a pure function of values sampled at the corners, and corner `c` of a
+   * cell is sampled at the same world position in every chunk that owns it.** Two
+   * neighbours asked about one shared cell are handed the same numbers in the same order
+   * and therefore answer alike, which is the property the seam rule above exists to
+   * preserve and the reason this is a per-cell predicate rather than a per-chunk one.
+   *
+   * ## What it costs
+   *
+   * One call per crossing cell, in the loop that already read its eight corners, plus one
+   * extra sampling pass when a `marker` is given. Optional, and absent means every
+   * crossing cell emits and no second pass runs — which is every other caller, and is why
+   * this changes no existing output.
+   */
+  cellGate?: (
+    corners: Float32Array,
+    /** The `marker`'s values at the same corners, or a zero-filled buffer when none. */
+    marks: Float32Array,
+  ) => boolean;
+  /**
+   * A second field, sampled in the same pass as `sampler` and read only by `cellGate`.
+   *
+   * **Optional, and absent means the second buffer is left zeroed** — so a gate written
+   * against `marks` still runs on a mesh with no marker, and sees a field that is
+   * uniformly non-negative, which is the answer "nothing here is inside anything".
+   */
+  marker?: SurfaceSampler;
 }
 
 /** World position of every sample index along one axis, `0 .. samples + 1`. */
@@ -358,8 +442,13 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
 
   out.clear();
 
+  const gate = params.cellGate;
+
   const sample = (x: number, y: number, z: number): number =>
     scratch.samples[(z * gridY + y) * gridX + x];
+
+  const mark = (x: number, y: number, z: number): number =>
+    scratch.marks[(z * gridY + y) * gridX + x];
 
   // **Two fill loops, not one with a branch.** The separable case is the hot path for every chunk
   // on a cubic lattice, and a branch there would sit in the innermost loop of the densest routine
@@ -394,6 +483,48 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
     }
   }
 
+  // The marker, in a pass of its own rather than a branch inside the two loops above.
+  //
+  // **Same position, same call shape, and skipped entirely when there is no marker** — which is
+  // every caller but the sea's. A branch in the innermost loop of the densest routine in the
+  // project would cost every chunk that has no use for one to save a loop only the sea pays.
+  if (params.marker !== undefined) {
+    const marker = params.marker;
+    if (positionAt) {
+      for (let z = 0; z < gridZ; z++) {
+        for (let y = 0; y < gridY; y++) {
+          for (let x = 0; x < gridX; x++) {
+            const p = positionAt(x, y, z);
+            scratch.marks[(z * gridY + y) * gridX + x] = marker.distance(
+              p[0],
+              p[1],
+              p[2],
+            );
+          }
+        }
+      }
+    } else {
+      for (let z = 0; z < gridZ; z++) {
+        const wz = pz[z] as number;
+        for (let y = 0; y < gridY; y++) {
+          const wy = py[y] as number;
+          for (let x = 0; x < gridX; x++) {
+            scratch.marks[(z * gridY + y) * gridX + x] = marker.distance(
+              px[x] as number,
+              wy,
+              wz,
+            );
+          }
+        }
+      }
+    }
+  } else if (gate !== undefined) {
+    // Zeroed for a gate that was given no marker, once per chunk rather than per sample: the
+    // buffer is only read where a gate reads it, and a caller with no marker wants the same
+    // answer every time rather than the last chunk's.
+    scratch.marks.fill(0);
+  }
+
   // The whole buffer, rather than the part this grid uses: it is sized for the widest grid
   // the thread will be asked for, and a leftover entry from a previous chunk would be read
   // as a vertex in this one.
@@ -414,6 +545,22 @@ export const surfaceNets = (params: SurfaceNetsParams): void => {
         // that is entirely air or entirely solid costs eight reads per cell and
         // nothing else.
         if (inside === 0 || inside === 8) continue;
+
+        // A cell the caller will not have. Its markers are gathered here rather than read
+        // in place because the gate is handed both corners together and reads them as
+        // pairs — see `SurfaceNetsParams.cellGate`, which is why this is here and not in
+        // the gate itself.
+        if (gate !== undefined) {
+          if (params.marker !== undefined) {
+            for (let corner = 0; corner < 8; corner++) {
+              const [dx, dy, dz] = CORNER_OFFSETS[corner];
+              scratch.cornerMarks[corner] = mark(cx + dx, cy + dy, cz + dz);
+            }
+          } else {
+            scratch.cornerMarks.fill(0);
+          }
+          if (!gate(scratch.corners, scratch.cornerMarks)) continue;
+        }
 
         let sumX = 0;
         let sumY = 0;

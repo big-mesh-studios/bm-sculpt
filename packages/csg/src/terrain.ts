@@ -104,19 +104,80 @@ export const MOUNTAIN_MASK_FEATURE = 2600;
 export const MOUNTAIN_MASK_OCTAVES = 2;
 
 /**
- * How much a ridge raises the surface, in units of the base noise's own range.
+ * How far a range stands above the plain, in units of the base noise's own range.
  *
- * The base contributes `scale * fbm` in `[-R, R]`; a ridge contributes
- * `RIDGE_STRENGTH * scale * ridge * mask`, and both `ridge` and `mask` are in `[0, 1]`.
- * The height range therefore grows by `RIDGE_STRENGTH * scale`, which `reach` accounts
- * for. Two, so a ridge is about as tall as the base landscape is deep — mountains rising
- * out of hills.
+ * The base contributes `scale * base` with `base` in `[-1, 1]`; a range contributes
+ * `RIDGE_STRENGTH * scale * ridge * range` with `ridge` and `range` both in `[-1, 1]`. The
+ * height range therefore grows by `RIDGE_STRENGTH * scale`, which `reach` accounts for.
+ *
+ * **Six, so a range is three times what the plain's own relief is deep** — and this was two,
+ * which put a mountain up out of a hill rather than a mountain range above a landscape.
+ *
+ * **The term is signed, and that is the part that makes the sea exist at all.** It used to be
+ * `ridge * mask` with `mask` in `[0, 1]`, which is non-negative everywhere: the landscape was
+ * lifted on average and never lowered, so its mean sat *above* the sea level and a sea at zero
+ * barely met the ground. Measured on a default planet: one direction in four thousand was
+ * underwater. `range * (2 * mask - 1)` is the same mask with its mean taken out, so a range
+ * rises where the mask says one stands and the ground falls away where it does not — which is
+ * also the plain the ranges stand amongst, and is what puts real coastline on the planet.
  */
-export const RIDGE_STRENGTH = 2;
+export const RIDGE_STRENGTH = 6;
 
-/** Keeps a value inside `[0, 1]`, so the mask and ridge bounds hold. */
-const clamp01 = (value: number): number =>
-  value < 0 ? 0 : value > 1 ? 1 : value;
+/**
+ * Keeps a value inside `[-1, 1]`, which is what the signed range mask's bound needs.
+ *
+ * **Clamped rather than scaled**, so `landscapeShape`'s `RIDGE_STRENGTH · ridge · range` is
+ * bounded by `RIDGE_STRENGTH` and the `reach` below is a real bound rather than an estimate.
+ * `FBM_AMPLITUDE_BOUND` is deliberately generous — being too small would let
+ * `couldHoldSurface` skip a chunk that has surface in it — so the two halves of that bound are
+ * not the same number and need not be.
+ */
+const clamp11 = (value: number): number =>
+  value < -1 ? -1 : value > 1 ? 1 : value;
+
+/**
+ * The three noise terms every landscape in this project is built from, in one place.
+ *
+ * ## Why they are together
+ *
+ * `terrain.ts` and `planet.ts` are the same landscape read through two parameterisations — a
+ * height field and a sphere — and they were written out twice. The duplication was harmless
+ * until it was not: this is the third change to the composition, and it would have been the
+ * third change to write in two places.
+ *
+ * ## The shape, and what each term is for
+ *
+ *     shape = base + RIDGE_STRENGTH · ridge · range
+ *
+ * - **`base`** — rolling fBm at `TERRAIN_FEATURE`, the landscape's own relief, in `[-1, 1]`.
+ * - **`ridge`** — `max(0, 1 − |fbm|)` at `MOUNTAIN_FEATURE`, which peaks where the noise crosses
+ *   zero. Ridged, so a mountain reads as a crest rather than a dune.
+ * - **`range`** — the mask at `MOUNTAIN_MASK_FEATURE`, **re-centred to `[-1, 1]`**. Positive where
+ *   a range stands and negative where it does not, so the term has no mean: that is what lets a
+ *   sea at the landscape's zero cut the world rather than miss it, and what leaves flat ground
+ *   between the ranges rather than only where the mask is exactly half.
+ *
+ * ## The mean is the whole claim
+ *
+ * **The mask was `0.5 + 0.5 · fbm` in `[0, 1]` and read as "how much mountain goes here"**, which
+ * is a good way to write it and a bad way to build a coastline from: a non-negative term has a
+ * positive mean, so the whole surface sat above the sea and a sea at the landscape's zero
+ * barely met the ground. Measured on the default planet: one direction in four thousand was
+ * underwater, which is a puddle in the noise's troughs rather than an ocean. Subtracting the
+ * `0.5` costs nothing, and it is what puts real coastline on the planet.
+ *
+ * @param fbm the caller's own noise, addressed by **feature size** rather than by coordinates,
+ *   because a height field divides world coordinates by the feature and a sphere scales a
+ *   direction by it — the same three features, read two ways.
+ */
+export const landscapeShape = (
+  fbm: (feature: number, octaves?: number) => number,
+): number => {
+  const base = fbm(TERRAIN_FEATURE);
+  const ridge = Math.max(0, 1 - Math.abs(fbm(MOUNTAIN_FEATURE)));
+  const range = clamp11(fbm(MOUNTAIN_MASK_FEATURE, MOUNTAIN_MASK_OCTAVES));
+  return base + RIDGE_STRENGTH * ridge * range;
+};
 
 /**
  * A bound on `|∂noise/∂u|` for the interpolation below.
@@ -159,6 +220,8 @@ export interface TerrainParams {
 export interface TerrainField extends BaseField, SurfaceExtent {
   /** The factor every reported distance is scaled by. See the file header. */
   readonly lipschitz: number;
+  /** Where this landscape's water settles: `origin`, the altitude its height of zero sits at. */
+  readonly seaLevel: number;
   /** The surface height at a column, in world units. */
   heightAt(x: number, z: number): number;
   /** The lowest the surface can be anywhere in the world. */
@@ -297,32 +360,19 @@ export const terrainField = (params: TerrainParams): TerrainField => {
   const origin = params.origin;
 
   const heightAt = (x: number, z: number): number => {
-    const base = noise.fbm(x / TERRAIN_FEATURE, z / TERRAIN_FEATURE, octaves);
-    // Ridged noise: `1 - |fbm|` peaks where the noise crosses zero, which is where a
-    // mountain's crest is. Clamped at zero so a deep trough does not become a ridge.
-    const ridge = Math.max(
-      0,
-      1 -
-        Math.abs(
-          noise.fbm(x / MOUNTAIN_FEATURE, z / MOUNTAIN_FEATURE, octaves),
-        ),
+    // **The three terms, from `landscapeShape`** — the same function a planet builds its
+    // radius from, so a height field and a sphere are the same landscape rather than two
+    // landscapes that agree by coincidence. The addressing differs: a height field divides
+    // world coordinates by the feature, where a sphere scales a direction by it.
+    const shape = landscapeShape((feature, featureOctaves = octaves) =>
+      noise.fbm(x / feature, z / feature, featureOctaves),
     );
-    // The mask decides where a range stands at all, so plains stay plains.
-    const mask = clamp01(
-      0.5 +
-        0.5 *
-          noise.fbm(
-            x / MOUNTAIN_MASK_FEATURE,
-            z / MOUNTAIN_MASK_FEATURE,
-            MOUNTAIN_MASK_OCTAVES,
-          ),
-    );
-    return origin + scale * (base + RIDGE_STRENGTH * ridge * mask);
+    return origin + scale * shape;
   };
 
-  // The base can fall to `-R`; a ridge can only rise, up to `RIDGE_STRENGTH` on top of the
-  // base's `+R`. The reach is the larger magnitude, used symmetrically because the gate
-  // only needs a band that contains the surface.
+  // The base is in `[-R, +R]` and the range term in `[-RIDGE_STRENGTH, +RIDGE_STRENGTH]`,
+  // because it is signed — see `landscapeShape` and `RIDGE_STRENGTH`. The reach is the larger
+  // magnitude, used symmetrically because the gate only needs a band that contains the surface.
   const reach = (FBM_AMPLITUDE_BOUND + RIDGE_STRENGTH) * Math.abs(scale);
   const lowest = origin - reach;
   const highest = origin + reach;
@@ -345,6 +395,12 @@ export const terrainField = (params: TerrainParams): TerrainField => {
 
   return Object.assign(distance, {
     lipschitz,
+    /**
+     * `origin`, because on a height field a sea is an altitude and the altitude a height of zero
+     * sits at is the one a sea covers where the base noise is negative. See
+     * `BuiltBaseField.seaLevel`.
+     */
+    seaLevel: origin,
     heightAt,
     lowest,
     highest,

@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { ChunkMesh } from "@big-mesh-studios/meshing";
 import type { MeshRequest } from "./chunk-mesher";
 import { isFromWorker, isToWorker, meshTransferables } from "./protocol";
-import type { FromWorker, ModelMessage, ToWorker } from "./protocol";
+import type {
+  FromWorker,
+  MeshedChunk,
+  ModelMessage,
+  ToWorker,
+} from "./protocol";
 import {
   emptyWorkerState,
   handleMeshMessage,
@@ -14,7 +19,7 @@ import {
 import type { PoolWorker, WorkerFactory } from "./worker-pool";
 import { WorldWorkerPool } from "./worker-pool";
 
-import type { CellCoord } from "../world";
+import type { CellCoord, Lod, OverlapMask } from "../world";
 
 /** A mesh big enough to be worth transferring and small enough to be free. */
 const meshOf = (vertices: number): ChunkMesh => ({
@@ -112,7 +117,7 @@ describe("the protocol", () => {
       cell: cell(0),
       lod: 0,
       generation: 1,
-      mesh,
+      ground: mesh,
       empty: false,
     });
     expect(transferring).toHaveLength(4);
@@ -152,9 +157,11 @@ describe("a worker handling messages", () => {
     behaviour: { vertices?: number; throws?: string } = {},
   ): MesherFactory => {
     return () => ({
-      mesh: () => {
-        if (behaviour.throws !== undefined) throw new Error(behaviour.throws);
-        return meshOf(behaviour.vertices ?? 9);
+      ground: {
+        mesh: () => {
+          if (behaviour.throws !== undefined) throw new Error(behaviour.throws);
+          return meshOf(behaviour.vertices ?? 9);
+        },
       },
     });
   };
@@ -169,13 +176,15 @@ describe("a worker handling messages", () => {
   const gatedBuild = (couldHaveMesh: boolean) => {
     const asked = { gate: 0, mesh: 0 };
     const factory: MesherFactory = () => ({
-      couldHaveMesh: () => {
-        asked.gate++;
-        return couldHaveMesh;
-      },
-      mesh: () => {
-        asked.mesh++;
-        return meshOf(9);
+      ground: {
+        couldHaveMesh: () => {
+          asked.gate++;
+          return couldHaveMesh;
+        },
+        mesh: () => {
+          asked.mesh++;
+          return meshOf(9);
+        },
       },
     });
     return { factory, asked };
@@ -200,9 +209,11 @@ describe("a worker handling messages", () => {
     // geometry is still a perfectly valid mesh of the chunk.
     const seen: MeshRequest[] = [];
     const factory: MesherFactory = () => ({
-      mesh: (request) => {
-        seen.push(request);
-        return meshOf(9);
+      ground: {
+        mesh: (request) => {
+          seen.push(request);
+          return meshOf(9);
+        },
       },
     });
     handleMeshMessage(
@@ -219,10 +230,12 @@ describe("a worker handling messages", () => {
     // own extent — a hole that nothing would ever ask again.
     const asked: Array<number | undefined> = [];
     const factory: MesherFactory = () => ({
-      mesh: () => meshOf(9),
-      couldHaveMesh: (_cell, _lod, overlap) => {
-        asked.push(overlap);
-        return false;
+      ground: {
+        mesh: () => meshOf(9),
+        couldHaveMesh: (_cell: CellCoord, _lod: Lod, overlap?: OverlapMask) => {
+          asked.push(overlap);
+          return false;
+        },
       },
     });
     handleMeshMessage(
@@ -249,8 +262,121 @@ describe("a worker handling messages", () => {
     // mesher that has hung.
     expect(handled.reply).toMatchObject({ kind: "meshReady", empty: true });
     expect(
-      handled.reply?.kind === "meshReady" && handled.reply.mesh,
+      handled.reply?.kind === "meshReady" && handled.reply.ground,
     ).toBeUndefined();
+  });
+
+  describe("a chunk with two surfaces", () => {
+    /**
+     * A world whose ground and sea are gated separately, so the two answers can be set apart.
+     *
+     * **A mesher per surface rather than one that does both**, because that is the shape the
+     * real world has: the sea is gated on the landscape and the ground on the model, and a
+     * chunk of open ocean has to come back with a sea and no ground.
+     */
+    const twoSurfaces = (options: {
+      ground?: boolean;
+      sea?: boolean;
+      vertices?: number;
+    }) => {
+      const asked = { ground: 0, sea: 0 };
+      const factory: MesherFactory = () => ({
+        ground: {
+          couldHaveMesh: () => {
+            asked.ground++;
+            return options.ground !== false;
+          },
+          mesh: () => meshOf(options.vertices ?? 9),
+        },
+        sea: {
+          couldHaveMesh: () => {
+            asked.sea++;
+            return options.sea === true;
+          },
+          mesh: () => meshOf(6),
+        },
+      });
+      const handled = handleMeshMessage(
+        { ...emptyWorkerState(), model: model() },
+        { kind: "meshChunk", cell: cell(0), lod: 0, generation: 1 },
+        factory,
+      );
+      return { asked, reply: handled.reply };
+    };
+
+    it("carries both when the chunk has both", () => {
+      const { reply } = twoSurfaces({ ground: true, sea: true });
+      expect(reply).toMatchObject({ kind: "meshReady", empty: false });
+      const ready = reply as Extract<FromWorker, { kind: "meshReady" }>;
+      expect(ready.ground?.vertexCount).toBe(9);
+      expect(ready.sea?.vertexCount).toBe(6);
+    });
+
+    it("carries the sea alone over open water", () => {
+      // **The common case for the sea half, and the one a single-mesh protocol cannot express.**
+      // A chunk of ocean has no ground in it, and "no ground" is the *presence* of the thing
+      // that is there — so it has to be its own field rather than the absence of the other.
+      const { asked, reply } = twoSurfaces({ ground: false, sea: true });
+      expect(asked.ground).toBe(1);
+      expect(asked.sea).toBe(1);
+      expect(reply).toMatchObject({ kind: "meshReady", empty: false });
+      const ready = reply as Extract<FromWorker, { kind: "meshReady" }>;
+      expect(ready.ground).toBeUndefined();
+      expect(ready.sea?.vertexCount).toBe(6);
+    });
+
+    it("carries the ground alone over land", () => {
+      const { asked, reply } = twoSurfaces({ ground: true, sea: false });
+      expect(asked.sea).toBe(1);
+      const ready = reply as Extract<FromWorker, { kind: "meshReady" }>;
+      expect(ready.ground?.vertexCount).toBe(9);
+      expect(ready.sea).toBeUndefined();
+    });
+
+    it("meshes neither when neither is wanted", () => {
+      // **One answer covers both surfaces**, so a chunk holding neither is meshed zero times
+      // rather than once. On a planet that is most of a window: most of a large volume near the
+      // surface is deep rock or open sky, and neither is worth 34,304 samples.
+      const { asked, reply } = twoSurfaces({ ground: false, sea: false });
+      expect(asked.ground).toBe(1);
+      expect(asked.sea).toBe(1);
+      expect(reply).toMatchObject({ kind: "meshReady", empty: true });
+    });
+
+    it("reports a surface that meshed to nothing as absent", () => {
+      // **The gate answers "could this hold a surface", not "does it".** Only sampling settles
+      // that, and a surface that samples to nothing must not cost four empty arrays on the wire.
+      const factory: MesherFactory = () => ({
+        ground: { mesh: () => meshOf(0) },
+        sea: { mesh: () => meshOf(6) },
+      });
+      const handled = handleMeshMessage(
+        { ...emptyWorkerState(), model: model() },
+        { kind: "meshChunk", cell: cell(0), lod: 0, generation: 1 },
+        factory,
+      );
+      const ready = handled.reply as Extract<FromWorker, { kind: "meshReady" }>;
+      expect(ready.ground).toBeUndefined();
+      expect(ready.sea?.vertexCount).toBe(6);
+      // **Not empty**, because something *is* there. `empty` means neither surface.
+      expect(ready.empty).toBe(false);
+    });
+
+    it("transfers both meshes' buffers", () => {
+      const ground = meshOf(9);
+      const sea = meshOf(6);
+      expect(
+        meshTransferables({
+          kind: "meshReady",
+          cell: cell(0),
+          lod: 0,
+          generation: 1,
+          ground,
+          sea,
+          empty: false,
+        }),
+      ).toHaveLength(8);
+    });
   });
 
   it("meshes a chunk whose mesher cannot answer", () => {
@@ -371,7 +497,10 @@ describe("a worker handling messages", () => {
       { vertices: 0 },
     );
     expect(replies[0]).toMatchObject({ kind: "meshReady", empty: true });
-    expect((replies[0] as { mesh?: unknown }).mesh).toBeUndefined();
+    // Neither surface, on either key: "empty" is the claim and a mesh beside it would be
+    // the lie the flag exists to prevent.
+    expect((replies[0] as { ground?: unknown }).ground).toBeUndefined();
+    expect((replies[0] as { sea?: unknown }).sea).toBeUndefined();
   });
 
   it("carries the mesh when there is one", () => {
@@ -385,7 +514,7 @@ describe("a worker handling messages", () => {
       lod: 1,
       generation: 3,
     });
-    expect((replies[0] as { mesh?: ChunkMesh }).mesh?.vertexCount).toBe(9);
+    expect((replies[0] as { ground?: ChunkMesh }).ground?.vertexCount).toBe(9);
   });
 
   it("ignores a model older than the one it has", () => {
@@ -399,7 +528,7 @@ describe("a worker handling messages", () => {
     // moment it returns — which is exactly when a chunk built against the old model is
     // in the reply the main thread is about to discard. The state is set up by hand
     // because that moment is inside a synchronous call a test cannot interrupt.
-    const factory = () => ({ mesh: () => meshOf(3) });
+    const factory = () => ({ ground: { mesh: () => meshOf(3) } });
     let state = handleMeshMessage(emptyWorkerState(), model(1), factory).state;
     state = { ...state, pending: { cell: cell(0), lod: 0, generation: 4 } };
     state = handleMeshMessage(state, model(2), factory).state;
@@ -447,9 +576,11 @@ describe("a worker handling messages", () => {
     // safer than meshing two chunks at once in one worker.
     let built = 0;
     const slow: MesherFactory = () => ({
-      mesh: () => {
-        built++;
-        return meshOf(3);
+      ground: {
+        mesh: () => {
+          built++;
+          return meshOf(3);
+        },
       },
     });
     // Set by hand: a real worker's `mesh` blocks, and the state a message sees while it
@@ -532,14 +663,17 @@ describe("the pool", () => {
 
   const handlersFor = (recorded: Recorded) => ({
     onMesh: (
-      mesh: ChunkMesh,
+      meshed: MeshedChunk,
       wanted: { cell: CellCoord; generation: number },
     ) => {
       recorded.meshes.push({
         cell: wanted.cell,
         generation: wanted.generation,
       });
-      expect(mesh.vertexCount).toBeGreaterThan(0);
+      // **A promise of geometry, so at least one surface must have some** — the pool's whole
+      // reason for distinguishing `onMesh` from `onEmpty`.
+      expect(meshed.ground?.vertexCount ?? 0).toBeGreaterThan(0);
+      expect(meshed.sea?.vertexCount ?? 0).toBeGreaterThanOrEqual(0);
     },
     onEmpty: (wanted: { cell: CellCoord; generation: number }) => {
       recorded.empties.push({
@@ -598,7 +732,7 @@ describe("the pool", () => {
       cell: cell(3),
       lod: 0,
       generation: wanted.generation,
-      mesh: meshOf(9),
+      ground: meshOf(9),
       empty: false,
     });
 
@@ -628,7 +762,7 @@ describe("the pool", () => {
       cell: cell(3),
       lod: 0,
       generation: first.generation,
-      mesh: meshOf(9),
+      ground: meshOf(9),
       empty: false,
     });
     expect(recorded.meshes).toEqual([]);
@@ -639,7 +773,7 @@ describe("the pool", () => {
       cell: cell(3),
       lod: 0,
       generation: second.generation,
-      mesh: meshOf(9),
+      ground: meshOf(9),
       empty: false,
     });
     expect(recorded.meshes).toEqual([
@@ -698,7 +832,7 @@ describe("the pool", () => {
       cell: cell(3),
       lod: 0,
       generation: wanted.generation,
-      mesh: meshOf(9),
+      ground: meshOf(9),
       empty: false,
     });
 
@@ -724,7 +858,7 @@ describe("the pool", () => {
       cell: cell(3),
       lod: 0,
       generation: coarse.generation,
-      mesh: meshOf(9),
+      ground: meshOf(9),
       empty: false,
     });
 
@@ -820,7 +954,7 @@ describe("the pool", () => {
       cell: cell(0),
       lod: 0,
       generation: first.generation,
-      mesh: meshOf(9),
+      ground: meshOf(9),
       empty: false,
     });
     expect(fake.lastRequest()).toMatchObject({
@@ -920,7 +1054,7 @@ describe("the pool", () => {
       cell: cell(0),
       lod: 0,
       generation: wanted.generation,
-      mesh: meshOf(9),
+      ground: meshOf(9),
       empty: false,
     });
     expect(recorded.meshes).toEqual([]);

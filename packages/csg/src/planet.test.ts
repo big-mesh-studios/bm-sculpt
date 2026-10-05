@@ -146,10 +146,16 @@ describe("a planet's surface", () => {
         1 / planet.lipschitz + 1e-9,
       );
       // **And the bar is loose because the gradient's length is not one.** It is
-      // `1 + tangential correction`, and on this terrain the correction reaches about two per
-      // cent — enough to put the radial component at 0.983 on a three-degree slope. Anything below
-      // nine tenths would mean mountains steep enough to be worth investigating.
-      expect(radial, JSON.stringify(n)).toBeGreaterThan(0.9);
+      // `1 + tangential correction`, so on this terrain the radial component reads just under one.
+      //
+      // **The bar moved from nine tenths to eight, and the reason is the terrain rather than the
+      // test.** It used to read "anything below nine tenths would mean mountains steep enough to be
+      // worth investigating" — and then the range term was signed and tripled, which is exactly
+      // that. The correction now reaches about two per five rather than two per cent. Eight
+      // tenths still says what the bar is for: the gradient is dominated by its radial term, so
+      // the Lipschitz bound above is a bound and not a guess. That assertion is the real one; this
+      // is the one that would notice the bound quietly becoming wrong.
+      expect(radial, JSON.stringify(n)).toBeGreaterThan(0.8);
     }
   });
 

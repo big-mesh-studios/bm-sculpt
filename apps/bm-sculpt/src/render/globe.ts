@@ -55,6 +55,7 @@ import {
 import { Fog } from "./fog";
 import { PointLightBindings, PointLights } from "./point-lights";
 import { SkyLight } from "./sky-light";
+import { waterFresnel, waterLook } from "./water-look";
 
 /** The height map's byte range, as a float, so a sample reads as 0…1. */
 const BYTE_TO_UNIT = 1 / 255;
@@ -349,7 +350,42 @@ export class GlobeMaterial extends NodeMaterial {
       .add(this.sky.moonLight.mul(this.sky.moonOn(normal)))
       .add(this.lightBindings!.contribution(b.positionWorld, normal));
 
-    const shaded = albedo.mul(lighting).clamp(vec3(0, 0, 0), vec3(1, 1, 1));
-    return vec4(this.fog.apply(b, shaded), this.opacityUniform!);
+    // **The ocean, from the height map's own zero.**
+    //
+    // The map's zero is the field's *lowest* radius, not the sea — see the vertex stage — so
+    // the radius this texel describes is rebuilt here the same way and compared against mean
+    // sea level. Everything below that is water, and it is the same `waterLook` the near sea's
+    // material uses, which is the whole reason the two agree where the swap happens.
+    const radius = seaRadius.sub(relief.mul(0.5)).add(here.mul(relief));
+    const depth = seaRadius.sub(radius).max(float(0)).div(relief);
+    const { colour: waterColour } = waterLook(
+      this.sky.skyColour,
+      waterFresnel(normal, b.viewDirection.normalize()),
+    );
+
+    // **Shallow water shows its bottom; deep water does not**, and the mix is the depth
+    // against the reflection. A planet seen from orbit has no blend against a sea behind it,
+    // so the near sea's translucent pass has no equivalent here — this is where the two
+    // genuinely differ, and it is why the far sea takes a depth the near one does not.
+    //
+    // **Twice the depth, so the deepest water is fully water.** The reach is half the relief and
+    // the sea sits in the middle of it, so `depth` runs to `0.5` and not to `1` — a factor below two
+    // leaves the deepest ocean a few percent of seabed showing through, which from orbit reads as
+    // pale patches in the middle of the sea rather than as anything meaningful.
+    //
+    // **And the square root, so a coastline is a gradient rather than a line.** A linear mix puts
+    // deep blue within a texel of the shore, which from orbit reads as a drawn outline around every
+    // continent. The root spreads the shallow band out over the first few hundred units, which is
+    // where the real colour change is.
+    const submerged = depth
+      .mul(float(2))
+      .clamp(float(0), float(1))
+      .pow(float(0.5));
+    const surface = albedo
+      .mul(lighting)
+      .clamp(vec3(0, 0, 0), vec3(1, 1, 1))
+      .mix(waterColour, submerged);
+
+    return vec4(this.fog.apply(b, surface), this.opacityUniform!);
   }
 }

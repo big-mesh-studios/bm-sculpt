@@ -112,7 +112,7 @@ const replyWith = (
     lod: request.lod,
     generation: request.generation,
     empty: vertices === 0,
-    ...(vertices === 0 ? {} : { mesh: meshOf(vertices) }),
+    ...(vertices === 0 ? {} : { ground: meshOf(vertices) }),
   });
 };
 
