@@ -119,6 +119,25 @@ describe("picking a surface", () => {
     expect(hit!.distance).toBe(0);
   });
 
+  it("does not mistake a scaled-down distance for being at the surface", () => {
+    // A base field reports a distance scaled down by its Lipschitz bound, and the scaled value
+    // is not a distance to anything. Ten units from the surface — well outside the tracer's
+    // half-unit epsilon — a bound of one twentieth makes the scaled value exactly half a unit,
+    // and testing *that* against epsilon reported a hit at the ray's own origin. On this
+    // project's landscape the same factor is about thirteen units, further than the player's
+    // eye stands above the ground, so the first sample of every crosshair pick was the player.
+    const scale = 20;
+    const field: PickField = {
+      distance: (x, y, z) => Math.hypot(x, y, z) - 100,
+      distanceForStepping: (x, y, z) => (Math.hypot(x, y, z) - 100) / scale,
+      gradient: () => ({ x: 0, y: 1, z: 0 }),
+    };
+    const hit = pickAlong(field, towards([0, 110, 0], [0, 0, 0]));
+    expect(hit).toBeDefined();
+    // At the surface, not ten units above it at the ray's origin.
+    expect(offSurface(hit!.point)).toBeLessThan(1);
+  });
+
   it("normalises the direction rather than trusting it", () => {
     // Every step depends on the direction being unit length, so a caller passing an
     // arbitrary vector must not get steps proportional to its length.
@@ -159,6 +178,26 @@ describe("the cost of a pick", () => {
       towards([0, 0, 3000], [0, 0, 0]),
     )!;
     expect(far.steps).toBeGreaterThan(near.steps);
+  });
+
+  it("reaches a surface a shallow ray closes on slowly", () => {
+    // **A base field's step is its distance scaled down by its Lipschitz bound**, so a ray that
+    // grazes a surface closes on it very slowly. This one is eight units above the ground and
+    // aimed to meet it seventy units out, and needs around six hundred steps to get within the
+    // tracer's half-unit epsilon — more than the old five-hundred-and-twelve cap, which gave up
+    // first and called plainly visible ground a miss.
+    const field: PickField = {
+      distance: (_x, y, _z) => y,
+      distanceForStepping: (_x, y, _z) => y * 0.04,
+      gradient: () => ({ x: 0, y: 1, z: 0 }),
+    };
+    const angle = Math.atan(8 / 70);
+    const hit = pickAlong(field, {
+      origin: { x: 0, y: 8, z: 0 },
+      direction: { x: 0, y: -Math.sin(angle), z: Math.cos(angle) },
+    });
+    expect(hit).toBeDefined();
+    expect(hit!.point.y).toBeLessThan(1);
   });
 
   it("stops at the step cap rather than hanging on a bad bound", () => {
@@ -211,8 +250,12 @@ describe("the cost of a pick", () => {
 
     const hit = pickAlong(field, towards([0, 0, 500], [0, 0, 0]));
     expect(hit).toBeDefined();
+    // **Both readers, and the assertion used to be `plainCalls === 0`.** The step comes from
+    // `distanceForStepping`, but the hit test has to read the true distance — a scaled distance
+    // is not a distance to a surface, and testing it against epsilon reports a hit far beyond
+    // the surface. See the regression below.
     expect(steppingCalls).toBeGreaterThan(0);
-    expect(plainCalls).toBe(0);
+    expect(plainCalls).toBeGreaterThan(0);
 
     const withoutStepping: PickField = {
       distance: (x, y, z) => Math.hypot(x, y, z) - 100,

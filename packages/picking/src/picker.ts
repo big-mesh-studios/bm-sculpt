@@ -20,6 +20,14 @@
  * the true distance where a base field is not itself a distance function (ADR 0002,
  * ADR 0006); stepping by a distance that is too large steps through the surface.
  *
+ * **The step and the hit test read different numbers, and they have to.** `distanceForStepping`
+ * is the true distance scaled *down* by the field's Lipschitz bound, which is a safe length to
+ * advance by — but it is not a distance, and testing it against `epsilon` reports a hit
+ * wherever the true distance is at most `epsilon / lipschitz`. On this project's landscape
+ * that product is about thirteen world units, further than the player's eye stands above the
+ * ground, so deciding a hit from the scaled value made the first sample of every crosshair
+ * pick a hit at the player. The true distance decides a hit; the scaled one decides the step.
+ *
  * **The saturation is what bounds the step count.** The field cannot report more than
  * `FAR_DISTANCE` of "outside", so crossing a thousand units of empty space costs twenty
  * steps rather than one. That is the price of the saturation, and ADR 0006 already pays
@@ -100,7 +108,14 @@ const DEFAULTS = {
   // how close a trace stops is the tracer's own decision rather than the
   // landscape's voxel size (ADR 0024).
   epsilon: 0.5,
-  maxSteps: 512,
+  // **Four thousand, and five hundred and twelve was too few.** A base field steps by its
+  // distance scaled down by its Lipschitz bound — about `0.037` on this project's landscape —
+  // and a ray that grazes a surface closes on it very slowly: measured over two thousand
+  // directions from a player on the ground, one hit in ten needs more than five hundred steps
+  // and the worst within `reach` needs about three thousand. The old cap gave up on those and
+  // reported the surface in plain view as a miss. This is a budget against a bad bound, not a
+  // target: a ray that meets nothing still costs the full count, which is why it is not larger.
+  maxSteps: 4096,
 } as const;
 
 /**
@@ -123,6 +138,10 @@ export const pickAlong = (
   // Called through the field rather than extracted from it: a method taken off an object
   // loses its receiver, and a `this` of undefined inside the field reads its BVH as
   // undefined. That is a mistake worth making once and writing down.
+  //
+  // Two readers, not one. `distance` is the true distance and decides whether the sample is
+  // at a surface; `step` is the safe length to advance by, and is the true distance scaled
+  // down whenever the field offers a bound. See this file's header.
   const step =
     field.distanceForStepping !== undefined
       ? (x: number, y: number, z: number): number =>
@@ -138,7 +157,7 @@ export const pickAlong = (
     const y = ray.origin.y + direction.y * travelled;
     const z = ray.origin.z + direction.z * travelled;
 
-    const reported = step(x, y, z);
+    const reported = field.distance(x, y, z);
 
     if (reported < 0) {
       // Already inside. The camera is inside the model, which the brush preview and the
@@ -153,7 +172,7 @@ export const pickAlong = (
 
     // The saturation caps a single step, so this is also the bound on how fast the ray can
     // cross empty space (ADR 0006).
-    travelled += reported;
+    travelled += step(x, y, z);
   }
 
   return undefined;
