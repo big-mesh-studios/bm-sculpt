@@ -10,8 +10,8 @@ catalogs:
       specifier: 0.32.0
       version: 0.32.0
     '@random-mesh/rmsl':
-      specifier: 1.15.0
-      version: 1.15.0
+      specifier: 1.15.1
+      version: 1.15.1
     '@solidjs/signals':
       specifier: 2.0.0-beta.29
       version: 2.0.0-beta.29
@@ -94,7 +94,7 @@ importers:
         version: 0.32.0
       '@random-mesh/rmsl':
         specifier: 'catalog:'
-        version: 1.15.0(vite@8.3.1(@types/node@24.19.1)(esbuild@0.28.2))
+        version: 1.15.1(vite@8.3.1(@types/node@24.19.1)(esbuild@0.28.2))
       '@solidjs/signals':
         specifier: 'catalog:'
         version: 2.0.0-beta.29
@@ -171,7 +171,7 @@ importers:
         version: link:../../packages/ui
       '@random-mesh/rmsl':
         specifier: 'catalog:'
-        version: 1.15.0(vite@8.3.1(@types/node@24.19.1)(esbuild@0.28.2))
+        version: 1.15.1(vite@8.3.1(@types/node@24.19.1)(esbuild@0.28.2))
       '@solidjs/signals':
         specifier: 'catalog:'
         version: 2.0.0-beta.29
@@ -256,7 +256,7 @@ importers:
         version: link:../csg
       '@random-mesh/rmsl':
         specifier: 'catalog:'
-        version: 1.15.0(vite@8.3.1(@types/node@24.19.1)(esbuild@0.28.2))
+        version: 1.15.1(vite@8.3.1(@types/node@24.19.1)(esbuild@0.28.2))
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -619,8 +619,8 @@ packages:
   '@oxc-project/types@0.151.0':
     resolution: {integrity: sha512-J1yXrIlNDZVzE3ada310xeAw7nH8yCAyLPuUIsjKatFPmfn5bS1oW+cM+QsGOtVWd5nhSpbwZWx/rue+r5Z+PA==}
 
-  '@random-mesh/rmsl@1.15.0':
-    resolution: {integrity: sha512-OkIc+QXwTq2PhAXAnV8jSjc08LApTp0N+V+fsKrGjpBAOEMbulhVWuFlox1yAzEpDSQmG9UI+w1+WVDTyA/MzA==}
+  '@random-mesh/rmsl@1.15.1':
+    resolution: {integrity: sha512-ARijreqRbHY3OsFO/bqyss49l2yM5hCzuK0reWGn9Ct0onyW75WEfsb9Bq4m3KB9f44UKW9OicqJhCEa4ZMaMg==}
     peerDependencies:
       vite: '>=5.0.0'
     peerDependenciesMeta:
@@ -1632,7 +1632,7 @@ snapshots:
 
   '@oxc-project/types@0.151.0': {}
 
-  '@random-mesh/rmsl@1.15.0(vite@8.3.1(@types/node@24.19.1)(esbuild@0.28.2))':
+  '@random-mesh/rmsl@1.15.1(vite@8.3.1(@types/node@24.19.1)(esbuild@0.28.2))':
     dependencies:
       '@webgpu/types': 0.1.74
       esbuild: 0.28.2

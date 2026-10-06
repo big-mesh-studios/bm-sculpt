@@ -68,7 +68,7 @@ catalog:
   # **Pinned exactly rather than by range.** A shader library is allowed to change what a
   # program means between minor versions, and the six `SkyLight` bindings are read by name
   # at build time — a patch release that renamed one would compile and then draw nothing.
-  "@random-mesh/rmsl": "1.15.0"
+  "@random-mesh/rmsl": "1.15.1"
 
   # Build and test tooling, shared by every workspace.
   vite: "^8.3.1"
@@ -88,7 +88,7 @@ catalog:
   jszip: "^3.10.2"
 
 minimumReleaseAgeExclude:
-  - '@random-mesh/rmsl@1.15.0'
+  - '@random-mesh/rmsl@1.15.1'
 
 overrides:
   # The one version that has to be pinned as an override rather than catalogued, and it
